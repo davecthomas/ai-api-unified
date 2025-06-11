@@ -5,8 +5,8 @@ interface for working with different foundation model providers.  The
 included code defines abstract base classes and a factory for creating
 client instances for completion and embedding APIs.
 
-The repository already includes example implementations for both
-OpenAI and Amazon Bedrock/Titan.  Environment configuration is handled
+The repository already includes working implementations for both
+OpenAI and Amazon Bedrock/Titan. Environment configuration is handled
 through a small `EnvSettings` class powered by Pydantic.
 
 ## Repository layout
@@ -15,6 +15,28 @@ through a small `EnvSettings` class powered by Pydantic.
 src/ai_api/        - package source code
 src/ai_api/ai_base.py      - abstract interfaces
 src/ai_api/ai_factory.py   - factory for selecting client implementations
+```
+
+```mermaid
+classDiagram
+    AIBase <|-- AIBaseEmbeddings
+    AIBase <|-- AIBaseCompletions
+    AIBaseCompletions <|-- AiOpenAICompletions
+    AIBaseCompletions <|-- AiBedrockCompletions
+    AIBaseEmbeddings <|-- AiOpenAIEmbeddings
+    AIBaseEmbeddings <|-- AiTitanEmbeddings
+    AIStructuredPrompt <|-- ExamplePrompt
+```
+
+```python
+from ai_api.ai_base import AIStructuredPrompt
+
+class ExamplePrompt(AIStructuredPrompt):
+    text: str
+
+    @staticmethod
+    def get_prompt() -> str:
+        return "Reply with a JSON object containing a 'text' field."
 ```
 
 ## Installing
@@ -36,14 +58,10 @@ pytest
 
 ## TODO / things to fix
 
-1. Expand the example completion and embedding clients.
-2. Provide real client implementations for each provider.
-3. Extend environment configuration (`EnvSettings`) as needed.
-4. Extend the test suite to cover factory selection and client behaviour.
-5. Ensure the package metadata and versioning follow your JFrog
-   Artifactory publishing requirements.
-6. Fill in the license information in `LICENSE`.
+1. Expand unit tests to cover both OpenAI and Bedrock when credentials are available.
+2. Add more structured prompt examples and usage instructions.
+3. Document the steps for publishing a wheel to your JFrog Artifactory.
+4. Review pricing and context window tables for accuracy as models evolve.
 
-Once these items are completed the project can be built and uploaded to
-Artifactory using `pip wheel .` followed by your organisation's upload
-process.
+After completing these tasks, build the project using `pip wheel .` and upload
+the resulting artifact using your organization's deployment workflow.
