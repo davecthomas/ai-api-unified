@@ -9,9 +9,9 @@ from typing import ClassVar, List, Dict, Any, Type
 import pandas as pd
 from pydantic import ValidationError, field_validator
 
-from ai_base import AIBaseCompletions, AIStructuredPrompt
+from ..ai_base import AIBaseCompletions, AIStructuredPrompt
 
-from env_settings import EnvSettings
+from ..util.env_settings import EnvSettings
 
 # I return the full product name column in a dataframe from _create_unique_product_name_key so this warning is bogus
 warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)

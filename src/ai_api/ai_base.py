@@ -227,7 +227,7 @@ class AIBaseCompletions(AIBase):
         safety_margin: float = 1.15,
     ) -> int:
         """
-        Heuristic for Nova • maxTokens
+        Heuristic for Bedrock • maxTokens
         --------------------------------
         n                       – number of phrases you’ll ask the model to return
         avg_words_per_phrase    – average length of each phrase (default 2.5 words)

@@ -7,8 +7,8 @@ from typing import List, Dict, Any
 from botocore.config import Config
 import boto3
 import botocore
-from ai_base import AIBase, AIBaseEmbeddings
-from env_settings import EnvSettings
+from ..ai_base import AIBase, AIBaseEmbeddings
+from ..util.env_settings import EnvSettings
 
 
 class AiTitanEmbeddings(AIBaseEmbeddings):

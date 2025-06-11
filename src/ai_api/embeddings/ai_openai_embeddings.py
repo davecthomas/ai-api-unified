@@ -1,12 +1,12 @@
 # ai_openai_embeddings.py
 
-from ai_base import AIBaseEmbeddings
+from ..ai_base import AIBaseEmbeddings
 from openai import BadRequestError, OpenAI
 from openai.types import EmbeddingCreateParams, CreateEmbeddingResponse
 import httpx
 import time
 import random
-from env_settings import EnvSettings
+from ..util.env_settings import EnvSettings
 from typing import List, Dict, Any
 
 

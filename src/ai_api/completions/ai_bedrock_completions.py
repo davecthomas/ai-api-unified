@@ -5,14 +5,15 @@ from botocore.exceptions import ClientError
 from typing import ClassVar, Dict, List, Type
 from pydantic import ValidationError
 
-from ai_base import AIBaseCompletions, AIStructuredPrompt
+from ..ai_base import AIBaseCompletions, AIStructuredPrompt
 
-from env_settings import EnvSettings
+from ..util.env_settings import EnvSettings
 
 
-class AiNovaCompletions(AIBaseCompletions):
+class AiBedrockCompletions(AIBaseCompletions):
     """
-    Completion client for Amazon Nova (Bedrock) via the Converse API, with structured-output prompts.
+    Completion client for Amazon Bedrock via the Converse API, with
+    structured-output prompts.
     """
 
     def __init__(self, model: str = "", dimensions: int = 0):
@@ -236,6 +237,6 @@ class AiNovaCompletions(AIBaseCompletions):
                 return ""
             except Exception as e:
                 if attempt == len(self.backoff_delays):
-                    raise RuntimeError(f"Nova converse failed: {e}")
+                    raise RuntimeError(f"Bedrock converse failed: {e}")
                 # Wait before retrying
                 time.sleep(delay)
