@@ -1,0 +1,30 @@
+########################################################################
+# Which embedding model family?   openai | titan
+# EMBEDDING_ENGINE=titan
+EMBEDDING_ENGINE=openai
+# Which LLM family for query enrichment?   openai | nova
+# COMPLETIONS_ENGINE=nova
+COMPLETIONS_ENGINE=openai
+
+
+########################################################################
+#   OPENAI / TITAN / LLM CREDENTIALS
+########################################################################
+# --- OpenAI ---
+OPENAI_API_KEY=
+
+# Generic AI settings
+# Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0)
+EMBEDDING_MODEL_NAME=text-embedding-3-small
+# EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
+# Completions model name (gpt-4o-mini | amazon.nova-micro-v1:0 or amazon.nova-lite-v1:0)
+COMPLETIONS_MODEL_NAME=gpt-4o-mini
+# COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
+# Embedding dimensions (1536 for OpenAI | 1024 for Titan)
+# EMBEDDING_DIMENSIONS=1024
+EMBEDDING_DIMENSIONS=1536
+# Vector metric (cosine for Pinecone | cosinesimil for OpenSearch | COSINE for Redis)
+# VECTOR_METRIC=cosinesimil
+VECTOR_METRIC=cosine
+
+AWS_REGION=us-east-1

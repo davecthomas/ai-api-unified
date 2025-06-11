@@ -1,18 +1,18 @@
 # ai_factory.py
 
 from typing import List, Type, Optional
-from ai_base import AIBase, AIBaseCompletions
-from ai_nova_completions import AiNovaCompletions
-from ai_openai_completions import AiOpenAICompletions
-from ai_openai_embeddings import AiOpenAIEmbeddings
-from ai_titan_embeddings import AiTitanEmbeddings
-from env_settings import EnvSettings
+from .ai_base import AIBase, AIBaseCompletions
+from .completions.ai_bedrock_completions import AiBedrockCompletions  # type: ignore
+from .completions.ai_openai_completions import AiOpenAICompletions  # type: ignore
+from .embeddings.ai_openai_embeddings import AiOpenAIEmbeddings  # type: ignore
+from .embeddings.ai_titan_embeddings import AiTitanEmbeddings  # type: ignore
+from .util.env_settings import EnvSettings  # type: ignore
 
 
 class AIFactory:
     # Mapping of (client_type, engine) to the implementing class
     _CLIENT_MAP: dict[tuple[str, str], Type[AIBase]] = {
-        (AIBase.CLIENT_TYPE_COMPLETIONS, "nova"): AiNovaCompletions,
+        (AIBase.CLIENT_TYPE_COMPLETIONS, "nova"): AiBedrockCompletions,
         (AIBase.CLIENT_TYPE_COMPLETIONS, "openai"): AiOpenAICompletions,
         (AIBase.CLIENT_TYPE_EMBEDDING, "titan"): AiTitanEmbeddings,
         (AIBase.CLIENT_TYPE_EMBEDDING, "openai"): AiOpenAIEmbeddings,
@@ -69,7 +69,7 @@ class AIFactory:
         dim: int = int(env.get_setting("EMBEDDING_DIMENSIONS", "1024"))
 
         if engine == "nova":
-            return AiNovaCompletions(model=model_name, dimensions=dim)
+            return AiBedrockCompletions(model=model_name, dimensions=dim)
         if engine == "openai":
             return AiOpenAICompletions(model=model_name, dimensions=dim)
 
