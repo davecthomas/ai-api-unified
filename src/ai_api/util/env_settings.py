@@ -35,4 +35,5 @@ class EnvSettings(BaseSettings):
     def override_setting(self, setting: str, value: Any) -> None:
         setattr(self, setting, value)
         import os
+
         os.environ[setting] = str(value)
