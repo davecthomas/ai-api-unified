@@ -17,6 +17,25 @@ src/ai_api/ai_base.py      - abstract interfaces
 src/ai_api/ai_factory.py   - factory for selecting client implementations
 ```
 
+## Class hierarchy
+
+```mermaid
+classDiagram
+    class AIBase
+    AIBase <|-- AIBaseEmbeddings
+    AIBase <|-- AIBaseCompletions
+    AIBaseEmbeddings <|-- AiOpenAIEmbeddings
+    AIBaseEmbeddings <|-- AiTitanEmbeddings
+    AIBaseCompletions <|-- AiOpenAICompletions
+    AIBaseCompletions <|-- AiBedrockCompletions
+    AIStructuredPrompt <|-- ExamplePrompt
+
+    class ExamplePrompt {
+      +str message
+      +get_prompt() str
+    }
+```
+
 ## Installing
 
 This project uses a standard `pyproject.toml` and can be installed in
@@ -34,16 +53,11 @@ Running the unit tests requires `pytest`:
 pytest
 ```
 
-## TODO / things to fix
+## TODO
 
-1. Expand the example completion and embedding clients.
-2. Provide real client implementations for each provider.
-3. Extend environment configuration (`EnvSettings`) as needed.
-4. Extend the test suite to cover factory selection and client behaviour.
-5. Ensure the package metadata and versioning follow your JFrog
-   Artifactory publishing requirements.
-6. Fill in the license information in `LICENSE`.
+1. Publish the package to your internal or public package index.
+2. Add more usage examples and provider implementations as needed.
+3. Improve documentation and type hints.
 
-Once these items are completed the project can be built and uploaded to
-Artifactory using `pip wheel .` followed by your organisation's upload
-process.
+Once these items are completed the project can be built and uploaded using
+`pip wheel .` followed by your organization's upload process.
