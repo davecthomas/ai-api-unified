@@ -3,7 +3,7 @@ import json
 from typing import List, Dict, Any, Optional, Type
 import uuid
 import math
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, model_validator
 import tiktoken
 
 
@@ -77,6 +77,18 @@ class AIStructuredPrompt(BaseModel):
 
     prompt: str = ""  # This is automatically populated after validation
 
+    @model_validator(mode="after")
+    def _populate_prompt(self: "AIStructuredPrompt", __: Any) -> "AIStructuredPrompt":
+        """
+        After validation, build and store the prompt string
+        """
+        object.__setattr__(
+            self,
+            "prompt",
+            self.get_prompt(),
+        )
+        return self
+
     @classmethod
     def model_json_schema(cls) -> dict:
         from copy import deepcopy
@@ -105,7 +117,6 @@ class AIStructuredPrompt(BaseModel):
     def send_structured_prompt(
         self,
         ai_client: "AIBaseCompletions",
-        # prompt: str = None,
         response_model: Type["AIStructuredPrompt"] = None,
     ) -> Optional["AIStructuredPrompt"]:
         """

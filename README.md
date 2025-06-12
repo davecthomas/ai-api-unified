@@ -1,12 +1,12 @@
-# ai-api
+# ai_api Unifying Foundation Model APIs
 
 This repository contains a Python package that aims to provide a unified
-interface for working with different foundation model providers.  The
+interface for working with different foundation model providers. The
 included code defines abstract base classes and a factory for creating
 client instances for completion and embedding APIs.
 
 The repository already includes example implementations for both
-OpenAI and Amazon Bedrock/Titan.  Environment configuration is handled
+OpenAI and Amazon Bedrock/Titan. Environment configuration is handled
 through a small `EnvSettings` class powered by Pydantic.
 
 ## Repository layout

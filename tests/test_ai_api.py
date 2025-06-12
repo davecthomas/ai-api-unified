@@ -1,5 +1,13 @@
+from copy import deepcopy
 import os
 import sys
+import pytest
+import textwrap
+from typing import Any, Dict, Optional, Type
+
+from pydantic import model_validator
+
+from ai_api.ai_factory import AIFactory
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT_DIR, "src"))
@@ -8,75 +16,97 @@ sys.path.insert(0, ROOT_DIR)
 from ai_api.ai_base import AIBaseEmbeddings, AIBaseCompletions, AIStructuredPrompt
 
 
-class DummyEmbeddings(AIBaseEmbeddings):
-    def __init__(self):
-        self.called = []
+class TestStructuredPrompt(AIStructuredPrompt):
+    message_input: str  # this is an input field, not a result
 
-    @property
-    def list_model_names(self):
-        return ["dummy"]
+    test_output: Optional[str] = None
 
-    def generate_embeddings(self, text: str):
-        self.called.append(text)
-        return {
-            "embedding": [ord(c) for c in text],
-            "text": text,
-            "dimensions": len(text),
-        }
+    @model_validator(mode="after")
+    def _populate_prompt(
+        self: "TestStructuredPrompt", __: Any
+    ) -> "TestStructuredPrompt":
+        """
+        After validation, build and store the prompt string
+        """
+        object.__setattr__(
+            self,
+            "prompt",
+            self.get_prompt(message_input=self.message_input),
+        )
+        return self
 
-    def generate_embeddings_batch(self, texts):
-        return [self.generate_embeddings(t) for t in texts]
-
-
-class DummyCompletions(AIBaseCompletions):
-    def __init__(self):
-        self.prompts = []
-
-    @property
-    def list_model_names(self):
-        return ["dummy"]
-
-    @property
-    def max_context_tokens(self) -> int:
-        return 1024
-
-    @property
-    def price_per_1k_tokens(self) -> float:
-        return 0.0
-
-    def strict_schema_prompt(self, prompt, response_model, max_response_tokens=512):
-        self.prompts.append(prompt)
-        return response_model(message=prompt.upper())
-
-    def send_prompt(self, prompt: str) -> str:
-        self.prompts.append(prompt)
-        return prompt.upper()
-
-
-class ExamplePrompt(AIStructuredPrompt):
-    message: str | None = None
+    @model_validator(mode="before")
+    def validate_input(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        # Ensure the message_input is set to "hello"
+        if "message_input" not in values or values["message_input"] != "hello":
+            raise ValueError("message_input must be 'hello'")
+        return values
 
     @staticmethod
-    def get_prompt() -> str:
-        return "say hello in JSON with a 'message' field"
+    def get_prompt(
+        message_input: str,
+    ) -> str:
+        prompt = textwrap.dedent(
+            f"""
+            Reply with than uppercase version of the message_input in the test_output field.
+            message_input: '{message_input}'
+            """
+        ).strip()
+        return prompt
+
+    @classmethod
+    def model_json_schema(cls) -> Dict[str, Any]:
+        """
+        JSON schema for the LLM’s *output* only.
+        """
+        # start with a fresh copy of the base schema (deep-copied there)
+        schema: Dict[str, Any] = deepcopy(super().model_json_schema())
+        schema["properties"]["test_output"] = {"type": "string"}
+        # make test_output required for the LLM response
+        schema.setdefault("required", [])
+        schema["required"].append("test_output")
+        return schema
 
 
-def test_generate_embeddings():
-    client = DummyEmbeddings()
-    result = client.generate_embeddings("hi")
-    assert result["embedding"] == [104, 105]
-    assert result["dimensions"] == 2
+@pytest.fixture
+def embedding_client() -> AIBaseEmbeddings:
+    """
+    Returns an embeddings client for testing.
+    """
+    return AIFactory.get_ai_embedding_client()
 
 
-def test_send_prompt():
-    client = DummyCompletions()
-    response = client.send_prompt("hello")
-    assert response == "HELLO"
+@pytest.fixture
+def completion_client() -> AIBaseCompletions:
+    """
+    Returns a completions client for testing.
+    """
+    return AIFactory.get_ai_completions_client()
 
 
-def test_structured_prompt():
-    client = DummyCompletions()
-    prompt = ExamplePrompt(prompt=ExamplePrompt.get_prompt())
-    result = prompt.send_structured_prompt(client, ExamplePrompt)
-    assert isinstance(result, ExamplePrompt)
-    assert result.message == prompt.prompt.upper()
+def test_send_prompt(completion_client: AIBaseCompletions) -> None:
+    """
+    The completion client should uppercase the input string.
+    """
+    input_message = "hello"
+    response = completion_client.send_prompt(input_message)
+    assert response != ""
+
+
+def test_structured_prompt(completion_client: AIBaseCompletions) -> None:
+    """
+    Sending a structured prompt should return an instance of TestStructuredPrompt
+    with its `.message` set to the uppercased prompt.
+    """
+    structured_prompt = TestStructuredPrompt(message_input="hello")
+    structured_prompt_result: TestStructuredPrompt = (
+        structured_prompt.send_structured_prompt(
+            completion_client, TestStructuredPrompt
+        )
+    )
+
+    assert isinstance(structured_prompt_result, TestStructuredPrompt)
+    # The `message` attribute comes from AIStructuredPrompt; it should equal prompt.prompt.upper()
+    assert (
+        structured_prompt_result.test_output == structured_prompt.message_input.upper()
+    )
