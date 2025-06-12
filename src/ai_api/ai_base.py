@@ -138,13 +138,13 @@ class AIStructuredPrompt(BaseModel):
                 response_model=response_model,
             )
         except ValidationError as ve:
-            print("Validation errors: %s", ve.errors())
+            print(f"Validation errors: {ve.errors()}")
             # either return None or raise a more descriptive error:
             return None
 
         except Exception as exc:
             # any other unexpected error
-            print("Unexpected error sending structured prompt", exc_info=exc)
+            print(f"Unexpected error sending structured prompt: {exc}")
             return None
 
 

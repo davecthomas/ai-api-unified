@@ -1,30 +1,24 @@
 from copy import deepcopy
-import os
-import sys
 import pytest
 import textwrap
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional
 
 from pydantic import model_validator
 
 from ai_api.ai_factory import AIFactory
 
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(ROOT_DIR, "src"))
-sys.path.insert(0, ROOT_DIR)
-
 from ai_api.ai_base import AIBaseEmbeddings, AIBaseCompletions, AIStructuredPrompt
 
 
-class TestStructuredPrompt(AIStructuredPrompt):
+class ExampleStructuredPrompt(AIStructuredPrompt):
     message_input: str  # this is an input field, not a result
 
     test_output: Optional[str] = None
 
     @model_validator(mode="after")
     def _populate_prompt(
-        self: "TestStructuredPrompt", __: Any
-    ) -> "TestStructuredPrompt":
+        self: "ExampleStructuredPrompt", __: Any
+    ) -> "ExampleStructuredPrompt":
         """
         After validation, build and store the prompt string
         """
@@ -95,17 +89,17 @@ def test_send_prompt(completion_client: AIBaseCompletions) -> None:
 
 def test_structured_prompt(completion_client: AIBaseCompletions) -> None:
     """
-    Sending a structured prompt should return an instance of TestStructuredPrompt
-    with its `.message` set to the uppercased prompt.
+    Sending a structured prompt should return an instance of ExampleStructuredPrompt
+    with its `test_output` set to the uppercased prompt.
     """
-    structured_prompt = TestStructuredPrompt(message_input="hello")
-    structured_prompt_result: TestStructuredPrompt = (
+    structured_prompt = ExampleStructuredPrompt(message_input="hello")
+    structured_prompt_result: ExampleStructuredPrompt = (
         structured_prompt.send_structured_prompt(
-            completion_client, TestStructuredPrompt
+            completion_client, ExampleStructuredPrompt
         )
     )
 
-    assert isinstance(structured_prompt_result, TestStructuredPrompt)
+    assert isinstance(structured_prompt_result, ExampleStructuredPrompt)
     # The `message` attribute comes from AIStructuredPrompt; it should equal prompt.prompt.upper()
     assert (
         structured_prompt_result.test_output == structured_prompt.message_input.upper()

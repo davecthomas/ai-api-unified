@@ -1,35 +1,62 @@
-[project]
-name = "ai_api"
-version = "0.0.0"
-description = "Foundation model access library"
-readme = "README.md"
-requires-python = ">=3.9"
+###############################################################################
+#                ai_api • unified access layer for LLM providers              #
+###############################################################################
 
-# ---- Dependencies ----
-dependencies = [
-    # Core
-    "pydantic>=2",
-    "pydantic-settings>=2",
-    "tiktoken>=0.5.1",
-
-    # NEW – referenced in src/
-    "openai>=1.25.0",      # new OpenAI client (uses httpx internally)
-    "boto3>=1.34.0",       # AWS SDK
-    "botocore>=1.34.0",    # boto3 pins but listing keeps dependabot happy
-    "httpx>=0.27.0",       # direct HTTP calls in ai_openai_embeddings.py
-    "pandas>=2.2.0"        # dataframe utilities in completions code
+[tool.poetry]
+name         = "ai_api"
+version      = "0.1.0"          # keep in sync with src/ai_api/__version__.py
+description  = "Unified access layer for completion and embedding services"
+authors      = ["Dave Thomas <davidcthomas@gmail.com>"]
+license      = "MIT"
+readme       = "README.md"
+keywords     = ["llm", "openai", "bedrock", "embeddings", "completion", "api"]
+classifiers  = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
 ]
 
-# Optionally, keep test-only tools separate
-[project.optional-dependencies]
-dev = ["pytest>=8"]
+# src-layout wiring – include all sub-packages + PEP-561 typing marker
+packages = [
+  { include = "ai_api",     from = "src" }
+]
 
+###############################################################################
+# Runtime dependencies
+###############################################################################
+[tool.poetry.dependencies]
+python             = ">=3.12,<3.13"
+pydantic           = "^2"
+pydantic-settings  = "^2"
+tiktoken           = "^0.5.1"
+openai             = "^1.25.0"
+boto3              = "^1.34.0"
+httpx              = "^0.27.0"
+pandas             = "^2.2.0"
+
+###############################################################################
+# Development extras (install with `poetry install --with dev`)
+###############################################################################
+[tool.poetry.group.dev.dependencies]
+pytest           = "^8.4.0"
+ruff             = "^0.4.4"
+black            = "^24.4.2"
+# types-requests   = "^2.31.0.20240406"
+
+###############################################################################
+# Pytest configuration
+###############################################################################
 [tool.pytest.ini_options]
-minversion = "6.0"
-addopts     = "-ra -q"
-testpaths   = ["tests"]
-python_files = ["test_*.py"]
+minversion    = "6.0"
+addopts       = "-ra -q"
+testpaths     = ["tests"]
+python_files  = ["test_*.py"]
 norecursedirs = [".git", ".tox", ".venv", "build", "dist"]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.4.0"
+###############################################################################
+# Build-system stub for PEP 517 front-ends
+###############################################################################
+[build-system]
+requires      = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"

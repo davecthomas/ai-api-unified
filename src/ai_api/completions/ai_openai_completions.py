@@ -1,8 +1,7 @@
-# ai_openai.py
+# ai_openai_completions.py
 
 import json
 import time
-from venv import logger
 import warnings
 from openai import OpenAI
 from typing import ClassVar, List, Dict, Any, Type

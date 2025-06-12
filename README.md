@@ -1,94 +1,82 @@
-# ai_api Unifying Foundation Model APIs
+# ai_api · Unified Foundation-Model Client Library
 
-This repository contains a Python package that aims to provide a unified
-interface for working with different foundation model providers. The
-included code defines abstract base classes and a factory for creating
-client instances for completion and embedding APIs.
+> **Version:** 0.1.0 &nbsp;|&nbsp; **License:** MIT
 
-The repository already includes example implementations for both
-OpenAI and Amazon Bedrock/Titan. Environment configuration is handled
-through a small `EnvSettings` class powered by Pydantic.
+`ai_api` provides a single, typed interface for calling both completion-style
+LLMs and text-embedding models across vendors (OpenAI, Amazon Bedrock/Titan, …).
+
+## Prerequisites
+
+- **Python 3.12.1** (only)  
+  We strongly recommend using [pyenv](https://github.com/pyenv/pyenv) to install and pin **exactly** 3.12.1, so that compiled wheels (e.g. `tiktoken`) are available and no Rust toolchain is required.
+
+## Installation
+
+```bash
+# from your internal Artifactory PyPI
+pip install --index-url https://<org>.jfrog.io/artifactory/api/pypi/pypi-local/simple ai_api
+```
+
+Supported Python ≥ 3.9 (< 4.0).
+
+## Quick start
+
+```python
+from ai_api import AIFactory
+
+# Completions
+client = AIFactory.get_ai_completions_client()           # auto-selects engine via .env
+response = client.send_prompt("Say hello in German")
+print(response)  # → "Hallo!"
+
+# Embeddings
+embedder = AIFactory.get_ai_embedding_client()
+vector = embedder.generate_embeddings("vectorize me")
+```
+
+---
 
 ## Repository layout
 
 ```
-src/ai_api/        - package source code
-src/ai_api/ai_base.py      - abstract interfaces
-src/ai_api/ai_factory.py   - factory for selecting client implementations
+src/ai_api/              ← package source
+└── ai_base.py           ← abstract interfaces
+└── ai_factory.py        ← runtime factory
+tests/                   ← pytest suite
+.env_template            ← sample environment config
 ```
 
-## Class hierarchy
+---
 
-```mermaid
-classDiagram
-    class AIBase
-    AIBase <|-- AIBaseEmbeddings
-    AIBase <|-- AIBaseCompletions
-    AIBaseEmbeddings <|-- AiOpenAIEmbeddings
-    AIBaseEmbeddings <|-- AiTitanEmbeddings
-    AIBaseCompletions <|-- AiOpenAICompletions
-    AIBaseCompletions <|-- AiBedrockCompletions
-    AIStructuredPrompt <|-- ExamplePrompt
-
-    class ExamplePrompt {
-      +str message
-      +get_prompt() str
-    }
-```
-
-## Installing
-
-The project is managed with [Poetry](https://python-poetry.org/) and requires
-Python 3.9 or later. After cloning the repository install Poetry and run:
+## Development
 
 ```bash
-poetry install
-```
-
-This creates a virtual environment with all dependencies as defined in the
-`pyproject.toml`.  While developing you can install the project in editable mode
-with:
-
-```bash
+# create virtualenv & install runtime + dev dependencies
 poetry install --with dev
+pytest -q
 ```
 
-Copy `env_template` to `.env` and fill in your credentials before running the
-examples.
-
-To verify your environment run the unit tests:
+Linting and formatting:
 
 ```bash
-poetry run pytest
+ruff check .
+ruff format .
 ```
 
-## Publishing with Poetry
+---
 
-The package can be built and uploaded to a private JFrog Artifactory PyPI
-repository.  Replace `myrepo` and the URL with the appropriate values for your
-organization.
+## Publishing to Artifactory (Poetry workflow)
 
 ```bash
-# Build the wheel and source distribution
-poetry build
-
-# Configure the JFrog repository
-poetry config repositories.myrepo https://<your-jfrog-url>/artifactory/api/pypi/pypi-local
-
-# Optional: store credentials (or use environment variables)
-poetry config http-basic.myrepo <username> <password>
-
-# Publish the package
-poetry publish -r myrepo
+poetry version 0.1.0        # bump when ready
+poetry build                # builds wheel + sdist
+poetry config repositories.ups-ai https://<org>.jfrog.io/artifactory/api/pypi/pypi-local
+poetry publish -r ups-ai
 ```
 
-The same steps can be used for any other internal or public index.
+---
 
-## TODO
+## Roadmap
 
-1. Publish the package to your internal or public package index.
-2. Add more usage examples and provider implementations as needed.
-3. Improve documentation and type hints.
-
-Once these items are completed the project can be built and uploaded using
-`pip wheel .` followed by your organization's upload process.
+- Add more provider back-ends (Anthropic, Google).
+- Provide async variants for high-throughput workloads.

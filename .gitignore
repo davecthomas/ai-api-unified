@@ -1,39 +1,40 @@
-# Ignore Python compiled files
+# Python byte-code
 *.pyc
 __pycache__/
 
+# Poetry / setuptools artefacts
 *.egg-info/
+src/ai_api.egg-info/
+build/
+dist/
 
-# ignore output files
+# Test cache
+.pytest_cache/
+
+.python-version
+
+# CSV / log / data outputs
 *.csv
-
-
-# Ignore the virtual environment
-venv/
-
-# Ignore the Pipenv and Pipfile.lock files
-Pipfile.lock
-Pipfile
-
-# Ignore the .env file
-.env*
-
-# Ignore zip files
-*.zip
-
-# Ignore the .vscode folder (if using VS Code)
-.vscode/
-
-# Ignore any local settings or configuration files
-config.json
-settings.json
-
-# Ignore any local development or testing data
+*.log
 data/
 test_data/
 training_data/
 
-# Ignore log files
-*.log
+# Virtual environments
+.venv/
+venv/
 
+# Environment & config
+.env*
+config.json
+settings.json
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# macOS
 .DS_Store
+
+# Archives
+*.zip
