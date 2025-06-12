@@ -38,20 +38,51 @@ classDiagram
 
 ## Installing
 
-This project uses a standard `pyproject.toml` and can be installed in
-editable mode while developing:
+The project is managed with [Poetry](https://python-poetry.org/) and requires
+Python 3.9 or later. After cloning the repository install Poetry and run:
 
 ```bash
-pip install -e .
+poetry install
 ```
 
-Copy `env_template` to `.env` and fill in your credentials before running the examples.
-
-Running the unit tests requires `pytest`:
+This creates a virtual environment with all dependencies as defined in the
+`pyproject.toml`.  While developing you can install the project in editable mode
+with:
 
 ```bash
-pytest
+poetry install --with dev
 ```
+
+Copy `env_template` to `.env` and fill in your credentials before running the
+examples.
+
+To verify your environment run the unit tests:
+
+```bash
+poetry run pytest
+```
+
+## Publishing with Poetry
+
+The package can be built and uploaded to a private JFrog Artifactory PyPI
+repository.  Replace `myrepo` and the URL with the appropriate values for your
+organization.
+
+```bash
+# Build the wheel and source distribution
+poetry build
+
+# Configure the JFrog repository
+poetry config repositories.myrepo https://<your-jfrog-url>/artifactory/api/pypi/pypi-local
+
+# Optional: store credentials (or use environment variables)
+poetry config http-basic.myrepo <username> <password>
+
+# Publish the package
+poetry publish -r myrepo
+```
+
+The same steps can be used for any other internal or public index.
 
 ## TODO
 
