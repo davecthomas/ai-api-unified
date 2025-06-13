@@ -1,10 +1,11 @@
 ###############################################################################
-#                ai_api • unified access layer for LLM providers              #
+#                ai_api_unified • unified access layer for LLM providers              #
 ###############################################################################
 
 [tool.poetry]
-name         = "ai_api"
-version      = "0.1.0"          # keep in sync with src/ai_api/__version__.py
+name         = "ai_api_unified"
+
+version      = "0.1.0"          # keep in sync with src/ai_api_unified/__version__.py
 description  = "Unified access layer for completion and embedding services"
 authors      = ["Dave Thomas <davidcthomas@gmail.com>"]
 license      = "MIT"
@@ -19,7 +20,7 @@ classifiers  = [
 
 # src-layout wiring – include all sub-packages + PEP-561 typing marker
 packages = [
-  { include = "ai_api",     from = "src" }
+  { include = "ai_api_unified",     from = "src" }
 ]
 
 ###############################################################################

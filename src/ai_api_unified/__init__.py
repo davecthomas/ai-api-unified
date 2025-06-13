@@ -1,5 +1,5 @@
 """
-ai_api · Unified access layer for LLM providers.
+ai_api_unified · Unified access layer for LLM providers.
 
 Public API surface:
   - __version__             Package version string
@@ -48,4 +48,4 @@ __all__: list[str] = [
     "AiOpenAIEmbeddings",
     "AiTitanEmbeddings",
 ]
-# Public API surface for ai_api package
+# Public API surface for ai_api_unified package

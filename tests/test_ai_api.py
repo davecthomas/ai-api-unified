@@ -5,9 +5,13 @@ from typing import Any, Dict, Optional
 
 from pydantic import model_validator
 
-from ai_api.ai_factory import AIFactory
+from ai_api_unified.ai_factory import AIFactory
 
-from ai_api.ai_base import AIBaseEmbeddings, AIBaseCompletions, AIStructuredPrompt
+from ai_api_unified.ai_base import (
+    AIBaseEmbeddings,
+    AIBaseCompletions,
+    AIStructuredPrompt,
+)
 
 
 class ExampleStructuredPrompt(AIStructuredPrompt):

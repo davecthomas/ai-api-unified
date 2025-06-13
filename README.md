@@ -1,8 +1,8 @@
-# ai_api · Unified Foundation-Model Client Library
+# ai_api_unified · Unified Foundation-Model Client Library
 
 > **Version:** 0.1.0 &nbsp;|&nbsp; **License:** MIT
 
-`ai_api` provides a single, typed interface for calling both completion-style
+`ai_api_unified` provides a single, typed interface for calling both completion-style
 LLMs and text-embedding models across vendors (OpenAI, Amazon Bedrock/Titan, …).
 
 ## Prerequisites
@@ -14,7 +14,7 @@ LLMs and text-embedding models across vendors (OpenAI, Amazon Bedrock/Titan, …
 
 ```bash
 # from your internal Artifactory PyPI
-pip install --index-url https://<org>.jfrog.io/artifactory/api/pypi/pypi-local/simple ai_api
+pip install --index-url https://<org>.jfrog.io/artifactory/api/pypi/pypi-local/simple ai_api_unified
 ```
 
 Supported Python ≥ 3.9 (< 4.0).
@@ -22,7 +22,7 @@ Supported Python ≥ 3.9 (< 4.0).
 ## Quick start
 
 ```python
-from ai_api import AIFactory
+from ai_api_unified import AIFactory
 
 # Completions
 client = AIFactory.get_ai_completions_client()           # auto-selects engine via .env
@@ -39,7 +39,7 @@ vector = embedder.generate_embeddings("vectorize me")
 ## Repository layout
 
 ```
-src/ai_api/              ← package source
+src/ai_api_unified/              ← package source
 └── ai_base.py           ← abstract interfaces
 └── ai_factory.py        ← runtime factory
 tests/                   ← pytest suite

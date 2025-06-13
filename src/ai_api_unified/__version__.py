@@ -1,5 +1,5 @@
 """
-ai_api version module.
+ai_api_unified version module.
 
 Edit the string below *and* the `version` field in pyproject.toml together
 each time you cut a new release.

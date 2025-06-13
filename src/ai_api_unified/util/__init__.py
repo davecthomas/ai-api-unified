@@ -1,5 +1,5 @@
 """
-Utility helpers for ai_api (environment settings, etc.).
+Utility helpers for ai_api_unified (environment settings, etc.).
 """
 
 from .env_settings import EnvSettings
