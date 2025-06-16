@@ -29,7 +29,7 @@ class ExampleStructuredPrompt(AIStructuredPrompt):
         object.__setattr__(
             self,
             "prompt",
-            self.get_prompt(message_input=self.message_input),
+            ExampleStructuredPrompt.get_prompt(message_input=self.message_input),
         )
         return self
 
