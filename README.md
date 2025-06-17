@@ -112,9 +112,112 @@ pip install --index-url https://<org>.jfrog.io/artifactory/api/pypi/pypi-local/s
 
 ## Quick start
 
-### Set up environment with your API keys
+## Configuration via Environment Variables
 
-### Example
+This library is fully configurable through environment variables—in exactly the way shown in the provided `.env_template`. You can swap providers, engines, and models without changing code. Below are the key variables:
+
+### EMBEDDING_ENGINE
+
+Controls which embedding backend to use.
+
+- `openai` → uses OpenAI’s embedding API
+- `titan` → uses Amazon Titan embeddings
+
+_Default: `openai`_
+
+### COMPLETIONS_ENGINE
+
+Controls which family of completion (chat/LLM) models to use.
+
+- `openai` → uses OpenAI’s completion API
+- `nova` → uses Amazon Nova (Bedrock) LLMs
+- `llama` → uses Meta Llama family via Bedrock
+- `anthropic` → uses Anthropic Claude family via Bedrock
+- `mistral` → uses Mistral family via Bedrock
+- `cohere` → uses Cohere Command family via Bedrock
+- `ai21` → uses AI21 Jamba family via Bedrock
+- `rerank` → uses Amazon Rerank via Bedrock
+
+_Default: `openai`_
+
+Submit a PR to add new ones.
+
+### OPENAI_API_KEY
+
+Your OpenAI API key. Required when `EMBEDDING_ENGINE` or `COMPLETIONS_ENGINE` is set to `openai`.
+
+### EMBEDDING_MODEL_NAME
+
+The exact model identifier for embeddings.
+
+- **OpenAI examples:**
+
+  - `text-embedding-3-small` – cost-effective small embedding
+  - `text-embedding-3-large` – higher-capacity large embedding
+  - `text-embedding-ada-002` – versatile general-purpose embedding
+  - `text-search-ada-doc-001` – optimized for document search
+  - `text-search-davinci-doc-001` – high-accuracy document search
+  - `code-search-ada-text-001` – code-aware embedding for search
+  - `code-search-babbage-text-001` – larger-capacity code search
+  - `text-similarity-ada-001` – basic text similarity
+  - `text-similarity-babbage-001` – mid-range text similarity
+  - `text-similarity-curie-001` – higher-quality text similarity
+
+- **Amazon Bedrock examples:**
+  - `amazon.titan-embed-text-v2:0` – Titan Text Embed V2
+  - `amazon.titan-embed-text-v1:0` – Titan Text Embed V1
+
+_Default: `text-embedding-3-small`_
+
+### COMPLETIONS_MODEL_NAME
+
+The exact model identifier for completions. Changing this in config will allow a no-code update to your program. Alternatively, you can set the model on class initialization in code.
+
+- **OpenAI example:**
+
+  - `gpt-4o-mini` – optimized for cost-sensitive, low-latency use
+  - `gpt-4o` – general-purpose GPT-4o
+  - `gpt-4o-16k` – GPT-4o with 16 000-token context
+  - `gpt-4` – standard GPT-4
+  - `gpt-4-32k` – GPT-4 with 32 000-token context
+  - `gpt-3.5-turbo` – flagship GPT-3.5 model
+  - `gpt-3.5-turbo-16k` – GPT-3.5 with 16 000-token context
+  - `text-davinci-003` – high-quality text generation
+  - `text-curie-001` – balanced speed and capability
+  - `code-davinci-002` – code-optimized completions
+
+- **Amazon Bedrock examples:**
+  - `amazon.nova-pro-v1:0` – Nova Pro
+  - `amazon.nova-lite-v1:0` – Nova Lite
+  - `amazon.nova-micro-v1:0` – Nova Micro
+  - `amazon.nova-canvas-v1:0` – Nova Canvas
+  - `amazon.titan-text-premier-v1:0` – Titan Text Premier
+  - `anthropic.claude-opus-4-20250514-v1:0` – Claude Opus 4
+  - `anthropic.claude-sonnet-4-20250514-v1:0` – Claude Sonnet 4
+  - `meta.llama2-70b-chat-hf:2` – Llama 2 Chat 70B
+  - `meta.llama3-70b-instruct-v1:0` – Llama 3 Instruct 70B
+  - `mistral.mistral-large-2407-v1:0` – Mistral Large
+  - `cohere.command-r-plus-v1:0` – Cohere Command R+
+  - `ai21.jamba-1-5-large-v1:0` – AI21 Jamba 1.5 Large
+
+_Default: `gpt-4o-mini`_
+
+### EMBEDDING_DIMENSIONS
+
+Dimensionality of the embedding vectors.
+
+- `1536` for OpenAI embeddings
+- `1024` for Titan embeddings
+
+_Default: `1536`_
+
+### AWS_REGION
+
+AWS region for Bedrock/Titan when using Amazon services. Note: to use Bedrock, you must get your access environment set up independently, since there is no API key approach to using Bedrock.
+
+_Default: `us-east-1`_
+
+## Example Code
 
 ```python
 """

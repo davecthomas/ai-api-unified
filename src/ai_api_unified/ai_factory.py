@@ -12,7 +12,14 @@ from .util.env_settings import EnvSettings  # type: ignore
 class AIFactory:
     # Mapping of (client_type, engine) to the implementing class
     _CLIENT_MAP: dict[tuple[str, str], Type[AIBase]] = {
+        (AIBase.CLIENT_TYPE_COMPLETIONS, "llama"): AiBedrockCompletions,
+        (AIBase.CLIENT_TYPE_COMPLETIONS, "anthropic"): AiBedrockCompletions,
+        (AIBase.CLIENT_TYPE_COMPLETIONS, "mistral"): AiBedrockCompletions,
         (AIBase.CLIENT_TYPE_COMPLETIONS, "nova"): AiBedrockCompletions,
+        (AIBase.CLIENT_TYPE_COMPLETIONS, "cohere"): AiBedrockCompletions,
+        (AIBase.CLIENT_TYPE_COMPLETIONS, "ai21"): AiBedrockCompletions,
+        (AIBase.CLIENT_TYPE_COMPLETIONS, "rerank"): AiBedrockCompletions,
+        (AIBase.CLIENT_TYPE_COMPLETIONS, "canvas"): AiBedrockCompletions,
         (AIBase.CLIENT_TYPE_COMPLETIONS, "openai"): AiOpenAICompletions,
         (AIBase.CLIENT_TYPE_EMBEDDING, "titan"): AiTitanEmbeddings,
         (AIBase.CLIENT_TYPE_EMBEDDING, "openai"): AiOpenAIEmbeddings,
