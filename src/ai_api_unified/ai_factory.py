@@ -59,28 +59,54 @@ class AIFactory:
     def get_ai_completions_client(
         client_type: str = AIBase.CLIENT_TYPE_COMPLETIONS,
         model_name: Optional[str] = None,
+        completions_engine: Optional[str] = None,
     ) -> AIBaseCompletions:
         """
         Instantiate and return the appropriate AIBaseCompletions subclass.
+
+        :param client_type: must be CLIENT_TYPE_COMPLETIONS
+        :param model_name: optional override for COMPLETIONS_MODEL_NAME
+        :param completions_engine: optional override for COMPLETIONS_ENGINE
         """
-        env: EnvSettings = EnvSettings()
+        env = EnvSettings()
         if client_type != AIBase.CLIENT_TYPE_COMPLETIONS:
             raise RuntimeError(f"Unsupported client_type: {client_type!r}")
 
-        engine: str = env.get_setting("COMPLETIONS_ENGINE", "openai").strip().lower()
+        # 1. Determine engine: explicit override wins, otherwise read from env
+        if completions_engine:
+            engine = completions_engine.strip().lower()
+        else:
+            engine = env.get_setting("COMPLETIONS_ENGINE", "openai").strip().lower()
 
-        # Allow override of model_name; otherwise read from env
+        # 2. Determine model name: explicit override wins, otherwise read from env
         if model_name is None:
             model_name = env.get_setting("COMPLETIONS_MODEL_NAME", "").strip()
 
-        dim: int = int(env.get_setting("EMBEDDING_DIMENSIONS", "1024"))
+        # 3. Dimensions (passed through but not used by Bedrock vs OpenAI clients)
+        dim = int(env.get_setting("EMBEDDING_DIMENSIONS", "1024"))
 
-        if engine == "nova":
-            return AiBedrockCompletions(model=model_name, dimensions=dim)
+        # 4. Dispatch to the correct subclass
         if engine == "openai":
-            return AiOpenAICompletions(model=model_name, dimensions=dim)
+            client: AIBaseCompletions = AiOpenAICompletions(
+                model=model_name, dimensions=dim
+            )
 
-        raise RuntimeError(f"Unsupported COMPLETIONS engine: {engine}")
+        # All Bedrock-backed families use AiBedrockCompletions
+        elif engine in {
+            "nova",  # Amazon Nova (Pro/Micro/Canvas)
+            "llama",  # Meta Llama family
+            "anthropic",  # Anthropic Claude family
+            "mistral",  # Mistral family
+            "cohere",  # Cohere Command family
+            "ai21",  # AI21 Jamba family
+            "rerank",  # Amazon Rerank
+        }:
+            client = AiBedrockCompletions(model=model_name, dimensions=dim)
+
+        else:
+            raise RuntimeError(f"Unsupported COMPLETIONS engine: {engine!r}")
+
+        return client
 
     @staticmethod
     def get_ai_embedding_client(

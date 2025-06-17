@@ -27,7 +27,7 @@ class AiOpenAICompletions(AIBaseCompletions):
         """
         env = EnvSettings()
         self.api_key = env.get_setting("OPENAI_API_KEY")
-        self.embedding_model = model
+        self.model = model
         self.dimensions = dimensions
         self.user = env.get_setting("OPENAI_USER", "default_user")
         self.completions_model = env.get_setting("COMPLETIONS_MODEL", "gpt-4o-mini")
@@ -41,6 +41,13 @@ class AiOpenAICompletions(AIBaseCompletions):
         "gpt-4.1-mini": 0.0020,
         "gpt-4.1-nano": 0.0001,
     }
+
+    @property
+    def model_name(self) -> str:
+        """
+        Returns the Amazon Bedrock completions model identifier in use.
+        """
+        return self.model
 
     @property
     def list_model_names(self) -> List[str]:

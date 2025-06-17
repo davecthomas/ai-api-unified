@@ -1,6 +1,6 @@
 # ai_api_unified · Unified Foundation-Model Client Library
 
-> **Version:** 0.1.0 &nbsp;|&nbsp; **License:** MIT
+> **Version:** 0.1.4 &nbsp;|&nbsp; **License:** MIT
 
 `ai_api_unified` provides a single, typed interface for calling both completion-style
 LLMs and text-embedding models across vendors (OpenAI, Amazon Bedrock/Titan, …).

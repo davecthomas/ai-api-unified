@@ -44,6 +44,13 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings):
         # Is this needed?
         self.user = self.env.get_setting("OPENAI_USER", "default_user")
 
+    @property
+    def model_name(self) -> str:
+        """
+        Returns the OpenAI embeddings model identifier this client is using.
+        """
+        return self.embedding_model
+
     def calculate_cost(self, num_tokens: int) -> float:
         """
         Calculate the cost of generating embeddings based on the number of tokens.

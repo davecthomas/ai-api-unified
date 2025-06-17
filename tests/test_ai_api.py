@@ -8,10 +8,13 @@ from pydantic import model_validator
 from ai_api_unified.ai_factory import AIFactory
 
 from ai_api_unified.ai_base import (
+    AIBase,
     AIBaseEmbeddings,
     AIBaseCompletions,
     AIStructuredPrompt,
 )
+from ai_api_unified.completions.ai_bedrock_completions import AiBedrockCompletions
+from ai_api_unified.completions.ai_openai_completions import AiOpenAICompletions
 
 
 class ExampleStructuredPrompt(AIStructuredPrompt):
@@ -75,11 +78,24 @@ def embedding_client() -> AIBaseEmbeddings:
 
 
 @pytest.fixture
-def completion_client() -> AIBaseCompletions:
+def completion_client_simple() -> AIBaseCompletions:
     """
     Returns a completions client for testing.
     """
     return AIFactory.get_ai_completions_client()
+
+
+@pytest.fixture
+def completion_client() -> AIBaseCompletions:
+    """
+    Returns a completions client for testing.
+    This uses the Bedrock implementation with a specific model.
+    """
+    return AIFactory.get_ai_completions_client(
+        client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
+        completions_engine="nova",
+        model_name="amazon.nova-micro-v1:0",
+    )
 
 
 def test_send_prompt(completion_client: AIBaseCompletions) -> None:
@@ -108,3 +124,25 @@ def test_structured_prompt(completion_client: AIBaseCompletions) -> None:
     assert (
         structured_prompt_result.test_output == structured_prompt.message_input.upper()
     )
+
+
+def test_get_ai_completions_client_with_override() -> None:
+    """
+    Calling with explicit client_type, model_name, and completions_engine
+    should return the correct Bedrock completions client with the given model.
+    """
+    # client = AIFactory.get_ai_completions_client(
+    #     client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
+    #     completions_engine="openai",
+    #     model_name="gpt-4o-mini",
+    # )
+    # Toggle these lines to test with OpenAI or Bedrock
+    client = AIFactory.get_ai_completions_client(
+        client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
+        completions_engine="nova",
+        model_name="amazon.nova-micro-v1:0",
+    )
+    # Should be the Bedrock implementation
+    assert isinstance(client, AiBedrockCompletions)
+    # And it should carry through our override model name
+    assert client.model == "amazon.nova-micro-v1:0"

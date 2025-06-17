@@ -47,6 +47,13 @@ class AiBedrockCompletions(AIBaseCompletions):
         self.backoff_delays = [1, 2, 4, 8]
 
     @property
+    def model_name(self) -> str:
+        """
+        Returns the Amazon Bedrock completions model identifier in use.
+        """
+        return self.model
+
+    @property
     def max_context_tokens(self) -> int:
         """
         Look up the OpenAI context window for the current model_name.

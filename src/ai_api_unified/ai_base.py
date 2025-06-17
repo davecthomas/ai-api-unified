@@ -22,6 +22,14 @@ class AIBase(ABC):
 
     @property
     @abstractmethod
+    def model_name(self) -> str:
+        """
+        Identifier of the model in use (e.g. 'gpt-4o-mini').
+        """
+        ...
+
+    @property
+    @abstractmethod
     def list_model_names(self) -> List[str]:
         """Supported model identifiers for this client."""
         ...

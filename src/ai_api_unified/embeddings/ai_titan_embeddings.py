@@ -27,7 +27,7 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
         """
         settings = EnvSettings()  # Load settings from the EnvSettings class
 
-        self.model = model if model else "amazon.titan-embed-text-v2:0"
+        self.embedding_model = model if model else "amazon.titan-embed-text-v2:0"
         self.dimensions = dimensions if dimensions else 1024
         self.region_name = settings.get("AWS_REGION", "us-east-1")
 
@@ -59,6 +59,13 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
         self.backoff_delays = [1, 2, 4, 8]
 
     @property
+    def model_name(self) -> str:
+        """
+        Returns the Titan embeddings model identifier this client is using.
+        """
+        return self.embedding_model
+
+    @property
     def list_model_names(self) -> List[str]:
         # AWS Bedrock ‘Titan Text Embeddings’ models
         return [
@@ -88,7 +95,7 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
         for attempt, delay in enumerate(self.backoff_delays, start=1):
             try:
                 response = self.client.invoke_model(
-                    modelId=self.model,
+                    modelId=self.embedding_model,
                     body=json.dumps(payload),
                     contentType="application/json",
                 )
