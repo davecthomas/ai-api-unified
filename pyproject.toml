@@ -5,7 +5,7 @@
 [tool.poetry]
 name = "ai_api_unified"
 
-version = "0.1.4" # keep in sync with src/ai_api_unified/__version__.py
+version = "0.1.5" # keep in sync with src/ai_api_unified/__version__.py
 description = "Unified access layer for completion and embedding services"
 authors = ["Dave Thomas <davidcthomas@gmail.com>"]
 license = "MIT"
