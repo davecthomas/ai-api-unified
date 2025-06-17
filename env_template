@@ -28,3 +28,9 @@ EMBEDDING_DIMENSIONS=1536
 VECTOR_METRIC=cosine
 
 AWS_REGION=us-east-1
+
+# AWS credentials for Bedrock - these are ephermeral and must be set at runtime. 
+# Read more here: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_SESSION_TOKEN=

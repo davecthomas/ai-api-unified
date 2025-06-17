@@ -211,9 +211,19 @@ Dimensionality of the embedding vectors.
 
 _Default: `1536`_
 
+### AWS credentials for Bedrock - these are ephermeral and must be set at runtime.
+
+Note: to use Bedrock, you must get your access environment set up independently, since there is no API key approach to using Bedrock. Read more here: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html.
+
+```bash
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_SESSION_TOKEN=
+```
+
 ### AWS_REGION
 
-AWS region for Bedrock/Titan when using Amazon services. Note: to use Bedrock, you must get your access environment set up independently, since there is no API key approach to using Bedrock.
+AWS region for Bedrock/Titan when using Amazon services.
 
 _Default: `us-east-1`_
 
