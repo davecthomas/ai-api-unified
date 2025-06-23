@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional, Type
 import uuid
 import math
 from pydantic import BaseModel, ValidationError, model_validator
-import tiktoken
+import re
 
 
 class AIBase(ABC):
@@ -34,21 +34,29 @@ class AIBase(ABC):
         """Supported model identifiers for this client."""
         ...
 
+
+class GhvOpenAI:
+    # … other methods …
+
     def count_tokens(self, text: str) -> int:
         """
-        Counts the number of tokens in a given text based on a generic tokenizer cl100k_base.
+        Counts the number of tokens in a given text using a naive regex-based approximation.
+
+        This splits the text into “tokens” by matching either:
+          - contiguous word characters, or
+          - any non-whitespace punctuation character
+
+        Note that this is only an estimate; real BPE token counts may differ.
 
         Args:
             text (str): The text to be tokenized.
 
         Returns:
-            int: The number of tokens in the text.
+            int: The approximate number of tokens.
         """
-        # Get the appropriate tokenizer for the model
-        tokenizer = tiktoken.get_encoding("cl100k_base")
-
-        # Tokenize the text and count the tokens
-        tokens = tokenizer.encode(text)
+        # Find all runs of word characters (\w+) or any single non-whitespace, non-word char ([^\w\s])
+        token_pattern = r"\w+|[^\w\s]"
+        tokens = re.findall(token_pattern, text)
         return len(tokens)
 
 

@@ -1,14 +1,15 @@
-# ai_api_unified · Unified Foundation-Model Client Library
+# ai-api-unified · Unified Foundation-Model Client Library
 
-> **Version:** 0.1.5 &nbsp;|&nbsp; **License:** MIT
+> **Version:** 0.1.6 &nbsp;|&nbsp; **License:** MIT
 
-`ai_api_unified` provides a single, typed interface for calling both completion-style
+`ai-api-unified` provides a single, typed interface for calling both completion-style
 LLMs and text-embedding models across vendors (OpenAI, Amazon Bedrock/Titan, …).
 
 ## Prerequisites
 
-- **Python 3.12.1** (only)  
-  We strongly recommend using [pyenv](https://github.com/pyenv/pyenv) to install and pin **exactly** 3.12.1, so that compiled wheels (e.g. `tiktoken`) are available and no Rust toolchain is required.
+- **Python 3.11.1**  
+  We strongly recommend using [pyenv](https://github.com/pyenv/pyenv) to install and pin 3.12.1,
+  so that compiled wheels (e.g. `tiktoken`) are available and no Rust toolchain is required.
 
 ## Structure
 
@@ -19,7 +20,6 @@ classDiagram
 class AIBase {
   <<abstract>>
   +list_model_names: List[str]
-  +count_tokens(text: str): int
 }
 
 class AIBaseEmbeddings {
@@ -107,7 +107,7 @@ AiBedrockCompletions --> EnvSettings : uses
 
 ```bash
 # from your internal Artifactory PyPI
-pip install --index-url https://<org>.jfrog.io/artifactory/api/pypi/pypi-local/simple ai_api_unified
+pip install ai-api-unified
 ```
 
 ## Quick start
@@ -237,19 +237,28 @@ Can swap models with a config or param change.
 Create a structured output subclass with your required structure,
 and then use it with a single call.
 """
-from ai_api_unified import AIFactory, AIStructuredPrompt
+from ai_api_unified.ai_factory import AIFactory
+from ai_api_unified.ai_base import AIBaseCompletions
 
-# Simple Completions
-client = AIFactory.get_ai_completions_client()           # auto-selects engine via .env
-response = client.send_prompt("Say hello in German")
-print(response)  # → "Hallo!"
+# easy auto-selects engine and model via .env
+client: AIBaseCompletions = AIFactory.get_ai_client()
+# OR, specify everything
+client: AIBaseCompletions = AIFactory.get_ai_completions_client(
+                              client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
+                              completions_engine="anthropic",
+                              model_name="anthropic.claude-opus-4-20250514-v1:0")
+
+# Converse!
+response = client.send_prompt("Say hello in Spanish")
+print(response)  # → "Hola"
+
+# More fun: see AIStructuredPrompt for easy structured output prompting
 
 # Structured Prompts
 class YourStructuredPrompt(AIStructuredPrompt):
     message_input_field: str  # this is an input field, not a result
 
     message_output_field: Optional[str] = None # This is a parsed output field
-
 
     @staticmethod
     def get_prompt(

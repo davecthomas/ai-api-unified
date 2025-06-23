@@ -93,8 +93,8 @@ def completion_client() -> AIBaseCompletions:
     """
     return AIFactory.get_ai_completions_client(
         client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
-        completions_engine="nova",
-        model_name="amazon.nova-micro-v1:0",
+        completions_engine="openai",
+        model_name="gpt-4o-mini",
     )
 
 
@@ -137,7 +137,7 @@ def test_get_ai_completions_client_with_override() -> None:
     #     model_name="gpt-4o-mini",
     # )
     # Toggle these lines to test with OpenAI or Bedrock
-    client = AIFactory.get_ai_completions_client(
+    client: AIBaseCompletions = AIFactory.get_ai_completions_client(
         client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
         completions_engine="nova",
         model_name="amazon.nova-micro-v1:0",
