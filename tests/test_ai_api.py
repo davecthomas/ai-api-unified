@@ -1,31 +1,32 @@
-from copy import deepcopy
-import pytest
-import textwrap
-from typing import Any, Dict, Optional
+from __future__ import (
+    annotations,
+)  # Postpone evaluation of type hints to avoid circular imports and allow forward references with | None
 
+import textwrap
+from copy import deepcopy
+from typing import Any
+
+import pytest
 from pydantic import model_validator
 
-from ai_api_unified.ai_factory import AIFactory
-
 from ai_api_unified.ai_base import (
-    AIBase,
-    AIBaseEmbeddings,
     AIBaseCompletions,
+    AIBaseEmbeddings,
+    AICompletionsPromptParamsBase,
     AIStructuredPrompt,
 )
-from ai_api_unified.completions.ai_bedrock_completions import AiBedrockCompletions
-from ai_api_unified.completions.ai_openai_completions import AiOpenAICompletions
+from ai_api_unified.ai_factory import AIFactory
 
 
 class ExampleStructuredPrompt(AIStructuredPrompt):
     message_input: str  # this is an input field, not a result
 
-    test_output: Optional[str] = None
+    test_output: str | None = None
 
     @model_validator(mode="after")
     def _populate_prompt(
-        self: "ExampleStructuredPrompt", __: Any
-    ) -> "ExampleStructuredPrompt":
+        self: ExampleStructuredPrompt, __: Any
+    ) -> ExampleStructuredPrompt:
         """
         After validation, build and store the prompt string
         """
@@ -37,7 +38,7 @@ class ExampleStructuredPrompt(AIStructuredPrompt):
         return self
 
     @model_validator(mode="before")
-    def validate_input(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_input(cls, values: dict[str, Any]) -> dict[str, Any]:
         # Ensure the message_input is set to "hello"
         if "message_input" not in values or values["message_input"] != "hello":
             raise ValueError("message_input must be 'hello'")
@@ -56,12 +57,12 @@ class ExampleStructuredPrompt(AIStructuredPrompt):
         return prompt
 
     @classmethod
-    def model_json_schema(cls) -> Dict[str, Any]:
+    def model_json_schema(cls) -> dict[str, Any]:
         """
         JSON schema for the LLM’s *output* only.
         """
         # start with a fresh copy of the base schema (deep-copied there)
-        schema: Dict[str, Any] = deepcopy(super().model_json_schema())
+        schema: dict[str, Any] = deepcopy(super().model_json_schema())
         schema["properties"]["test_output"] = {"type": "string"}
         # make test_output required for the LLM response
         schema.setdefault("required", [])
@@ -89,13 +90,8 @@ def completion_client_simple() -> AIBaseCompletions:
 def completion_client() -> AIBaseCompletions:
     """
     Returns a completions client for testing.
-    This uses the Bedrock implementation with a specific model.
     """
-    return AIFactory.get_ai_completions_client(
-        client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
-        completions_engine="openai",
-        model_name="gpt-4o-mini",
-    )
+    return AIFactory.get_ai_completions_client()
 
 
 def test_send_prompt(completion_client: AIBaseCompletions) -> None:
@@ -126,23 +122,23 @@ def test_structured_prompt(completion_client: AIBaseCompletions) -> None:
     )
 
 
-def test_get_ai_completions_client_with_override() -> None:
+def test_system_prompt_override(completion_client: AIBaseCompletions) -> None:
     """
-    Calling with explicit client_type, model_name, and completions_engine
-    should return the correct Bedrock completions client with the given model.
+    Verifies that providing a custom system prompt influences the request payload.
     """
-    # client = AIFactory.get_ai_completions_client(
-    #     client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
-    #     completions_engine="openai",
-    #     model_name="gpt-4o-mini",
-    # )
-    # Toggle these lines to test with OpenAI or Bedrock
-    client: AIBaseCompletions = AIFactory.get_ai_completions_client(
-        client_type=AIBase.CLIENT_TYPE_COMPLETIONS,
-        completions_engine="nova",
-        model_name="amazon.nova-micro-v1:0",
+
+    system_prompt: str = (
+        "You are a terse status bot. Always reply with exactly: 'STATUS: acknowledged.'"
     )
-    # Should be the Bedrock implementation
-    assert isinstance(client, AiBedrockCompletions)
-    # And it should carry through our override model name
-    assert client.model == "amazon.nova-micro-v1:0"
+    prompt_text: str = "Please confirm you read this sentence."
+
+    params: AICompletionsPromptParamsBase = AICompletionsPromptParamsBase(
+        system_prompt=system_prompt
+    )
+
+    response: str = completion_client.send_prompt(
+        prompt_text,
+        other_params=params,
+    )
+
+    assert response == "STATUS: acknowledged."
