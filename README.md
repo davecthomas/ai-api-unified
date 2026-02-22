@@ -668,6 +668,34 @@ _Why this matters:_ shows the provider swap enabled by configuration while your 
 
 ---
 
+## Publishing
+
+To publish a new version to PyPI, follow these steps:
+
+1. **Configure Poetry Auth (One-time setup):**
+   Ensure Poetry is configured with your PyPI API token:
+   ```bash
+   poetry config pypi-token.pypi <your-pypi-token>
+   ```
+
+2. **Bump the Version:**
+   Update the version number to the new release version in both:
+   - `pyproject.toml` (e.g., `version = "1.0.2"`)
+   - `src/ai_api_unified/__version__.py`
+
+3. **Run the Publish Script:**
+   Execute the included bash script. It will verify that your git working tree is clean, ask for confirmation of the version, clean out old build artifacts, and publish the new version via Poetry.
+   ```bash
+   ./publish.sh
+   ```
+
+4. **Tag the Release:**
+   After a successful publish, it is strongly recommended to tag the release in git:
+   ```bash
+   git tag v1.0.2
+   git push origin v1.0.2
+   ```
+
 ## Versioning & License
 
 - Semantic versioning.
