@@ -9,4 +9,4 @@ from __future__ import annotations
 
 __all__: list[str] = ["__version__"]
 
-__version__: str = "0.14.6"
+__version__: str = "1.0.1"

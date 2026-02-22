@@ -30,11 +30,12 @@
 ###############################################################################
 [project]
 name = "ai_api_unified"
-version = "0.14.6" # keep in sync with src/ai_api_unified/__version__.py
-description = "Unified access layer for AI completions (LLM), embedding (semantic), and voice services"
-readme = "README.md"
+
+version = "1.0.1" # keep in sync with src/ai_api_unified/__version__.py
+description = "Unified access layer for completion and embedding services"
+authors = ["Dave Thomas <davidcthomas@gmail.com>"]
 license = "MIT"
-authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
+readme = "README.md"
 keywords = [
   "llm",
   "openai",

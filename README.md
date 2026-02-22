@@ -1,6 +1,6 @@
 # ai-api-unified - a Vendor-Agnostic AI Services Library
 
-> Latest version: 0.14.6
+> Latest version: 1.0.1
 
 `ai-api-unified` is a unified, typed client for **Completions**, **Embeddings**, and **Voice** that lets you switch providers by **changing configuration, not code**. Your app targets stable base interfaces; factories select concrete providers at runtime based on environment variables. This keeps call sites clean and makes vendor swaps low-risk.
 
@@ -28,9 +28,8 @@
 1. [Supported Providers & Models](#supported-providers--models)
 2. [Installation](#installation)
    2.1. [Python & System Requirements](#python--system-requirements)
-   2.2. Install (Poetry)
-   2.3. [Choose Provider Extras](#choose-provider-extras)
-   2.4. [Smoke Test](#smoke-test)
+   2.2. [Choose Provider Extras](#choose-provider-extras)
+   2.3. [Smoke Test](#smoke-test)
 3. [Quickstart: Factory → Client → Use It](#quickstart-factory--client--use-it)
    3.1. [Completions](#completions)
    3.2. [Embeddings](#embeddings)
@@ -673,3 +672,4 @@ _Why this matters:_ shows the provider swap enabled by configuration while your 
 
 - Semantic versioning.
 - License as specified in the repository.
+
