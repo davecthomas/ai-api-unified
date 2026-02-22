@@ -1,27 +1,35 @@
 ########################################################################
-# Which embedding model family?   openai | titan
+#   CORE ENGINE SELECTION
+########################################################################
+# Which embedding model family?   openai | titan | google-gemini
 # EMBEDDING_ENGINE=titan
-EMBEDDING_ENGINE=openai
-# Which LLM family for query enrichment?   openai | nova
+EMBEDDING_ENGINE=google-gemini
+# Which LLM family openai | nova | google-gemini
 # COMPLETIONS_ENGINE=nova
-COMPLETIONS_ENGINE=openai
+COMPLETIONS_ENGINE=google-gemini
 
 
 ########################################################################
-#   OPENAI / TITAN / LLM CREDENTIALS
+#   OPENAI / TITAN / Google API CREDENTIALS
 ########################################################################
 # --- OpenAI ---
 OPENAI_API_KEY=
+# Geo-residency constraint (optional: US | USA | United States)
+AI_API_GEO_RESIDENCY=
+GOOGLE_APPLICATION_CREDENTIALS=credentials/google-api-credentials.json
 
 # Generic AI settings
-# Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0)
+# Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001)
 EMBEDDING_MODEL_NAME=text-embedding-3-small
 # EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
-# Completions model name (gpt-4o-mini | amazon.nova-micro-v1:0 or amazon.nova-lite-v1:0)
+# EMBEDDING_MODEL_NAME=text-embedding-004
+# Completions model name (gpt-4o-mini | amazon.nova-micro-v1:0 or amazon.nova-lite-v1:0 | gemini-2.5-flash)
 COMPLETIONS_MODEL_NAME=gpt-4o-mini
 # COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
-# Embedding dimensions (1536 for OpenAI | 1024 for Titan)
+# COMPLETIONS_MODEL_NAME=gemini-2.5-flash
+# Embedding dimensions (1536 for OpenAI | 1024 for Titan | 768 for Gemini)
 # EMBEDDING_DIMENSIONS=1024
+# EMBEDDING_DIMENSIONS=768
 EMBEDDING_DIMENSIONS=1536
 # Vector metric (cosine for Pinecone | cosinesimil for OpenSearch | COSINE for Redis)
 # VECTOR_METRIC=cosinesimil
@@ -34,3 +42,50 @@ AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 AWS_SESSION_TOKEN=
+
+# ----------------------------------------
+# AI Voice Settings
+# ----------------------------------------
+# ElevenLabs API key
+ELEVEN_LABS_API_KEY=
+
+# Voice engine: "elevenlabs", "google", "openai", "azure"
+AI_VOICE_ENGINE=google
+
+# Language code (e.g. en, de)
+AI_VOICE_LANGUAGE=en
+
+########################################################################
+#   Google AI Voice Settings (Vertex AI Gemini TTS shares credentials with completions)
+GOOGLE_APPLICATION_CREDENTIALS=credentials/<filename>.json
+GOOGLE_PROJECT_ID=
+GOOGLE_LOCATION=us-central1
+# Preferred Vertex AI Gemini TTS model
+DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
+
+########################################################################
+#   Google Gemini AI Settings (Completions & Embeddings)
+# Uses the same GOOGLE_APPLICATION_CREDENTIALS as voice settings above
+# COMPLETIONS_ENGINE=google-gemini
+# EMBEDDING_ENGINE=google-gemini
+# Default models:
+#   Completions: gemini-2.5-flash-lite
+#   Embeddings: text-embedding-004
+
+########################################################################
+# OpenAI AI Voice Settings
+OPENAI_API_KEY=
+# AI_VOICE_ENGINE=openai
+
+########################################################################
+# Azure AI Voice Settings
+# AI_VOICE_ENGINE=azure
+MICROSOFT_COGNITIVE_SERVICES_API_KEY=your-microsoft-cognitive-services-api-key
+MICROSOFT_COGNITIVE_SERVICES_API_KEY_2=your-microsoft-cognitive-services-api-key-2
+MICROSOFT_COGNITIVE_SERVICES_REGION=eastus
+MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=https://eastus.api.cognitive.microsoft.com/
+
+# Image engine: openai | nova-canvas
+IMAGE_ENGINE=openai
+# image model used for image generation requests: openai: gpt-image-1 ; amazon nova: amazon.nova-canvas-v1:0
+IMAGE_MODEL_NAME=gpt-image-1

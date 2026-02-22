@@ -1,22 +1,26 @@
 # ai_openai_embeddings.py
 
-from ..ai_base import AIBaseEmbeddings
-from openai import BadRequestError, OpenAI
-from openai.types import EmbeddingCreateParams, CreateEmbeddingResponse
-import httpx
-import time
 import random
+import time
+from typing import Any
+
+import httpx
+from openai import BadRequestError, OpenAI
+from openai.types import CreateEmbeddingResponse, EmbeddingCreateParams
+
+from ai_api_unified.ai_openai_base import AIOpenAIBase
+
+from ..ai_base import AIBaseEmbeddings
 from ..util.env_settings import EnvSettings
-from typing import List, Dict, Any
 
 
-class AiOpenAIEmbeddings(AIBaseEmbeddings):
+class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
     """
     Handles OpenAI embedding operations.
     """
 
     # Static list of embedding models with their settings
-    embedding_models: Dict = {
+    embedding_models: dict = {
         "text-embedding-ada-002": {"dimensions": 1536, "pricing_per_token": 0.0004},
         "text-embedding-3-small": {"dimensions": 1536, "pricing_per_token": 0.00025},
         "text-embedding-3-large": {"dimensions": 3072, "pricing_per_token": 0.0005},
@@ -26,7 +30,7 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings):
     EMBEDDING_BATCH_MAX_SIZE = 2048
 
     @property
-    def list_model_names(self) -> List[str]:
+    def list_model_names(self) -> list[str]:
         # As of May 2025, aggregated from OpenAI docs and release notes:
         return [
             "text-embedding-ada-002",
@@ -35,14 +39,14 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings):
         ]
 
     def __init__(self, model: str = "text-embedding-3-small", dimensions: int = 512):
-        self.env = EnvSettings()
-        self.api_key = self.env.get_setting("OPENAI_API_KEY")
+        env = EnvSettings()
+        self.api_key = env.get_setting("OPENAI_API_KEY")
         self.embedding_model = model
         self.dimensions = dimensions
-        self.client = OpenAI(api_key=self.api_key)
+        self.base_url = self.get_api_base_url()
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         self.backoff_delays = [1, 2, 4, 8, 16]
-        # Is this needed?
-        self.user = self.env.get_setting("OPENAI_USER", "default_user")
+        self.user = env.get_setting("OPENAI_USER", "default_user")
 
     @property
     def model_name(self) -> str:
@@ -67,7 +71,7 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings):
         cost = pricing_per_token * num_tokens
         return cost
 
-    def generate_embeddings(self, text: str) -> Dict[str, Any]:
+    def generate_embeddings(self, text: str) -> dict[str, Any]:
         """
         Generates embeddings for a given text using OpenAI's embeddings API.
 
@@ -75,7 +79,7 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings):
             text (str): The text for which to generate embeddings.
 
         Returns:
-            Dict[str, Any]: A dictionary containing the embeddings and metadata.
+            dict[str, Any]: A dictionary containing the embeddings and metadata.
         """
         if not text:
             raise ValueError("Text is required for generating embeddings.")
@@ -134,15 +138,15 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings):
             "Failed to generate embeddings after multiple retries due to repeated timeouts."
         )
 
-    def generate_embeddings_batch(self, texts: List[str]) -> List[Dict[str, Any]]:
+    def generate_embeddings_batch(self, texts: list[str]) -> list[dict[str, Any]]:
         """
         Generates embeddings for a batch of texts using OpenAI's embeddings API.
 
         Args:
-            texts (List[str]): A list of text strings for which to generate embeddings.
+            texts (list[str]): A list of text strings for which to generate embeddings.
 
         Returns:
-            List[Dict[str, Any]]: A list of dictionaries containing embeddings and metadata.
+            list[dict[str, Any]]: A list of dictionaries containing embeddings and metadata.
         """
         if not texts or not all(
             isinstance(text, str) and text.strip() for text in texts
@@ -153,7 +157,7 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings):
 
         # Construct the parameters using EmbeddingCreateParams
         params: EmbeddingCreateParams = {
-            "input": texts,  # List of input texts
+            "input": texts,  # list of input texts
             "model": self.embedding_model,  # Model to use for embedding
         }
 

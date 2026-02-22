@@ -1,61 +1,110 @@
 ###############################################################################
-#                ai_api_unified • unified access layer for LLM providers              #
+#             ai_api_unified • unified access layer for AI providers#
 ###############################################################################
-
-[tool.poetry]
+###############################################################################
+# Supported Poetry Commands for this Project
+#
+# Setup & Installation
+#   poetry install              # Install runtime dependencies
+#   poetry install --with dev   # Install runtime + dev dependencies (pytest, ruff, black)
+#
+# Development & Testing
+#   poetry run pytest            # Run the test suite (configured via [tool.pytest.ini_options])
+#   poetry run pytest -q         # Run tests quietly
+#   poetry run pytest -k "name"  # Run only tests matching a substring
+#   poetry run pytest --aiprovider=openai or google-gemini or whatever   
+#     Run tests with custom --aiprovider parameter (default: openai)
+#
+# Code Quality
+#   poetry run ruff check .      # Run ruff linter
+#   poetry run black .           # Run code formatter
+#
+# Packaging
+#   poetry build                 # Build the package (wheel + sdist)
+# Publishing 
+#   poetry publish --build 
+# Environment
+#   poetry shell                 # Spawn a shell within the virtualenv
+#   poetry run <cmd>             # Run any command inside the Poetry virtualenv
+#
+###############################################################################
+[project]
 name = "ai_api_unified"
-
-version = "0.1.6" # keep in sync with src/ai_api_unified/__version__.py
-description = "Unified access layer for completion and embedding services"
-authors = ["Dave Thomas <davidcthomas@gmail.com>"]
-license = "MIT"
+version = "0.14.6" # keep in sync with src/ai_api_unified/__version__.py
+description = "Unified access layer for AI completions (LLM), embedding (semantic), and voice services"
 readme = "README.md"
-keywords = ["llm", "openai", "bedrock", "embeddings", "completion", "api"]
+license = "MIT"
+authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
+keywords = [
+  "llm",
+  "openai",
+  "bedrock",
+  "gemini",
+  "vertex",
+  "embeddings",
+  "completion",
+  "voice",
+  "api",
+]
 classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
 
-# src-layout wiring – include all sub-packages + PEP-561 typing marker
-packages = [{ include = "ai_api_unified", from = "src" }]
+requires-python = ">=3.11,<3.13"
 
-###############################################################################
-# Runtime dependencies
-###############################################################################
-[tool.poetry.dependencies]
-python = ">=3.11,<3.13"
-pydantic = "^2"
-pydantic-settings = "^2"
-# tiktoken = "^0.5.1"
-openai = "^1.25.0"
-boto3 = "^1.34.0"
-httpx = "^0.27.0"
-pandas = "^2.2.0"
+dependencies = [
+  # runtime deps
+  "pydantic>=2,<3",
+  "pydantic-settings>=2,<3",
+  "openai>=1.25.0,<2.0.0",
+  "httpx>=0.27.0,<1.0.0",
+  "PyYAML>=6.0.1,<7.0.0",
+  "pydub>=0.25.1,<0.26.0",
+  # Note! Lots of optional dependencies for specific providers are installed via
+  # [project.optional-dependencies] below (e.g. using poetry add 'ai_api_unified[google_gemini]')
+]
 
-###############################################################################
-# Development extras (install with `poetry install --with dev`)
-###############################################################################
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.4.0"
-ruff = "^0.4.4"
-black = "^24.4.2"
-# types-requests   = "^2.31.0.20240406"
+[project.optional-dependencies]
+dev = ["pytest>=8.4.0,<9.0.0", "ruff>=0.4.4,<1.0.0", "black>=24.4.2,<25.0.0"]
+azure_tts = ["azure-cognitiveservices-speech>=1.37.0,<2.0.0"]
+bedrock = ["boto3>=1.34.0,<2.0.0"]
+elevenlabs = ["elevenlabs>=2.3.0,<3.0.0"]
+google_gemini = [
+  "google-cloud-speech>=2.25.0,<3.0.0",
+  "protobuf>=3.20.2,<5.0.0dev",
+  "googleapis-common-protos>=1.63.0,<2.0.0",
+  "google-genai (>=1.41.0,<2.0.0)",
+  "google-cloud-texttospeech (>=2.29.0)",
+]
+similarity_score = ["numpy==2.2.6"]
 
-###############################################################################
-# Pytest configuration
-###############################################################################
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q"
+addopts = "-ra"
+# tell pytest to look in tests directory
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 norecursedirs = [".git", ".tox", ".venv", "build", "dist"]
+# ─── Uncomment if you run pytest without first installing via Poetry ────
+pythonpath = ["src"] # ← add this (remove the ‘#’) to prepend ./src to sys.path
 
-###############################################################################
-# Build-system stub for PEP 517 front-ends
-###############################################################################
 [build-system]
-requires = ["poetry-core>=1.9.0"]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+# Poetry-specific settings must go under [tool.poetry]  
+[tool.poetry]
+# Not required, but it helps keep the team in sync on the same version of Poetry. I'm using 2.1.3. 
+requires-poetry = ">=2.0,<2.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+
+# ─── Tell Poetry where your package lives ────────────────────────────────────
+[[tool.poetry.packages]]
+include = "ai_api_unified" # the import path your tests use
+from = "src"               # relative folder containing the package
