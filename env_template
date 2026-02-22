@@ -57,6 +57,9 @@ AI_VOICE_LANGUAGE=en
 
 ########################################################################
 #   Google AI Voice Settings (Vertex AI Gemini TTS shares credentials with completions)
+# Auth Method: api_key or service_account (defaults to service_account)
+GOOGLE_AUTH_METHOD=service_account
+GOOGLE_GEMINI_API_KEY=
 GOOGLE_APPLICATION_CREDENTIALS=credentials/<filename>.json
 GOOGLE_PROJECT_ID=
 GOOGLE_LOCATION=us-central1

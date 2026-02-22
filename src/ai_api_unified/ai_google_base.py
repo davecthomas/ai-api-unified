@@ -66,28 +66,33 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
             use_api_key: bool = False,
         ) -> genai.Client:
             """
-            Initialize the Google Gemini client with either Vertex AI credentials or an API key.
+            Initialize the Google Gemini client with either Application Default Credentials (ADC) or an API key.
 
             Parameters
             ----------
             model:
                 Model identifier to validate once the client is created.
             use_api_key:
-                When True, the GOOGLE_GEMINI_API_KEY environment setting is used instead of
-                Application Default Credentials (Vertex AI).
+                (Deprecated) When True, acts as if GOOGLE_AUTH_METHOD=api_key was provided.
+                It is recommended to use the GOOGLE_AUTH_METHOD environment setting instead.
 
             """
 
             env_settings: EnvSettings = EnvSettings()
+            
+            # Use environment variable if provided, fallback to use_api_key param for backwards compatibility
+            auth_method: str = env_settings.get_setting("GOOGLE_AUTH_METHOD", "service_account").lower()
+            if use_api_key:
+                auth_method = "api_key"
 
             try:
-                if use_api_key:
+                if auth_method == "api_key":
                     api_key: str | None = env_settings.get_setting(
                         "GOOGLE_GEMINI_API_KEY", None
                     )
                     if not api_key:
                         raise RuntimeError(
-                            "GOOGLE_GEMINI_API_KEY is not configured but use_api_key=True was requested."
+                            "GOOGLE_GEMINI_API_KEY is not configured but GOOGLE_AUTH_METHOD=api_key."
                         )
                     client: genai.Client = genai.Client(api_key=api_key)
                 else:
@@ -128,15 +133,16 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
             except DefaultCredentialsError as cred_error:
                 raise RuntimeError(
                     "Google authentication failed. Please ensure GOOGLE_APPLICATION_CREDENTIALS "
-                    "environment variable points to a valid service account JSON file. "
+                    "environment variable points to a valid service account JSON file, or set "
+                    "GOOGLE_AUTH_METHOD=api_key to use an API key instead. "
                     f"Error: {cred_error}"
                 ) from cred_error
             except ValueError as value_error:
                 raise RuntimeError(
                     "Invalid or missing configuration for Google Gemini client. "
-                    "Provide GOOGLE_GEMINI_API_KEY when use_api_key=True, or set "
+                    "Provide GOOGLE_GEMINI_API_KEY when GOOGLE_AUTH_METHOD=api_key, or set "
                     "GOOGLE_APPLICATION_CREDENTIALS / GOOGLE_PROJECT_ID / GOOGLE_LOCATION "
-                    "for Vertex AI mode."
+                    "for Vertex AI/service account mode."
                 ) from value_error
             except Exception as init_error:
                 raise RuntimeError(

@@ -138,6 +138,31 @@ class TestGoogleGeminiModules:
                     assert hasattr(client, "send_prompt")
                     assert hasattr(client, "strict_schema_prompt")
 
+    def test_gemini_auth_method_api_key(self):
+        """Test that get_client properly uses GOOGLE_AUTH_METHOD=api_key."""
+        with patch("ai_api_unified.ai_google_base.genai") as mock_genai:
+            with patch("ai_api_unified.util.env_settings.EnvSettings") as mock_env:
+                mock_env_instance = Mock()
+                mock_env_instance.get_setting.side_effect = lambda key, default: {
+                    "GOOGLE_AUTH_METHOD": "api_key",
+                    "GOOGLE_GEMINI_API_KEY": "fake-test-key-123",
+                }.get(key, default)
+                mock_env.return_value = mock_env_instance
+
+                mock_client = Mock()
+                mock_models = Mock()
+                mock_client.models = mock_models
+                mock_models.get.return_value = Mock(name="models/test")
+                mock_genai.Client.return_value = mock_client
+
+                from ai_api_unified.ai_google_base import AIGoogleBase
+
+                base = AIGoogleBase()
+                client = base.get_client("test-model")
+                
+                assert client == mock_client
+                mock_genai.Client.assert_called_once_with(api_key="fake-test-key-123")
+
     def test_gemini_embeddings_basic_functionality(self):
         """Test basic Google Gemini embeddings functionality with mocking."""
         with patch(

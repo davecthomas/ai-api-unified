@@ -1,6 +1,6 @@
 # ai-api-unified - a Vendor-Agnostic AI Services Library
 
-> Latest version: 1.1.1
+> Latest version: 1.2.0
 
 `ai-api-unified` is a unified, typed client for **Completions**, **Embeddings**, and **Voice** that lets you switch providers by **changing configuration, not code**. Your app targets stable base interfaces; factories select concrete providers at runtime based on environment variables. This keeps call sites clean and makes vendor swaps low-risk.
 
@@ -223,8 +223,18 @@ Common optional knobs:
 
 **Google Gemini** _(requires extra: `google_gemini`)_
 
+You can authenticate using either an API Key or Google Application Default Credentials (ADC).
+
+*Option A: API Key (Consumer-grade)*
+- `GOOGLE_AUTH_METHOD=api_key`
+- `GOOGLE_GEMINI_API_KEY` (your Gemini API key)
+
+*Option B: Application Default Credentials / Vertex AI*
+- `GOOGLE_AUTH_METHOD=service_account` (or leave unset)
 - `GOOGLE_APPLICATION_CREDENTIALS` (path to service account JSON)
 - Optional: `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`
+
+*Common Options:*
 - Optional: `COMPLETIONS_MODEL_NAME`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`
 
 **Azure Cognitive Services TTS** _(requires extra: `azure_tts`)_
@@ -325,13 +335,27 @@ print(c.send_prompt("Ping from Bedrock"))
 
 **Env:**
 
+Configure your preferred authentication method:
+
+*Option A: API Key (Consumer-grade)*
 ```
-COMPLETIONS_ENGINE=google-gemini
-EMBEDDING_ENGINE=google-gemini
+GOOGLE_AUTH_METHOD=api_key
+GOOGLE_GEMINI_API_KEY=...
+```
+
+*Option B: Application Default Credentials / Vertex AI*
+```
+GOOGLE_AUTH_METHOD=service_account
 GOOGLE_APPLICATION_CREDENTIALS=/path/service_account.json
 # Optional:
 GOOGLE_PROJECT_ID=...
 GOOGLE_LOCATION=us-central1
+```
+
+*Common Settings:*
+```
+COMPLETIONS_ENGINE=google-gemini
+EMBEDDING_ENGINE=google-gemini
 COMPLETIONS_MODEL_NAME=gemini-2.0-flash-lite
 EMBEDDING_MODEL_NAME=gemini-embedding-001
 EMBEDDING_DIMENSIONS=3072

@@ -16,94 +16,105 @@ import time
 from typing import Any, ClassVar
 
 GOOGLE_DEPENDENCIES_AVAILABLE: bool = False
-try:  # pragma: no cover - exercised in integration environments
-    from google import genai
-    from google.api_core import exceptions as gexc
-    from google.cloud import speech_v1p1beta1 as speech
-    from google.cloud import texttospeech
-    from ai_api_unified.ai_google_base import AIGoogleBase
+    try:  # pragma: no cover - exercised in integration environments
+        from google import genai
+        from google.api_core import exceptions as gexc
+        from google.api_core.client_options import ClientOptions
+        from google.cloud import speech_v1p1beta1 as speech
+        from google.cloud import texttospeech
+        from ai_api_unified.ai_google_base import AIGoogleBase
 
-    GOOGLE_DEPENDENCIES_AVAILABLE = True
-except ImportError:  # pragma: no cover - handled gracefully downstream
-    GOOGLE_DEPENDENCIES_AVAILABLE = False
+        GOOGLE_DEPENDENCIES_AVAILABLE = True
+    except ImportError:  # pragma: no cover - handled gracefully downstream
+        GOOGLE_DEPENDENCIES_AVAILABLE = False
 
-if GOOGLE_DEPENDENCIES_AVAILABLE:
-    from pydantic import PrivateAttr
-    from ai_api_unified.util.env_settings import EnvSettings
-    from ai_api_unified.util._lazy_pydub import (
-        AudioSegment,
-        CouldntDecodeError,
-    )
-    from ai_api_unified.voice.ai_voice_base import (
-        AIVoiceBase,
-        AIVoiceCapabilities,
-        AIVoiceModelBase,
-        AIVoiceSelectionBase,
-    )
-    from ai_api_unified.voice.audio_models import AudioFormat
-    from ai_api_unified.voice.ai_voice_google_gemini_voices import (
-        GEMINI_LOCALES,
-        GEMINI_VOICE_NAMES,
-    )
+    if GOOGLE_DEPENDENCIES_AVAILABLE:
+        from pydantic import PrivateAttr
+        from ai_api_unified.util.env_settings import EnvSettings
+        from ai_api_unified.util._lazy_pydub import (
+            AudioSegment,
+            CouldntDecodeError,
+        )
+        from ai_api_unified.voice.ai_voice_base import (
+            AIVoiceBase,
+            AIVoiceCapabilities,
+            AIVoiceModelBase,
+            AIVoiceSelectionBase,
+        )
+        from ai_api_unified.voice.audio_models import AudioFormat
+        from ai_api_unified.voice.ai_voice_google_gemini_voices import (
+            GEMINI_LOCALES,
+            GEMINI_VOICE_NAMES,
+        )
 
-    _LOGGER: logging.Logger = logging.getLogger(__name__)
-    # SET logger to DEBUG to see detailed logs from this module
-    _LOGGER.setLevel(logging.DEBUG)  # Uncomment for detailed logging
+        _LOGGER: logging.Logger = logging.getLogger(__name__)
+        # SET logger to DEBUG to see detailed logs from this module
+        _LOGGER.setLevel(logging.DEBUG)  # Uncomment for detailed logging
 
-    class AIVoiceSelectionGoogle(AIVoiceSelectionBase):
-        """Google Gemini TTS voice selection container."""
+        class AIVoiceSelectionGoogle(AIVoiceSelectionBase):
+            """Google Gemini TTS voice selection container."""
 
-    class AIVoiceGoogle(AIVoiceBase, AIGoogleBase):
-        """Google AI Gemini TTS implementation."""
+        class AIVoiceGoogle(AIVoiceBase, AIGoogleBase):
+            """Google AI Gemini TTS implementation."""
 
-        MIN_SPEED: ClassVar[float] = 0.25
-        MAX_SPEED: ClassVar[float] = 2.0
-        _STATIC_LATENCY_SECONDS: ClassVar[float] = 0.13
-        _SMOOTHING_RATIO: ClassVar[float] = 0.75
+            MIN_SPEED: ClassVar[float] = 0.25
+            MAX_SPEED: ClassVar[float] = 2.0
+            _STATIC_LATENCY_SECONDS: ClassVar[float] = 0.13
+            _SMOOTHING_RATIO: ClassVar[float] = 0.75
 
-        DEFAULT_TTS_MODEL: ClassVar[str] = "gemini-2.5-pro-tts"
-        FALLBACK_TTS_MODEL: ClassVar[str] = "gemini-2.5-flash-tts"
-        LIST_IDENTIFYING_GEMINI_TTS_MODELS: ClassVar[list[str]] = ["gemini", "tts"]
-        STT_MAX_SYNC_REQUEST_BYTES: ClassVar[int] = 10 * 1024 * 1024
-        STT_DEFAULT_CHUNK_LENGTH_MS: ClassVar[int] = 30_000
-        STT_DEFAULT_OVERLAP_MS: ClassVar[int] = 0
+            DEFAULT_TTS_MODEL: ClassVar[str] = "gemini-2.5-pro-tts"
+            FALLBACK_TTS_MODEL: ClassVar[str] = "gemini-2.5-flash-tts"
+            LIST_IDENTIFYING_GEMINI_TTS_MODELS: ClassVar[list[str]] = ["gemini", "tts"]
+            STT_MAX_SYNC_REQUEST_BYTES: ClassVar[int] = 10 * 1024 * 1024
+            STT_DEFAULT_CHUNK_LENGTH_MS: ClassVar[int] = 30_000
+            STT_DEFAULT_OVERLAP_MS: ClassVar[int] = 0
 
-        _MODEL_DEFINITIONS: ClassVar[list[dict[str, str]]] = [
-            {
-                "name": "gemini-2.5-pro-tts",
-                "display_name": "Gemini 2.5 Pro TTS",
-                "description": "High fidelity Gemini speech with instruction prompts.",
-                "is_default": True,
-            },
-            {
-                "name": "gemini-2.5-flash-tts",
-                "display_name": "Gemini 2.5 Flash TTS",
-                "description": "Cost-optimized Gemini speech with instruction prompts.",
-                "is_default": False,
-            },
-        ]
+            _MODEL_DEFINITIONS: ClassVar[list[dict[str, str]]] = [
+                {
+                    "name": "gemini-2.5-pro-tts",
+                    "display_name": "Gemini 2.5 Pro TTS",
+                    "description": "High fidelity Gemini speech with instruction prompts.",
+                    "is_default": True,
+                },
+                {
+                    "name": "gemini-2.5-flash-tts",
+                    "display_name": "Gemini 2.5 Flash TTS",
+                    "description": "Cost-optimized Gemini speech with instruction prompts.",
+                    "is_default": False,
+                },
+            ]
 
-        _DEFAULT_LANGUAGE: ClassVar[str] = "en"
-        _DEFAULT_LOCALE: ClassVar[str] = "en-US"
-        _DEFAULT_ACCENT: ClassVar[str | None] = None
-        _DEFAULT_SPEAKING_RATE: ClassVar[float] = 1.0
+            _DEFAULT_LANGUAGE: ClassVar[str] = "en"
+            _DEFAULT_LOCALE: ClassVar[str] = "en-US"
+            _DEFAULT_ACCENT: ClassVar[str | None] = None
+            _DEFAULT_SPEAKING_RATE: ClassVar[float] = 1.0
 
-        _tts_client: texttospeech.TextToSpeechClient | None = PrivateAttr(default=None)
+            _tts_client: texttospeech.TextToSpeechClient | None = PrivateAttr(default=None)
 
-        def __init__(self, engine: str, **kwargs: Any) -> None:
-            super().__init__(engine=engine, **kwargs)
-            env: EnvSettings = EnvSettings()
+            def __init__(self, engine: str, **kwargs: Any) -> None:
+                super().__init__(engine=engine, **kwargs)
+                env: EnvSettings = EnvSettings()
+                
+                auth_method: str = env.get_setting("GOOGLE_AUTH_METHOD", "service_account").lower()
+                api_key: str | None = env.get_setting("GOOGLE_GEMINI_API_KEY", None)
 
-            if self._tts_client is None:
-                try:
-                    self._tts_client = texttospeech.TextToSpeechClient()
-                except Exception as init_error:
-                    _LOGGER.error(
-                        "Failed to initialize Google Text-to-Speech client: %s",
-                        init_error,
-                        exc_info=True,
-                    )
-                    raise
+                if self._tts_client is None:
+                    try:
+                        if auth_method == "api_key":
+                            if not api_key:
+                                raise RuntimeError("GOOGLE_GEMINI_API_KEY is not set but GOOGLE_AUTH_METHOD=api_key.")
+                            self._tts_client = texttospeech.TextToSpeechClient(
+                                client_options=ClientOptions(api_key=api_key)
+                            )
+                        else:
+                            self._tts_client = texttospeech.TextToSpeechClient()
+                    except Exception as init_error:
+                        _LOGGER.error(
+                            "Failed to initialize Google Text-to-Speech client: %s",
+                            init_error,
+                            exc_info=True,
+                        )
+                        raise
 
             configured_model_setting: str | None = env.get_setting(
                 "DEFAULT_GEMINI_TTS_MODEL",
@@ -629,7 +640,15 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
                 logger.error("Audio decode failed: %s", exc)
                 raise ValueError(f"Could not decode audio: {exc}") from exc
 
-            speech_client: speech.SpeechClient = speech.SpeechClient()
+            env = EnvSettings()
+            auth_method = env.get_setting("GOOGLE_AUTH_METHOD", "service_account").lower()
+            if auth_method == "api_key":
+                api_key = env.get_setting("GOOGLE_GEMINI_API_KEY", None)
+                if not api_key:
+                    raise RuntimeError("GOOGLE_GEMINI_API_KEY is not set but GOOGLE_AUTH_METHOD=api_key.")
+                speech_client = speech.SpeechClient(client_options=ClientOptions(api_key=api_key))
+            else:
+                speech_client = speech.SpeechClient()
 
             def _build_config(sample_rate_hertz: int) -> speech.RecognitionConfig:
                 return speech.RecognitionConfig(
