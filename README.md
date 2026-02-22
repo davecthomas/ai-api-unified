@@ -1,6 +1,6 @@
 # ai-api-unified - a Vendor-Agnostic AI Services Library
 
-> Latest version: 1.0.1
+> Latest version: 1.1.1
 
 `ai-api-unified` is a unified, typed client for **Completions**, **Embeddings**, and **Voice** that lets you switch providers by **changing configuration, not code**. Your app targets stable base interfaces; factories select concrete providers at runtime based on environment variables. This keeps call sites clean and makes vendor swaps low-risk.
 

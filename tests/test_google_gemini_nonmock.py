@@ -126,7 +126,7 @@ class TestNonMockedGoogleGeminiModules:
 
         ai_completions: AIBaseCompletions = gemini_client
         assert isinstance(ai_completions, AIBaseCompletions)
-        assert ai_completions.model_name == "gemini-2.0-flash"
+        assert ai_completions.model_name == "gemini-2.0-flash-lite"
 
     def test_gemini_completions_send_prompt(
         self, gemini_client: AIBaseCompletions
