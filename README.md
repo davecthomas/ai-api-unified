@@ -205,7 +205,7 @@ These choose the **provider** for each category:
 
 Common optional knobs:
 
-- `COMPLETIONS_MODEL_NAME` (e.g., `gpt-4o-mini`, `gemini-2.0-flash-lite`, `amazon.nova-lite-v1:0`)
+- `COMPLETIONS_MODEL_NAME` (e.g., `gpt-4o-mini`, `gemini-3.0-flash`, `amazon.nova-lite-v1:0`)
 - `EMBEDDING_MODEL_NAME` (e.g., `text-embedding-3-small`, `amazon.titan-embed-text-v2:0`, `gemini-embedding-001`)
 - `EMBEDDING_DIMENSIONS` (provider-specific defaults, e.g., 1536 for OpenAI text-embedding-3-small)
 
@@ -356,7 +356,7 @@ GOOGLE_LOCATION=us-central1
 ```
 COMPLETIONS_ENGINE=google-gemini
 EMBEDDING_ENGINE=google-gemini
-COMPLETIONS_MODEL_NAME=gemini-2.0-flash-lite
+COMPLETIONS_MODEL_NAME=gemini-3.0-flash
 EMBEDDING_MODEL_NAME=gemini-embedding-001
 EMBEDDING_DIMENSIONS=3072
 AI_API_GEO_RESIDENCY=US   # optional; may log warning if SDK lacks regional control

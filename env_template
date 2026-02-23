@@ -4,9 +4,6 @@
 # Which embedding model family?   openai | titan | google-gemini
 # EMBEDDING_ENGINE=titan
 EMBEDDING_ENGINE=google-gemini
-# Which LLM family openai | nova | google-gemini
-# COMPLETIONS_ENGINE=nova
-COMPLETIONS_ENGINE=google-gemini
 
 
 ########################################################################
@@ -16,17 +13,19 @@ COMPLETIONS_ENGINE=google-gemini
 OPENAI_API_KEY=
 # Geo-residency constraint (optional: US | USA | United States)
 AI_API_GEO_RESIDENCY=
-GOOGLE_APPLICATION_CREDENTIALS=credentials/google-api-credentials.json
+GOOGLE_GEMINI_API_KEY=
+GOOGLE_AUTH_METHOD=api_key
+COMPLETIONS_ENGINE=google-gemini
 
 # Generic AI settings
 # Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001)
 EMBEDDING_MODEL_NAME=text-embedding-3-small
 # EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
 # EMBEDDING_MODEL_NAME=text-embedding-004
-# Completions model name (gpt-4o-mini | amazon.nova-micro-v1:0 or amazon.nova-lite-v1:0 | gemini-2.5-flash)
+# Completions model name (gpt-4o-mini | amazon.nova-micro-v1:0 or amazon.nova-lite-v1:0 | gemini-3.0-flash)
 COMPLETIONS_MODEL_NAME=gpt-4o-mini
 # COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
-# COMPLETIONS_MODEL_NAME=gemini-2.5-flash
+# COMPLETIONS_MODEL_NAME=gemini-3.0-flash
 # Embedding dimensions (1536 for OpenAI | 1024 for Titan | 768 for Gemini)
 # EMBEDDING_DIMENSIONS=1024
 # EMBEDDING_DIMENSIONS=768
@@ -72,7 +71,7 @@ DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
 # COMPLETIONS_ENGINE=google-gemini
 # EMBEDDING_ENGINE=google-gemini
 # Default models:
-#   Completions: gemini-2.5-flash-lite
+#   Completions: gemini-3.0-flash
 #   Embeddings: text-embedding-004
 
 ########################################################################

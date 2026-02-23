@@ -16,17 +16,17 @@ import time
 from typing import Any, ClassVar
 
 GOOGLE_DEPENDENCIES_AVAILABLE: bool = False
-    try:  # pragma: no cover - exercised in integration environments
-        from google import genai
-        from google.api_core import exceptions as gexc
-        from google.api_core.client_options import ClientOptions
-        from google.cloud import speech_v1p1beta1 as speech
-        from google.cloud import texttospeech
-        from ai_api_unified.ai_google_base import AIGoogleBase
+try:  # pragma: no cover - exercised in integration environments
+    from google import genai
+    from google.api_core import exceptions as gexc
+    from google.api_core.client_options import ClientOptions
+    from google.cloud import speech_v1p1beta1 as speech
+    from google.cloud import texttospeech
+    from ai_api_unified.ai_google_base import AIGoogleBase
 
-        GOOGLE_DEPENDENCIES_AVAILABLE = True
-    except ImportError:  # pragma: no cover - handled gracefully downstream
-        GOOGLE_DEPENDENCIES_AVAILABLE = False
+    GOOGLE_DEPENDENCIES_AVAILABLE = True
+except ImportError:  # pragma: no cover - handled gracefully downstream
+    GOOGLE_DEPENDENCIES_AVAILABLE = False
 
     if GOOGLE_DEPENDENCIES_AVAILABLE:
         from pydantic import PrivateAttr

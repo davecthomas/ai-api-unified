@@ -82,7 +82,7 @@ def gemini_client() -> AIBaseCompletions:
     Returns a completions client for testing.
     """
     ai_completions: AIBaseCompletions = AIFactory.get_ai_completions_client(
-        model_name="gemini-2.0-flash-lite",
+        model_name="gemini-3.0-flash",
         completions_engine="google-gemini",
     )
     return ai_completions
@@ -126,7 +126,7 @@ class TestNonMockedGoogleGeminiModules:
 
         ai_completions: AIBaseCompletions = gemini_client
         assert isinstance(ai_completions, AIBaseCompletions)
-        assert ai_completions.model_name == "gemini-2.0-flash-lite"
+        assert ai_completions.model_name == "gemini-3.0-flash"
 
     def test_gemini_completions_send_prompt(
         self, gemini_client: AIBaseCompletions

@@ -106,7 +106,7 @@ class TestGoogleGeminiModules:
                 with patch("ai_api_unified.util.env_settings.EnvSettings") as mock_env:
                     mock_env_instance = Mock()
                     mock_env_instance.get_setting.side_effect = lambda key, default: {
-                        "COMPLETIONS_MODEL_NAME": "gemini-2.0-flash-lite"
+                        "COMPLETIONS_MODEL_NAME": "gemini-3.0-flash"
                     }.get(key, default)
                     mock_env.return_value = mock_env_instance
 
@@ -121,11 +121,11 @@ class TestGoogleGeminiModules:
                         GoogleGeminiCompletions,
                     )
 
-                    client = GoogleGeminiCompletions(model="gemini-2.0-flash-lite")
+                    client = GoogleGeminiCompletions(model="gemini-3.0-flash")
 
-                    assert client.model_name == "gemini-2.0-flash-lite"
+                    assert client.model_name == "gemini-3.0-flash"
                     assert isinstance(client.list_model_names, list)
-                    assert "gemini-2.0-flash-lite" in client.list_model_names
+                    assert "gemini-3.0-flash" in client.list_model_names
                     assert client.max_context_tokens > 0
                     assert client.price_per_1k_tokens > 0
 
@@ -214,7 +214,7 @@ class TestGoogleGeminiModules:
                 with patch("ai_api_unified.util.env_settings.EnvSettings") as mock_env:
                     mock_env_instance = Mock()
                     mock_env_instance.get_setting.side_effect = lambda key, default: {
-                        "COMPLETIONS_MODEL_NAME": "gemini-2.0-flash-lite"
+                        "COMPLETIONS_MODEL_NAME": "gemini-3.0-flash"
                     }.get(key, default)
                     mock_env.return_value = mock_env_instance
 
@@ -309,7 +309,7 @@ class TestGoogleGeminiModules:
                 with patch("ai_api_unified.util.env_settings.EnvSettings") as mock_env:
                     mock_env_instance = Mock()
                     mock_env_instance.get_setting.side_effect = lambda key, default: {
-                        "COMPLETIONS_MODEL_NAME": "gemini-2.0-flash-lite"
+                        "COMPLETIONS_MODEL_NAME": "gemini-3.0-flash"
                     }.get(key, default)
                     mock_env.return_value = mock_env_instance
 

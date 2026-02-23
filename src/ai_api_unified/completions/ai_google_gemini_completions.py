@@ -4,7 +4,7 @@ Google Gemini completions implementation with structured prompting support.
 
 Environment Variables Required:
     GOOGLE_APPLICATION_CREDENTIALS: Path to service account JSON file for authentication
-    COMPLETIONS_MODEL_NAME: (optional) Override default model, defaults to 'gemini-2.0-flash-lite'
+    COMPLETIONS_MODEL_NAME: (optional) Override default model, defaults to 'gemini-3.0-flash'
 
 Default Endpoints:
     Uses Google's Vertex AI Gemini API for text generation
@@ -62,8 +62,8 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
     _LOGGER: logging.Logger = logging.getLogger(__name__)
 
     # Constants
-    DEFAULT_COMPLETIONS_MODEL: str = "gemini-2.0-flash-lite"
-    DEFAULT_FALLBACK_MODEL: str = "gemini-2.0-flash"
+    DEFAULT_COMPLETIONS_MODEL: str = "gemini-3.0-flash"
+    DEFAULT_FALLBACK_MODEL: str = "gemini-2.5-flash"
     MAX_RETRIES: int = 5
     INITIAL_BACKOFF_DELAY: float = 1.0
     BACKOFF_MULTIPLIER: float = 2.0
@@ -80,7 +80,18 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
     #  - Gemini 2.0 Flash: $0.15 / 1M input tokens → 0.00015 / 1k
     #  - Gemini 2.0 Flash-Lite: $0.075 / 1M input tokens → 0.000075 / 1k
     GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
-        # Latest stable models
+        # Latest 3.x series
+        "gemini-3.1-pro-preview": {
+            "max_context_tokens": 1_048_576,
+            "price_per_1k_tokens": 0.0020,
+            "status": "Latest Preview",
+        },
+        "gemini-3.0-flash": {
+            "max_context_tokens": 1_048_576,
+            "price_per_1k_tokens": 0.0005,
+            "status": "Latest Stable",
+        },
+        # Latest 2.x stable models
         "gemini-2.5-pro": {
             "max_context_tokens": 1_048_576,
             "price_per_1k_tokens": 0.00125,
