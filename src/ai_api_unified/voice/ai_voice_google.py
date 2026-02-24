@@ -17,104 +17,109 @@ from typing import Any, ClassVar
 
 GOOGLE_DEPENDENCIES_AVAILABLE: bool = False
 try:  # pragma: no cover - exercised in integration environments
-    from google import genai
-    from google.api_core import exceptions as gexc
-    from google.api_core.client_options import ClientOptions
-    from google.cloud import speech_v1p1beta1 as speech
-    from google.cloud import texttospeech
+    from google import genai  # type: ignore
+    from google.api_core import exceptions as gexc  # type: ignore
+    from google.api_core.client_options import ClientOptions  # type: ignore
+    from google.cloud import speech_v1p1beta1 as speech  # type: ignore
+    from google.cloud import texttospeech  # type: ignore
     from ai_api_unified.ai_google_base import AIGoogleBase
 
     GOOGLE_DEPENDENCIES_AVAILABLE = True
 except ImportError:  # pragma: no cover - handled gracefully downstream
     GOOGLE_DEPENDENCIES_AVAILABLE = False
+    genai = None
+    gexc = None
+    ClientOptions = None
+    speech = None
+    texttospeech = None
 
-    if GOOGLE_DEPENDENCIES_AVAILABLE:
-        from pydantic import PrivateAttr
-        from ai_api_unified.util.env_settings import EnvSettings
-        from ai_api_unified.util._lazy_pydub import (
-            AudioSegment,
-            CouldntDecodeError,
-        )
-        from ai_api_unified.voice.ai_voice_base import (
-            AIVoiceBase,
-            AIVoiceCapabilities,
-            AIVoiceModelBase,
-            AIVoiceSelectionBase,
-        )
-        from ai_api_unified.voice.audio_models import AudioFormat
-        from ai_api_unified.voice.ai_voice_google_gemini_voices import (
-            GEMINI_LOCALES,
-            GEMINI_VOICE_NAMES,
-        )
+if GOOGLE_DEPENDENCIES_AVAILABLE:
+    from pydantic import PrivateAttr
+    from ai_api_unified.util.env_settings import EnvSettings
+    from ai_api_unified.util._lazy_pydub import (
+        AudioSegment,
+        CouldntDecodeError,
+    )
+    from ai_api_unified.voice.ai_voice_base import (
+        AIVoiceBase,
+        AIVoiceCapabilities,
+        AIVoiceModelBase,
+        AIVoiceSelectionBase,
+    )
+    from ai_api_unified.voice.audio_models import AudioFormat
+    from ai_api_unified.voice.ai_voice_google_gemini_voices import (
+        GEMINI_LOCALES,
+        GEMINI_VOICE_NAMES,
+    )
 
-        _LOGGER: logging.Logger = logging.getLogger(__name__)
-        # SET logger to DEBUG to see detailed logs from this module
-        _LOGGER.setLevel(logging.DEBUG)  # Uncomment for detailed logging
+    _LOGGER: logging.Logger = logging.getLogger(__name__)
+    # SET logger to DEBUG to see detailed logs from this module
+    _LOGGER.setLevel(logging.DEBUG)  # Uncomment for detailed logging
 
-        class AIVoiceSelectionGoogle(AIVoiceSelectionBase):
-            """Google Gemini TTS voice selection container."""
+    class AIVoiceSelectionGoogle(AIVoiceSelectionBase):
+        """Google Gemini TTS voice selection container."""
 
-        class AIVoiceGoogle(AIVoiceBase, AIGoogleBase):
-            """Google AI Gemini TTS implementation."""
+    class AIVoiceGoogle(AIVoiceBase, AIGoogleBase): # type: ignore
+        """Google AI Gemini TTS implementation."""
 
-            MIN_SPEED: ClassVar[float] = 0.25
-            MAX_SPEED: ClassVar[float] = 2.0
-            _STATIC_LATENCY_SECONDS: ClassVar[float] = 0.13
-            _SMOOTHING_RATIO: ClassVar[float] = 0.75
+        MIN_SPEED: ClassVar[float] = 0.25
+        MAX_SPEED: ClassVar[float] = 2.0
+        _STATIC_LATENCY_SECONDS: ClassVar[float] = 0.13
+        _SMOOTHING_RATIO: ClassVar[float] = 0.75
 
-            DEFAULT_TTS_MODEL: ClassVar[str] = "gemini-2.5-pro-tts"
-            FALLBACK_TTS_MODEL: ClassVar[str] = "gemini-2.5-flash-tts"
-            LIST_IDENTIFYING_GEMINI_TTS_MODELS: ClassVar[list[str]] = ["gemini", "tts"]
-            STT_MAX_SYNC_REQUEST_BYTES: ClassVar[int] = 10 * 1024 * 1024
-            STT_DEFAULT_CHUNK_LENGTH_MS: ClassVar[int] = 30_000
-            STT_DEFAULT_OVERLAP_MS: ClassVar[int] = 0
+        DEFAULT_TTS_MODEL: ClassVar[str] = "gemini-2.5-pro-tts"
+        FALLBACK_TTS_MODEL: ClassVar[str] = "gemini-2.5-flash-tts"
+        LIST_IDENTIFYING_GEMINI_TTS_MODELS: ClassVar[list[str]] = ["gemini", "tts"]
+        STT_MAX_SYNC_REQUEST_BYTES: ClassVar[int] = 10 * 1024 * 1024
+        STT_DEFAULT_CHUNK_LENGTH_MS: ClassVar[int] = 30_000
+        STT_DEFAULT_OVERLAP_MS: ClassVar[int] = 0
 
-            _MODEL_DEFINITIONS: ClassVar[list[dict[str, str]]] = [
-                {
-                    "name": "gemini-2.5-pro-tts",
-                    "display_name": "Gemini 2.5 Pro TTS",
-                    "description": "High fidelity Gemini speech with instruction prompts.",
-                    "is_default": True,
-                },
-                {
-                    "name": "gemini-2.5-flash-tts",
-                    "display_name": "Gemini 2.5 Flash TTS",
-                    "description": "Cost-optimized Gemini speech with instruction prompts.",
-                    "is_default": False,
-                },
-            ]
+        _MODEL_DEFINITIONS: ClassVar[list[dict[str, Any]]] = [
+            {
+                "name": "gemini-2.5-pro-tts",
+                "display_name": "Gemini 2.5 Pro TTS",
+                "description": "High fidelity Gemini speech with instruction prompts.",
+                "is_default": True,
+            },
+            {
+                "name": "gemini-2.5-flash-tts",
+                "display_name": "Gemini 2.5 Flash TTS",
+                "description": "Cost-optimized Gemini speech with instruction prompts.",
+                "is_default": False,
+            },
+        ]
 
-            _DEFAULT_LANGUAGE: ClassVar[str] = "en"
-            _DEFAULT_LOCALE: ClassVar[str] = "en-US"
-            _DEFAULT_ACCENT: ClassVar[str | None] = None
-            _DEFAULT_SPEAKING_RATE: ClassVar[float] = 1.0
+        _DEFAULT_LANGUAGE: ClassVar[str] = "en"
+        _DEFAULT_LOCALE: ClassVar[str] = "en-US"
+        _DEFAULT_ACCENT: ClassVar[str | None] = None
+        _DEFAULT_SPEAKING_RATE: ClassVar[float] = 1.0
 
-            _tts_client: texttospeech.TextToSpeechClient | None = PrivateAttr(default=None)
+        _tts_client: texttospeech.TextToSpeechClient | None = PrivateAttr(default=None) # type: ignore
 
-            def __init__(self, engine: str, **kwargs: Any) -> None:
-                super().__init__(engine=engine, **kwargs)
-                env: EnvSettings = EnvSettings()
-                
-                auth_method: str = env.get_setting("GOOGLE_AUTH_METHOD", "service_account").lower()
-                api_key: str | None = env.get_setting("GOOGLE_GEMINI_API_KEY", None)
+        def __init__(self, engine: str, **kwargs: Any) -> None:
+            super().__init__(engine=engine, **kwargs)
+            env: EnvSettings = EnvSettings()
+            
+            auth_method: str = env.get_setting("GOOGLE_AUTH_METHOD", "service_account").lower()
+            api_key: str | None = env.get_setting("GOOGLE_GEMINI_API_KEY", None)
 
-                if self._tts_client is None:
-                    try:
-                        if auth_method == "api_key":
-                            if not api_key:
-                                raise RuntimeError("GOOGLE_GEMINI_API_KEY is not set but GOOGLE_AUTH_METHOD=api_key.")
-                            self._tts_client = texttospeech.TextToSpeechClient(
-                                client_options=ClientOptions(api_key=api_key)
-                            )
-                        else:
-                            self._tts_client = texttospeech.TextToSpeechClient()
-                    except Exception as init_error:
-                        _LOGGER.error(
-                            "Failed to initialize Google Text-to-Speech client: %s",
-                            init_error,
-                            exc_info=True,
+            if self._tts_client is None:
+                try:
+                    if auth_method == "api_key":
+                        if not api_key:
+                            raise RuntimeError("GOOGLE_GEMINI_API_KEY is not set but GOOGLE_AUTH_METHOD=api_key.")
+                        self._tts_client = texttospeech.TextToSpeechClient( # type: ignore
+                            client_options=ClientOptions(api_key=api_key) # type: ignore
                         )
-                        raise
+                    else:
+                        self._tts_client = texttospeech.TextToSpeechClient() # type: ignore
+                except Exception as init_error:
+                    _LOGGER.error(
+                        "Failed to initialize Google Text-to-Speech client: %s",
+                        init_error,
+                        exc_info=True,
+                    )
+                    raise
 
             configured_model_setting: str | None = env.get_setting(
                 "DEFAULT_GEMINI_TTS_MODEL",
@@ -138,12 +143,12 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
             self.default_model_id: str = resolved_model
 
             self.list_output_formats: list[AudioFormat] = self._build_output_formats()
-            self.default_audio_format: AudioFormat = self._determine_default_format()
+            self.default_audio_format: AudioFormat | None = self._determine_default_format()
 
             self.common_vendor_capabilities: AIVoiceCapabilities = (
                 self._build_common_capabilities()
             )
-            self.list_models_capabilities: list[AIVoiceModelBase] = (
+            self.list_models_capabilities: list[AIVoiceModelBase] | None = (
                 self._initialize_models_and_capabilities()
             )
             self.selected_model = next(
@@ -157,10 +162,10 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
             for model_entry in self.list_models_capabilities:
                 model_entry.is_default = model_entry.name == self.default_model_id
 
-            self.list_available_voices: list[AIVoiceSelectionGoogle] = (
+            self.list_available_voices: list[AIVoiceSelectionGoogle] = (  # type: ignore
                 self._build_voice_catalog()
             )
-            self.selected_voice: AIVoiceSelectionGoogle = self._resolve_voice(None)
+            self.selected_voice: AIVoiceSelectionGoogle = self._resolve_voice(None)  # type: ignore
 
             self.dict_model_prices: dict[str, float] | None = None
 
@@ -256,10 +261,10 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
 
             try:
                 if self._tts_client is None:
-                    self._tts_client = texttospeech.TextToSpeechClient()
+                    self._tts_client = texttospeech.TextToSpeechClient() # type: ignore
 
-                response: texttospeech.ListVoicesResponse = (
-                    self._tts_client.list_voices()
+                response: texttospeech.ListVoicesResponse = ( # type: ignore
+                    self._tts_client.list_voices() # type: ignore
                 )
 
                 for voice_metadata in response.voices:
@@ -274,9 +279,9 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                     if (
                         voice_metadata.ssml_gender
                         and voice_metadata.ssml_gender
-                        != texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED
+                        != texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED # type: ignore
                     ):
-                        ssml_gender = texttospeech.SsmlVoiceGender(
+                        ssml_gender = texttospeech.SsmlVoiceGender( # type: ignore
                             voice_metadata.ssml_gender
                         ).name.lower()
 
@@ -361,12 +366,11 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                 gender=voice.gender if voice.gender else None,
             )
 
-        def text_to_voice(
+        def text_to_voice( # type: ignore 
             self,
-            *,
             text_to_convert: str,
-            voice: AIVoiceSelectionGoogle,
-            audio_format: AudioFormat,
+            voice: AIVoiceSelectionGoogle | None,
+            audio_format: AudioFormat | None,
             speaking_rate: float = _DEFAULT_SPEAKING_RATE,
             use_ssml: bool = False,
         ) -> bytes:
@@ -387,13 +391,13 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                 speaking_rate=self._DEFAULT_SPEAKING_RATE,
             )
 
-        def text_to_voice_with_emotion_prompt(
+        def text_to_voice_with_emotion_prompt( # type: ignore 
             self,
             *,
             emotion_prompt: str | None,
             text_to_convert: str,
-            voice: AIVoiceSelectionGoogle,
-            audio_format: AudioFormat,
+            voice: AIVoiceSelectionGoogle | None,
+            audio_format: AudioFormat | None,
             speaking_rate: float = _DEFAULT_SPEAKING_RATE,
         ) -> bytes:
             if speaking_rate != self._DEFAULT_SPEAKING_RATE:
@@ -426,20 +430,20 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                 }
                 if emotion_prompt and emotion_prompt.strip():
                     synthesis_kwargs["prompt"] = emotion_prompt.strip()
-                synthesis_input: texttospeech.SynthesisInput = (
-                    texttospeech.SynthesisInput(**synthesis_kwargs)
+                synthesis_input: texttospeech.SynthesisInput = ( # type: ignore 
+                    texttospeech.SynthesisInput(**synthesis_kwargs) # type: ignore 
                 )
 
-                voice_params: texttospeech.VoiceSelectionParams = (
-                    texttospeech.VoiceSelectionParams(
+                voice_params: texttospeech.VoiceSelectionParams = ( # type: ignore 
+                    texttospeech.VoiceSelectionParams( # type: ignore 
                         language_code=resolved_voice.locale or self._DEFAULT_LOCALE,
                         name=resolved_voice.voice_id,
                         model_name=model_name,
                     )
                 )
 
-                audio_config: texttospeech.AudioConfig = texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+                audio_config: texttospeech.AudioConfig = texttospeech.AudioConfig( # type: ignore 
+                    audio_encoding=texttospeech.AudioEncoding.LINEAR16, # type: ignore 
                     sample_rate_hertz=self._RAW_SAMPLE_RATE_HZ,
                 )
 
@@ -450,8 +454,8 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                         resolved_voice.voice_id,
                         prompt_preview,
                     )
-                    response: texttospeech.SynthesizeSpeechResponse = (
-                        self._tts_client.synthesize_speech(
+                    response: texttospeech.SynthesizeSpeechResponse = ( # type: ignore 
+                        self._tts_client.synthesize_speech( # type: ignore 
                             input=synthesis_input,
                             voice=voice_params,
                             audio_config=audio_config,
@@ -463,7 +467,7 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                             "Google Text-to-Speech returned empty audio content."
                         )
                     return audio_content
-                except gexc.GoogleAPICallError as api_error:
+                except gexc.GoogleAPICallError as api_error: # type: ignore 
                     status_code: int | None = api_error.code if api_error else None
 
                     _LOGGER.error(
@@ -514,10 +518,10 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
 
             return self._convert_audio_bytes(
                 audio_bytes=gemini_audio_bytes,
-                audio_format=audio_format,
+                audio_format=audio_format, # type: ignore 
             )
 
-        def stream_audio(
+        def stream_audio( # type: ignore 
             self,
             text: str,
             voice: AIVoiceSelectionGoogle | None = None,
@@ -573,12 +577,12 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
 
         def _recognize_with_retry(
             self,
-            speech_client: speech.SpeechClient,
-            recognition_config: speech.RecognitionConfig,
-            recognition_audio: speech.RecognitionAudio,
-            logger: logging.Logger,
+            speech_client: speech.SpeechClient, # type: ignore 
+            recognition_config: speech.RecognitionConfig, # type: ignore 
+            recognition_audio: speech.RecognitionAudio, # type: ignore 
+            logger: logging.Logger, 
             max_retries: int = 3,
-        ) -> speech.RecognizeResponse:
+        ) -> speech.RecognizeResponse: # type: ignore 
             """
             Call Google STT once, retrying on quota or transient errors with
             exponential back-off. Payload-size errors are surfaced to the caller.
@@ -591,7 +595,7 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                         config=recognition_config,
                         audio=recognition_audio,
                     )
-                except gexc.ResourceExhausted as exc:
+                except gexc.ResourceExhausted as exc: # type: ignore 
                     if retry_count >= max_retries:
                         raise RuntimeError(
                             "Google Speech-to-Text quota exhausted."
@@ -605,7 +609,7 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                         max_retries,
                     )
                     time.sleep(sleep_seconds)
-                except gexc.ServiceUnavailable as exc:
+                except gexc.ServiceUnavailable as exc: # type: ignore 
                     if retry_count >= max_retries:
                         raise RuntimeError(
                             "Google Speech-to-Text service unavailable."
@@ -646,13 +650,13 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                 api_key = env.get_setting("GOOGLE_GEMINI_API_KEY", None)
                 if not api_key:
                     raise RuntimeError("GOOGLE_GEMINI_API_KEY is not set but GOOGLE_AUTH_METHOD=api_key.")
-                speech_client = speech.SpeechClient(client_options=ClientOptions(api_key=api_key))
+                speech_client = speech.SpeechClient(client_options=ClientOptions(api_key=api_key)) # type: ignore 
             else:
-                speech_client = speech.SpeechClient()
+                speech_client = speech.SpeechClient() # type: ignore 
 
-            def _build_config(sample_rate_hertz: int) -> speech.RecognitionConfig:
-                return speech.RecognitionConfig(
-                    encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            def _build_config(sample_rate_hertz: int) -> speech.RecognitionConfig: # type: ignore 
+                return speech.RecognitionConfig( # type: ignore 
+                    encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16, # type: ignore 
                     sample_rate_hertz=sample_rate_hertz,
                     language_code=language_code,
                     enable_automatic_punctuation=True,
@@ -687,21 +691,21 @@ except ImportError:  # pragma: no cover - handled gracefully downstream
                         )
 
                 bytes_buffer.seek(0)
-                recognition_config: speech.RecognitionConfig = _build_config(
+                recognition_config: speech.RecognitionConfig = _build_config(   # type: ignore 
                     sample_rate_hertz=segment_audio.frame_rate
                 )
-                recognition_audio: speech.RecognitionAudio = speech.RecognitionAudio(
+                recognition_audio: speech.RecognitionAudio = speech.RecognitionAudio( # type: ignore    
                     content=bytes_buffer.read()
                 )
 
                 try:
-                    response: speech.RecognizeResponse = self._recognize_with_retry(
+                    response: speech.RecognizeResponse = self._recognize_with_retry( # type: ignore 
                         speech_client,
                         recognition_config,
                         recognition_audio,
                         logger,
                     )
-                except gexc.InvalidArgument as exc:
+                except gexc.InvalidArgument as exc: # type: ignore 
                     if "10485760" in str(exc):
                         chunk_length_ms = max(5_000, chunk_length_ms // 2)
                         logger.warning(

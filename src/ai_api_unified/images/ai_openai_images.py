@@ -67,10 +67,12 @@ class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
             )
         self.image_model_name: str = image_model.strip()
 
+    @property
     def model_name(self) -> str:
         """Return the name of the image model in use."""
         return self.image_model_name
 
+    @property
     def list_model_names(self) -> list[str]:
         """Return the list of image model names supported by this client."""
         return ["gpt-image-1", "dall-e-2", "dall-e-3"]
@@ -206,7 +208,8 @@ class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
                         "format": normalized_format,
                         "attempt": attempt_index,
                         "retry_in_seconds": wait_seconds,
-                        "error_type": exc.__class__.__name__,
                     },
                 )
                 time.sleep(wait_seconds)
+        
+        return []

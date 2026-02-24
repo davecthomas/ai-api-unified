@@ -31,15 +31,20 @@ from typing import Any
 
 GOOGLE_DEPENDENCIES_AVAILABLE: bool = False
 try:
-    from google.api_core.exceptions import ClientError
-    from google.genai import pagers
-    from google.genai.types import EmbedContentConfig, Model
+    from google.api_core.exceptions import ClientError  # type: ignore
+    from google.genai import pagers  # type: ignore
+    from google.genai.types import EmbedContentConfig, Model  # type: ignore
     from ai_api_unified.ai_google_base import AIGoogleBase
 
     GOOGLE_DEPENDENCIES_AVAILABLE = True
 
 except ImportError as import_error:
     GOOGLE_DEPENDENCIES_AVAILABLE = False
+    AIGoogleBase: Any = object  # type: ignore
+    ClientError: Any = None  # type: ignore
+    pagers: Any = None  # type: ignore
+    EmbedContentConfig: Any = None  # type: ignore
+    Model: Any = None  # type: ignore
 
 
 if GOOGLE_DEPENDENCIES_AVAILABLE:
@@ -88,7 +93,7 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
                 )
             )
 
-            self.models_list: pagers.Pager[Model] = []
+            self.models_list: pagers.Pager[Model] = [] # type: ignore
             # Initialize the client
             self._initialize_client()
 

@@ -33,9 +33,9 @@ from typing import Any, Type
 
 GOOGLE_DEPENDENCIES_AVAILABLE: bool = False
 try:
-    from google import genai
-    from google.genai import errors as gerr
-    from google.genai.types import GenerateContentResponse
+    from google import genai  # type: ignore
+    from google.genai import errors as gerr  # type: ignore
+    from google.genai.types import GenerateContentResponse  # type: ignore
     from ai_api_unified.ai_google_base import AIGoogleBase
 
     GOOGLE_DEPENDENCIES_AVAILABLE = True
@@ -43,6 +43,10 @@ try:
 
 except ImportError as import_error:
     GOOGLE_DEPENDENCIES_AVAILABLE = False
+    AIGoogleBase: Any = object  # type: ignore
+    genai: Any = None  # type: ignore
+    gerr: Any = None  # type: ignore
+    GenerateContentResponse: Any = None  # type: ignore
 
 if GOOGLE_DEPENDENCIES_AVAILABLE:
     from pydantic import ValidationError
@@ -250,12 +254,12 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
                     contents: list[dict[str, Any]] = self._build_contents(
                         prompt=prompt, params=params
                     )
-                    config: genai.types.GenerateContentConfig = self._build_config(
+                    config: genai.types.GenerateContentConfig = self._build_config( # type: ignore
                         params=params,
                         system_prompt=system_prompt,
                         max_output_tokens=params.max_output_tokens,
                     )
-                    response: GenerateContentResponse = (
+                    response: genai.types.GenerateContentResponse = ( # type: ignore
                         self.client.models.generate_content(
                             model=self.completions_model,
                             contents=contents,
@@ -320,7 +324,7 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
                         max_output_tokens=max_response_tokens,
                         response_schema=response_model,
                     )
-                    response: GenerateContentResponse = (
+                    response: genai.types.GenerateContentResponse = ( # type: ignore
                         self.client.models.generate_content(
                             model=self.completions_model,
                             contents=contents,
@@ -421,7 +425,7 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
             system_prompt: str | None,
             max_output_tokens: int,
             response_schema: Type[AIStructuredPrompt] | None = None,
-        ) -> genai.types.GenerateContentConfig:
+        ) -> genai.types.GenerateContentConfig: # type: ignore
             """
             Construct GenerateContentConfig, including optional system instruction.
             """

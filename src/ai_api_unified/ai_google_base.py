@@ -5,20 +5,25 @@ from __future__ import (
 import logging
 import secrets
 import time
-from typing import Callable, ClassVar, TypeVar
+from typing import Callable, ClassVar, TypeVar, Any
 
 # Require google_gemini extra at import time
 GOOGLE_DEPENDENCIES_AVAILABLE: bool = False
 try:
-    from google import genai
-    from google.api_core import exceptions as gexc  # Provided by google-* libs
-    from google.genai import errors as gerr
-    from google.genai import pagers
-    from google.auth.exceptions import DefaultCredentialsError
+    from google import genai  # type: ignore
+    from google.api_core import exceptions as gexc  # type: ignore
+    from google.genai import errors as gerr  # type: ignore
+    from google.genai import pagers  # type: ignore
+    from google.auth.exceptions import DefaultCredentialsError  # type: ignore
 
     GOOGLE_DEPENDENCIES_AVAILABLE = True
 except ImportError as import_error:
     GOOGLE_DEPENDENCIES_AVAILABLE = False
+    genai = None
+    gexc = None
+    gerr = None
+    pagers = None
+    DefaultCredentialsError = None
 
 
 from ai_api_unified.util.env_settings import EnvSettings
@@ -64,7 +69,7 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
             model: str,
             *,
             use_api_key: bool = False,
-        ) -> genai.Client:
+        ) -> genai.Client: # type: ignore
             """
             Initialize the Google Gemini client with either Application Default Credentials (ADC) or an API key.
 
@@ -94,20 +99,20 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
                         raise RuntimeError(
                             "GOOGLE_GEMINI_API_KEY is not configured but GOOGLE_AUTH_METHOD=api_key."
                         )
-                    client: genai.Client = genai.Client(api_key=api_key)
+                    client: genai.Client = genai.Client(api_key=api_key) # type: ignore
                 else:
                     project_id: str = env_settings.get_setting("GOOGLE_PROJECT_ID", "")
                     location: str = env_settings.get_setting(
                         "GOOGLE_LOCATION", "us-central1"
                     )
-                    client = genai.Client(
+                    client = genai.Client( # type: ignore
                         vertexai=True,
                         project=project_id,
                         location=location,
                     )
 
                 try:
-                    model_resource: genai.types.Model = client.models.get(model=model)
+                    model_resource: genai.types.Model = client.models.get(model=model) # type: ignore
 
                     _LOGGER.info(
                         "Successfully initialized Google Gemini model: %s",
@@ -130,7 +135,7 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
                     )
                     raise
 
-            except DefaultCredentialsError as cred_error:
+            except DefaultCredentialsError as cred_error: # type: ignore
                 raise RuntimeError(
                     "Google authentication failed. Please ensure GOOGLE_APPLICATION_CREDENTIALS "
                     "environment variable points to a valid service account JSON file, or set "
@@ -151,7 +156,7 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
 
         def list_models(
             self,
-            client: genai.Client,
+            client: genai.Client, # type: ignore
             *,
             name_filter: str | None = None,
         ) -> list[str]:
@@ -160,7 +165,7 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
             list_model_names: list[str] = []
             try:
                 # The for loop handles paging automatically
-                list_models: pagers.Pager = client.models.list()
+                list_models: pagers.Pager = client.models.list() # type: ignore
                 for model_metadata in list_models:
                     model_name: str = getattr(model_metadata, "name", "")
                     if not model_name:
@@ -302,10 +307,10 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
 
                 # --- Explicit non-retryable Google API classes ---
                 except (
-                    gexc.InvalidArgument,
-                    gexc.PermissionDenied,
-                    gexc.Unauthenticated,
-                ) as exc:
+                    gexc.InvalidArgument, # type: ignore
+                    gexc.PermissionDenied, # type: ignore
+                    gexc.Unauthenticated, # type: ignore
+                ) as exc: 
                     status_code: int | None = _extract_status_code(exc)
                     _LOGGER.error(
                         "Non-retryable Google API error%s: %s",
@@ -318,12 +323,12 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
 
                 # --- Canonical retryable Google API classes ---
                 except (
-                    gexc.ResourceExhausted,  # 429 / quota
-                    gexc.ServiceUnavailable,  # 503
-                    gexc.DeadlineExceeded,  # 504-ish
-                    gexc.InternalServerError,  # 500
-                    gexc.Aborted,  # safe to retry
-                    gexc.RetryError,  # wrapped retries
+                    gexc.ResourceExhausted,  # 429 / quota # type: ignore
+                    gexc.ServiceUnavailable,  # 503 # type: ignore
+                    gexc.DeadlineExceeded,  # 504-ish # type: ignore
+                    gexc.InternalServerError,  # 500 # type: ignore
+                    gexc.Aborted,  # safe to retry # type: ignore
+                    gexc.RetryError,  # wrapped retries # type: ignore
                 ) as exc:
                     _retry_later(
                         exc,
@@ -332,7 +337,7 @@ if GOOGLE_DEPENDENCIES_AVAILABLE:
                     )
 
                 # --- Other Google API errors with status/message available ---
-                except gexc.GoogleAPICallError as api_error:
+                except gexc.GoogleAPICallError as api_error: # type: ignore
                     status_code: int | None = _extract_status_code(api_error)
 
                     if status_code == 403:

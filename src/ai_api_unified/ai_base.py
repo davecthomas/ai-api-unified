@@ -203,10 +203,25 @@ class AIStructuredPrompt(BaseModel):
         return self
 
     @classmethod
-    def model_json_schema(cls) -> dict:
+    def model_json_schema(
+        cls,
+        by_alias: bool = True,
+        ref_template: str = "#/$defs/{model}",
+        schema_generator: Any = None,
+        mode: str = "validation",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         from copy import deepcopy
 
-        schema = deepcopy(super().model_json_schema())
+        schema = deepcopy(
+            super().model_json_schema(
+                by_alias=by_alias,
+                ref_template=ref_template,
+                schema_generator=schema_generator,
+                mode=mode,
+                **kwargs,
+            )
+        )
         schema.setdefault("required", [])
         return schema
 

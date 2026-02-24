@@ -38,7 +38,7 @@ class AIVoiceSelectionBase(BaseModel):
         description="Gender of the voice, e.g. 'male', 'female', 'neutral'",
     )
 
-    model_config: ConfigDict = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     def as_tuple(self) -> tuple[str, str]:
         """Return ``(voice_id, voice_name)`` for convenience."""
@@ -55,13 +55,13 @@ class AIVoiceSelectionBase(BaseModel):
 
 class AIVoiceCapabilities(BaseModel):
     supports_ssml: bool = Field(
-        False, description="Whether the TTS implementation supports SSML."
+        default=False, description="Whether the TTS implementation supports SSML."
     )
     supports_streaming: bool = Field(
-        False, description="Whether the TTS implementation supports streaming audio."
+        default=False, description="Whether the TTS implementation supports streaming audio."
     )
     supports_speech_to_text: bool = Field(
-        False, description="Whether the TTS implementation supports built-in STT."
+        default=False, description="Whether the TTS implementation supports built-in STT."
     )
 
     # ───── Additional capabilities ─────
@@ -77,28 +77,28 @@ class AIVoiceCapabilities(BaseModel):
         default_factory=list, description="See AudioFormat"
     )
     supports_custom_voice: bool = Field(
-        False, description="Whether you can train or clone custom voices."
+        default=False, description="Whether you can train or clone custom voices."
     )
     supports_emotion_control: bool = Field(
-        False, description="Whether you can tweak emotion/style markers."
+        default=False, description="Whether you can tweak emotion/style markers."
     )
     supports_prosody_settings: bool = Field(
-        False, description="Tune pitch/rate/volume via API parameters."
+        default=False, description="Tune pitch/rate/volume via API parameters."
     )
     supports_viseme_events: bool = Field(
-        False, description="Emit viseme (lip-sync) timing data."
+        default=False, description="Emit viseme (lip-sync) timing data."
     )
     supports_word_timestamps: bool = Field(
-        False, description="Return word-level time offsets in the audio."
+        default=False, description="Return word-level time offsets in the audio."
     )
     supports_batch_synthesis: bool = Field(
-        False, description="Asynchronous long-form (batch) TTS for audiobooks, etc."
+        default=False, description="Asynchronous long-form (batch) TTS for audiobooks, etc."
     )
     supports_pronunciation_lexicon: bool = Field(
-        False, description="Upload or reference custom lexicons for pronunciation."
+        default=False, description="Upload or reference custom lexicons for pronunciation."
     )
     supports_audio_profiles: bool = Field(
-        False,
+        default=False,
         description="Vendor-provided audio profiles (e.g. telephone vs headphone).",
     )
     min_speaking_rate: float | None = Field(
@@ -166,7 +166,7 @@ class AIVoiceBase(BaseModel, ABC):
         description="Name of the TTS engine, e.g. 'elevenlabs', 'google', etc.",
     )
     # ─── required class overrides ───
-    client: AIVoiceBase = Field(
+    client: AIVoiceBase | None = Field(
         default=None, description="Vendor-specific client instance."
     )
     list_output_formats: list[AudioFormat] = Field(
@@ -178,7 +178,7 @@ class AIVoiceBase(BaseModel, ABC):
         description="Default audio output format (must override in subclass).",
     )
     common_vendor_capabilities: AIVoiceCapabilities = Field(
-        default_factory=AIVoiceCapabilities,
+        default_factory=lambda: AIVoiceCapabilities(),
         description="Capabilities of the TTS implementation.",
     )
 
@@ -239,7 +239,7 @@ class AIVoiceBase(BaseModel, ABC):
     def get_audio_duration(self, audio_bytes: bytes) -> float:
         """Return the duration of *audio_bytes* in seconds."""
         try:
-            str_format: str = self.default_audio_format.file_extension.lstrip(".")
+            str_format: str = self.default_audio_format.file_extension.lstrip(".") # type: ignore 
             segment: AudioSegment = AudioSegment.from_file(
                 BytesIO(audio_bytes), format=str_format
             )
@@ -248,7 +248,7 @@ class AIVoiceBase(BaseModel, ABC):
             pass
 
         try:
-            key: str = self.default_audio_format.key
+            key: str = self.default_audio_format.key # type: ignore 
             if key.startswith("mp3_"):
                 _, _, bitrate_kbps = key.split("_")
                 bitrate_bps: float = float(bitrate_kbps) * 1000
@@ -307,9 +307,6 @@ class AIVoiceBase(BaseModel, ABC):
             voice_name=first_voice.voice_name,
         )
 
-    def get_available_voices(self) -> list[AIVoiceSelectionBase]:
-        """Return the cached list of voices."""
-        return self.list_voices()
 
     def get_voice_name(self) -> str:
         """Return the name of the currently-selected voice, or empty if unset."""
@@ -407,7 +404,7 @@ class AIVoiceBase(BaseModel, ABC):
     def _get_first_pair(entries: dict[Any, Any]) -> dict[Any, Any]:
         return dict(islice(entries.items(), 1))
 
-    def get_voice_by_name(self, voice_name: str = None) -> AIVoiceSelectionBase:
+    def get_voice_by_name(self, voice_name: str | None = None) -> AIVoiceSelectionBase:
         """
         Return a voice selection by its name.
 
@@ -427,7 +424,7 @@ class AIVoiceBase(BaseModel, ABC):
         try:
             seg: AudioSegment = AudioSegment.from_file(
                 BytesIO(audio_bytes),
-                format=self.default_audio_format.file_extension[1:],
+                format=self.default_audio_format.file_extension[1:], # type: ignore 
             )
             # Resample to 48 kHz for glitch-free output
             seg = seg.set_frame_rate(48_000)
@@ -540,7 +537,7 @@ class AIVoiceBase(BaseModel, ABC):
             sample_sentence = f"{intro} {sample_sentence}"
             try:
                 ai_voice_client.selected_voice = voice
-                chosen_format: AudioFormat = ai_voice_client.default_audio_format
+                chosen_format: AudioFormat = ai_voice_client.default_audio_format # type: ignore 
 
                 print(f"\t{sample_sentence}\n")
 
@@ -601,8 +598,8 @@ class AIVoiceBase(BaseModel, ABC):
         *,
         emotion_prompt: str | None,
         text_to_convert: str,
-        voice: AIVoiceSelectionBase,
-        audio_format: AudioFormat,
+        voice: AIVoiceSelectionBase | None,
+        audio_format: AudioFormat | None,
         speaking_rate: float = 1.0,  # Not supported by all vendors
     ) -> bytes:
         """
