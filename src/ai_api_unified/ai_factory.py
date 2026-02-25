@@ -3,7 +3,7 @@ import logging
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-from typing import Type
+from typing import Type, Any
 
 from ai_api_unified.ai_base import AIBaseImages
 from ai_api_unified.images.ai_openai_images import AIOpenAIImages
@@ -17,7 +17,7 @@ try:
 
     BEDROCK_IMAGES_AVAILABLE: bool = True
 except ImportError:
-    AINovaCanvasImages = None  # type: ignore[assignment]
+    AINovaCanvasImages: Any = None  # type: ignore[assignment]
     BEDROCK_IMAGES_AVAILABLE: bool = False
 
 # Bedrock completions (optional: requires boto3 via extras "bedrock")
@@ -26,7 +26,7 @@ try:
 
     BEDROCK_AVAILABLE: bool = True
 except ImportError:  # ImportError or any transitive import errors
-    AiBedrockCompletions = None  # type: ignore[assignment]
+    AiBedrockCompletions: Any = None  # type: ignore[assignment]
     BEDROCK_AVAILABLE: bool = False
 
 # Titan embeddings (optional: requires boto3 via extras "bedrock")
@@ -35,7 +35,7 @@ try:
 
     TITAN_AVAILABLE: bool = True
 except ImportError:
-    AiTitanEmbeddings = None  # type: ignore[assignment]
+    AiTitanEmbeddings: Any = None  # type: ignore[assignment]
     TITAN_AVAILABLE: bool = False
 
 from .embeddings.ai_openai_embeddings import AiOpenAIEmbeddings  # type: ignore
@@ -43,14 +43,16 @@ from .util.env_settings import EnvSettings  # type: ignore
 
 # Conditionally import Google Gemini classes
 try:
-    from .completions.ai_google_gemini_completions import GoogleGeminiCompletions  # type: ignore
-    from .embeddings.ai_google_gemini_embeddings import GoogleGeminiEmbeddings  # type: ignore
+    from .completions.ai_google_gemini_completions import GoogleGeminiCompletions
+    from .embeddings.ai_google_gemini_embeddings import GoogleGeminiEmbeddings
+    from .images.ai_google_gemini_images import AIGoogleGeminiImages
 
     GOOGLE_GEMINI_AVAILABLE = True
 except ImportError:
     GOOGLE_GEMINI_AVAILABLE = False
-    GoogleGeminiCompletions = None  # type: ignore
-    GoogleGeminiEmbeddings = None  # type: ignore
+    GoogleGeminiCompletions: Any = None  # type: ignore[assignment]
+    GoogleGeminiEmbeddings: Any = None  # type: ignore[assignment]
+    AIGoogleGeminiImages: Any = None  # type: ignore[assignment]
 
 
 class AIFactory:
@@ -74,7 +76,7 @@ class AIFactory:
                 (AIBase.CLIENT_TYPE_COMPLETIONS, "rerank"): AiBedrockCompletions,
                 (AIBase.CLIENT_TYPE_COMPLETIONS, "canvas"): AiBedrockCompletions,
             }
-        )
+        )  # type: ignore
 
     # Titan embeddings (optional)
     if TITAN_AVAILABLE:
@@ -82,7 +84,7 @@ class AIFactory:
             {
                 (AIBase.CLIENT_TYPE_EMBEDDING, "titan"): AiTitanEmbeddings,
             }
-        )
+        )  # type: ignore
 
     # Google Gemini (optional)
     if GOOGLE_GEMINI_AVAILABLE:
@@ -93,8 +95,9 @@ class AIFactory:
                     "google-gemini",
                 ): GoogleGeminiCompletions,
                 (AIBase.CLIENT_TYPE_EMBEDDING, "google-gemini"): GoogleGeminiEmbeddings,
+                (AIBase.CLIENT_TYPE_IMAGES, "google-gemini"): AIGoogleGeminiImages,
             }
-        )
+        )  # type: ignore
 
     @staticmethod
     def get_ai_completions_client(
@@ -121,7 +124,7 @@ class AIFactory:
 
         # 4. Dispatch to the correct subclass
         if engine == "openai":
-            client: AIBaseCompletions = AiOpenAICompletions(model=model_name)
+            client: AIBaseCompletions = AiOpenAICompletions(model=model_name or "")
         elif engine == "google-gemini":
             if not GOOGLE_GEMINI_AVAILABLE:
                 _LOGGER.warning(
@@ -131,7 +134,7 @@ class AIFactory:
                     "Google Gemini support not available. "
                     "Install google_gemini extra: poetry add 'ai_api_unified[google_gemini]'"
                 )
-            client = GoogleGeminiCompletions(model=model_name)
+            client = GoogleGeminiCompletions(model=model_name or "")
         # All Bedrock-backed families use AiBedrockCompletions
         elif engine in {
             "nova",  # Amazon Nova (Pro/Micro/Canvas)
@@ -151,7 +154,7 @@ class AIFactory:
                     "Bedrock completions requested but the Bedrock extra is not installed. "
                     "Install with:  poetry add 'ai-api-unified[bedrock]'"
                 )
-            client = AiBedrockCompletions(model=model_name)
+            client = AiBedrockCompletions(model=model_name or "")
 
         else:
             _LOGGER.error(f"Unsupported COMPLETIONS engine: {engine!r}")
@@ -162,7 +165,7 @@ class AIFactory:
     @staticmethod
     def get_ai_embedding_client(
         embedding_engine: str | None = None,
-        model_name: str | None = None,
+        model_name: str | None = None, # type: ignore
     ) -> AIBase:
         """
         Instantiate and return the appropriate AIBase subclass for embeddings.
@@ -230,7 +233,7 @@ class AIFactory:
             image_model = env.get_setting("IMAGE_MODEL_NAME", "").strip()
 
         if image_engine in {"", "openai"}:
-            client: AIBaseImages = AIOpenAIImages(model=image_model)
+            client: AIBaseImages = AIOpenAIImages(model=image_model or "")
             return client
 
         if image_engine in {"bedrock", "nova", "nova-canvas"}:
@@ -242,7 +245,19 @@ class AIFactory:
                 raise RuntimeError(
                     "Bedrock Nova Canvas requested but the bedrock extra is not installed."
                 )
-            client = AINovaCanvasImages(model=image_model)
+            client = AINovaCanvasImages(model=image_model or "")
+            return client
+
+        if image_engine == "google-gemini":
+            if not GOOGLE_GEMINI_AVAILABLE:
+                _LOGGER.warning(
+                    "Google Gemini image support not available. "
+                    "Install the 'google_gemini' extra."
+                )
+                raise RuntimeError(
+                    "Google Gemini images requested but the google_gemini extra is not installed."
+                )
+            client = AIGoogleGeminiImages(model=image_model or "")
             return client
 
         _LOGGER.error(f"Unsupported IMAGE engine: {image_engine!r}")

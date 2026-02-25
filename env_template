@@ -87,7 +87,7 @@ MICROSOFT_COGNITIVE_SERVICES_API_KEY_2=your-microsoft-cognitive-services-api-key
 MICROSOFT_COGNITIVE_SERVICES_REGION=eastus
 MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=https://eastus.api.cognitive.microsoft.com/
 
-# Image engine: openai | nova-canvas
+# Image engine: openai | nova-canvas | google-gemini
 IMAGE_ENGINE=openai
-# image model used for image generation requests: openai: gpt-image-1 ; amazon nova: amazon.nova-canvas-v1:0
+# image model used for image generation requests: openai: gpt-image-1 ; amazon nova: amazon.nova-canvas-v1:0 ; google gemini: imagen-3.0-generate-001
 IMAGE_MODEL_NAME=gpt-image-1

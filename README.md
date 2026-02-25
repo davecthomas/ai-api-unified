@@ -14,6 +14,7 @@
 | ----------- | -------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Completions | `AIBaseCompletions`        | **OpenAI**, AWS Bedrock (Nova), Google Gemini              | OpenAI: _none_; Bedrock: `bedrock`; Gemini: `google_gemini`                               |
 | Embeddings  | `AIBaseEmbeddings`         | **OpenAI**, Amazon Titan, Google Gemini                    | OpenAI: _none_; Titan: `bedrock`; Gemini: `google_gemini`                                 |
+| Images      | `AIBaseImages`             | **OpenAI**, AWS Bedrock (Nova Canvas), Google Gemini       | OpenAI: _none_; Bedrock: `bedrock`; Gemini: `google_gemini`                               |
 | Voice TTS   | `AIVoiceBase`              | OpenAI, Google Vertex AI Gemini TTS, Azure TTS, ElevenLabs | Google: `google_gemini` (Vertex Gemini SDK); Azure: `azure_tts`; ElevenLabs: `elevenlabs` |
 | Voice STT   | `AIVoiceBase` (if enabled) | Google (and others if configured)                          | Typically `google_gemini`                                                                 |
 
@@ -72,11 +73,13 @@
 
   - Completions: Nova family (and other Bedrock models configured in your env)
   - Embeddings: Titan (`amazon.titan-embed-text-v2:0`, etc.)
+  - Images: Nova Canvas
 
 - **Google Gemini**
 
   - Completions: Gemini 1.5 / 2.x family
   - Embeddings: `gemini-embedding-001`
+  - Images: Imagen 3.0
   - Voice: Google Cloud Text-to-Speech
 
 - **Azure Cognitive Services** (TTS)
@@ -201,6 +204,7 @@ These choose the **provider** for each category:
 
 - `COMPLETIONS_ENGINE` = `openai` | `nova` | `google-gemini`
 - `EMBEDDING_ENGINE` = `openai` | `titan` | `google-gemini`
+- `IMAGE_ENGINE` = `openai` | `nova-canvas` | `google-gemini`
 - `AI_VOICE_ENGINE` = `openai` | `google` | `azure` | `elevenlabs`
 
 Common optional knobs:
@@ -214,12 +218,12 @@ Common optional knobs:
 **OpenAI (no extra needed)**
 
 - `OPENAI_API_KEY`
-- Optional: `COMPLETIONS_MODEL_NAME`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`
+- Optional: `COMPLETIONS_MODEL_NAME`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`, `IMAGE_MODEL_NAME`
 
 **AWS Bedrock & Amazon Titan** _(requires extra: `bedrock`)_
 
 - `AWS_REGION` (e.g., `us-east-1`)
-- Optional: `COMPLETIONS_MODEL_NAME` (Nova), `EMBEDDING_MODEL_NAME` (Titan), `EMBEDDING_DIMENSIONS`
+- Optional: `COMPLETIONS_MODEL_NAME` (Nova), `EMBEDDING_MODEL_NAME` (Titan), `EMBEDDING_DIMENSIONS`, `IMAGE_MODEL_NAME` (Nova Canvas)
 
 **Google Gemini** _(requires extra: `google_gemini`)_
 
@@ -235,7 +239,7 @@ You can authenticate using either an API Key or Google Application Default Crede
 - Optional: `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`
 
 *Common Options:*
-- Optional: `COMPLETIONS_MODEL_NAME`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`
+- Optional: `COMPLETIONS_MODEL_NAME`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`, `IMAGE_MODEL_NAME`
 
 **Azure Cognitive Services TTS** _(requires extra: `azure_tts`)_
 
@@ -313,6 +317,7 @@ AWS_SESSION_TOKEN=...
 COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
 EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
 EMBEDDING_DIMENSIONS=1024
+IMAGE_MODEL_NAME=amazon.nova-canvas-v1:0
 AI_API_GEO_RESIDENCY=US   # optional
 ```
 
@@ -356,8 +361,10 @@ GOOGLE_LOCATION=us-central1
 ```
 COMPLETIONS_ENGINE=google-gemini
 EMBEDDING_ENGINE=google-gemini
+IMAGE_ENGINE=google-gemini
 COMPLETIONS_MODEL_NAME=gemini-3.0-flash
 EMBEDDING_MODEL_NAME=gemini-embedding-001
+IMAGE_MODEL_NAME=imagen-3.0-generate-001
 EMBEDDING_DIMENSIONS=3072
 AI_API_GEO_RESIDENCY=US   # optional; may log warning if SDK lacks regional control
 ```

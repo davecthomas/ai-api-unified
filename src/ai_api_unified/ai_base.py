@@ -208,7 +208,7 @@ class AIStructuredPrompt(BaseModel):
         by_alias: bool = True,
         ref_template: str = "#/$defs/{model}",
         schema_generator: Any = None,
-        mode: str = "validation",
+        mode: Any = "validation",
         **kwargs: Any,
     ) -> dict[str, Any]:
         from copy import deepcopy
@@ -245,7 +245,7 @@ class AIStructuredPrompt(BaseModel):
     def send_structured_prompt(
         self,
         ai_client: AIBaseCompletions,
-        response_model: Type[AIStructuredPrompt] = None,
+        response_model: Type[AIStructuredPrompt] | None = None,
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> AIStructuredPrompt | None:
         """

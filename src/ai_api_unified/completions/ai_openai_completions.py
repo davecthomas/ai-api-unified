@@ -343,7 +343,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         if other_params is not None and other_params.system_prompt is not None:
             system_prompt = other_params.system_prompt
         user_content = self._build_user_message_content(prompt, other_params)
-        messages = [
+        messages: Any = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
@@ -365,7 +365,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 completion = self.client.chat.completions.create(
                     model=self.completions_model,
                     messages=messages,
-                    functions=functions,
+                    functions=functions,  # type: ignore
                     function_call={"name": "strict_schema_response"},
                 )
 
@@ -396,6 +396,10 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                     f"strict_schema_prompt failed after {max_retries} attempts: {e}"
                 )
 
+        raise RuntimeError(
+            f"strict_schema_prompt failed to return a valid response after {max_retries} attempts."
+        )
+
     def send_prompt(
         self, prompt: str, *, other_params: AICompletionsPromptParamsBase | None = None
     ) -> str:
@@ -418,19 +422,21 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
 
             user_content = self._build_user_message_content(prompt, other_params)
 
+            messages: Any = [
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {"role": "user", "content": user_content},
+            ]
+
             response = self.client.chat.completions.create(
                 model=self.completions_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_prompt,
-                    },
-                    {"role": "user", "content": user_content},
-                ],
+                messages=messages,
             )
 
             # Extract the response from the completion
-            completion = response.choices[0].message.content
+            completion = response.choices[0].message.content or ""
 
             # If the content seems truncated, send a follow-up request or handle continuation
             while response.choices[0].finish_reason == "length":
@@ -440,7 +446,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         {"role": "system", "content": "Continue."},
                     ],
                 )
-                completion += response.choices[0].message.content
+                completion += response.choices[0].message.content or ""
             return completion
 
         except Exception as e:
