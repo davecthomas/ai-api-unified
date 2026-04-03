@@ -12,27 +12,41 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 class EnvSettings(BaseSettings):
     """Small wrapper around environment configuration."""
 
-    EMBEDDING_ENGINE: str = "openai"
-    COMPLETIONS_ENGINE: str = "openai"
+    EMBEDDING_ENGINE: str | None = None
+    COMPLETIONS_ENGINE: str | None = None
     OPENAI_API_KEY: str | None = None
     OPENAI_BASE_URL: str | None = None
-    EMBEDDING_MODEL_NAME: str = "text-embedding-3-small"
-    COMPLETIONS_MODEL_NAME: str = "gpt-4o-mini"
-    EMBEDDING_DIMENSIONS: int = 1536
+    EMBEDDING_MODEL_NAME: str | None = None
+    COMPLETIONS_MODEL_NAME: str | None = None
+    EMBEDDING_DIMENSIONS: int | None = None
     VECTOR_METRIC: str = "cosine"
     AWS_REGION: str = "us-east-1"
     AI_API_GEO_RESIDENCY: str | None = None
     _SUPPORTED_DATA_RESIDENCY_GEOS: tuple[str, ...] = ("us", "usa", "united states")
-    IMAGE_MODEL_NAME: str | None = "gpt-image-1"
-    IMAGE_ENGINE: str = "openai"
+    IMAGE_MODEL_NAME: str | None = None
+    IMAGE_ENGINE: str | None = None
+    AI_VOICE_ENGINE: str | None = None
     GOOGLE_GEMINI_API_KEY: str | None = None
+    GOOGLE_AUTH_METHOD: str | None = None
+    GOOGLE_PROJECT_ID: str | None = None
+    GOOGLE_LOCATION: str | None = None
+    DEFAULT_GEMINI_TTS_MODEL: str | None = None
+    AI_MIDDLEWARE_CONFIG_PATH: str | None = None
+    MICROSOFT_COGNITIVE_SERVICES_API_KEY: str | None = None
+    MICROSOFT_COGNITIVE_SERVICES_REGION: str | None = None
+    ELEVEN_LABS_API_KEY: str | None = None
+    IS_HEX_ENABLED: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="allow", frozen=False)
 
     def get_setting(self, setting: str, default: Any = None) -> Any:
         """Retrieve a setting value with an optional default."""
         if hasattr(self, setting):
-            return getattr(self, setting)
+            setting_value: Any = getattr(self, setting)
+            if setting_value is not None:
+                return setting_value
+        if self.model_extra and setting in self.model_extra:
+            return self.model_extra[setting]
         return os.environ.get(setting, default)
 
     # Alias

@@ -1,0 +1,17 @@
+middleware:
+  - name: "observability"
+    enabled: true
+    settings:
+      direction: "input_output"
+      capabilities:
+        - "completions"
+        - "embeddings"
+        - "images"
+        - "tts"
+      log_level: "INFO"
+      token_count_mode: "provider_or_estimate"
+      include_media_details: true
+      include_provider_usage: true
+      include_audio_byte_count: true
+      include_image_byte_count: true
+      emit_error_events: true

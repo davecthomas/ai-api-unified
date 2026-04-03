@@ -7,13 +7,17 @@
 # Setup & Installation
 #   poetry install              # Install runtime dependencies
 #   poetry install --with dev   # Install runtime + dev dependencies (pytest, ruff, black)
+#   poetry install --all-extras # Install all optional provider dependencies
 #
 # Development & Testing
 #   poetry run pytest            # Run the test suite (configured via [tool.pytest.ini_options])
 #   poetry run pytest -q         # Run tests quietly
 #   poetry run pytest -k "name"  # Run only tests matching a substring
-#   poetry run pytest --aiprovider=openai or google-gemini or whatever   
-#     Run tests with custom --aiprovider parameter (default: openai)
+#   poetry run pytest -m nonmock # Run only live, non-mocked provider tests
+#   poetry run pytest -m "not nonmock"
+#     Run regular tests only (exclude live, non-mocked provider tests)
+#   poetry run pytest --aiprovider=openai or google-gemini or whatever
+#     Run tests with custom --aiprovider parameter
 #
 # Code Quality
 #   poetry run ruff check .      # Run ruff linter
@@ -31,11 +35,9 @@
 [project]
 name = "ai_api_unified"
 
-version = "1.3.0" # keep in sync with src/ai_api_unified/__version__.py
-description = "Unified access layer for completion and embedding services"
-authors = [
-  { name = "Dave Thomas", email = "davidcthomas@gmail.com" }
-]
+version = "2.5.0" # keep in sync with src/ai_api_unified/__version__.py
+description = "Unified access layer for AI completions (LLM), embedding (semantic), image, and voice services"
+authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
 readme = "README.md"
 keywords = [
@@ -55,7 +57,7 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",  
+  "Programming Language :: Python :: 3.13",
 ]
 
 requires-python = ">=3.11,<3.14"
@@ -64,17 +66,18 @@ dependencies = [
   # runtime deps
   "pydantic>=2,<3",
   "pydantic-settings>=2,<3",
-  "openai>=1.25.0,<2.0.0",
   "httpx>=0.27.0,<1.0.0",
   "PyYAML>=6.0.1,<7.0.0",
   "pydub>=0.25.1,<0.26.0",
   "audioop-lts>=0.2.0; python_version >= '3.13'",
-  # Note! Lots of optional dependencies for specific providers are installed via
-  # [project.optional-dependencies] below (e.g. using poetry add 'ai_api_unified[google_gemini]')
+  # Optional provider and middleware dependencies are installed via
+  # [project.optional-dependencies] below (for example
+  # using poetry add 'ai-api-unified[google_gemini]').
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.4.0,<9.0.0", "ruff>=0.4.4,<1.0.0", "black>=24.4.2,<25.0.0"]
+openai = ["openai>=1.25.0,<2.0.0"]
 azure_tts = ["azure-cognitiveservices-speech>=1.37.0,<2.0.0"]
 bedrock = ["boto3>=1.34.0,<2.0.0"]
 elevenlabs = ["elevenlabs>=2.3.0,<3.0.0"]
@@ -85,25 +88,45 @@ google_gemini = [
   "google-genai (>=1.41.0,<2.0.0)",
   "google-cloud-texttospeech (>=2.29.0)",
 ]
+middleware-pii-redaction = [
+  "presidio-analyzer>=2.2.35",
+  "presidio-anonymizer>=2.2.35",
+  "usaddress>=0.5.16,<0.6.0",
+]
+middleware-pii-redaction-small = [
+  "presidio-analyzer>=2.2.35",
+  "presidio-anonymizer>=2.2.35",
+  "usaddress>=0.5.16,<0.6.0",
+  "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+middleware-pii-redaction-large = [
+  "presidio-analyzer>=2.2.35",
+  "presidio-anonymizer>=2.2.35",
+  "usaddress>=0.5.16,<0.6.0",
+  "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+]
 similarity_score = ["numpy==2.2.6"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra"
+markers = [
+  "nonmock: tests that call live provider APIs and require credentials",
+  "integration: broader integration-style tests that may require optional extras or external services",
+]
 # tell pytest to look in tests directory
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 norecursedirs = [".git", ".tox", ".venv", "build", "dist"]
-# ─── Uncomment if you run pytest without first installing via Poetry ────
-pythonpath = ["src"] # ← add this (remove the ‘#’) to prepend ./src to sys.path
+pythonpath = ["src"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-# Poetry-specific settings must go under [tool.poetry]  
+# Poetry-specific settings must go under [tool.poetry]
 [tool.poetry]
-# Not required, but it helps keep the team in sync on the same version of Poetry. I'm using 2.1.3. 
+# Not required, but it helps keep the team in sync on the same version of Poetry.
 requires-poetry = ">=2.0,<2.2"
 
 [tool.poetry.group.dev.dependencies]

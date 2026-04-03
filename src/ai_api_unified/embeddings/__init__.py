@@ -1,29 +1,11 @@
 """
-Embedding-model back-ends (OpenAI, Titan, Gemini…).
+Embeddings provider package.
+
+This module intentionally does not re-export concrete provider classes. Import
+provider implementations directly from their module files, or use `AIFactory`
+for runtime provider selection.
 """
 
-from .ai_openai_embeddings import AiOpenAIEmbeddings
+from __future__ import annotations
 
-has_google_gemini = False
-try:
-    from .ai_google_gemini_embeddings import GoogleGeminiEmbeddings
-
-    has_google_gemini = True
-except ImportError:
-    pass
-
-has_bedrock = False
-try:
-    from .ai_titan_embeddings import AiTitanEmbeddings
-
-    has_bedrock = True
-except ImportError:
-    pass
-
-__all__ = [
-    "AiOpenAIEmbeddings",
-]
-if has_bedrock:
-    __all__.append("AiTitanEmbeddings")
-if has_google_gemini:
-    __all__.append("GoogleGeminiEmbeddings")
+__all__: list[str] = []

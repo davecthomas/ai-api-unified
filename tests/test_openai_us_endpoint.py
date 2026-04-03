@@ -10,13 +10,12 @@ from ai_api_unified.completions.ai_openai_completions import (
     AiOpenAICompletions,
 )
 from ai_api_unified.embeddings.ai_openai_embeddings import AiOpenAIEmbeddings
-from ai_api_unified.voice.ai_voice_openai import AIVoiceOpenAI
 
 
 class TestOpenAIUSEndpoint:
     """Test that OpenAI clients use the US-specific endpoint by default."""
 
-    @patch("ai_api_unified.completions.ai_openai_completions.OpenAI")
+    @patch("ai_api_unified.ai_openai_base.OpenAI")
     def test_completions_uses_us_endpoint_when_geo_constrained(self, mock_openai):
         """Test that AiOpenAICompletions switches to the US endpoint when configured."""
         with patch.dict(
@@ -51,7 +50,7 @@ class TestOpenAIUSEndpoint:
         assert capabilities.supports_data_residency_constraint is True
         assert capabilities.context_window_length == 128_000
 
-    @patch("ai_api_unified.completions.ai_openai_completions.OpenAI")
+    @patch("ai_api_unified.ai_openai_base.OpenAI")
     def test_invalid_geo_logs_warning_and_defaults(
         self, mock_openai, caplog: pytest.LogCaptureFixture
     ):
@@ -71,3 +70,19 @@ class TestOpenAIUSEndpoint:
             "Unsupported AI_API_GEO_RESIDENCY" in record.message
             for record in caplog.records
         )
+
+    @patch("ai_api_unified.ai_openai_base.OpenAI")
+    def test_explicit_model_override_wins_over_environment(self, mock_openai):
+        """Explicit OpenAI model arguments should not be replaced by unrelated env defaults."""
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "test-key",
+                "COMPLETIONS_MODEL_NAME": "gemini-2.5-flash",
+            },
+            clear=True,
+        ):
+            client = AiOpenAICompletions(model="gpt-4o-mini")
+
+        mock_openai.assert_called_once()
+        assert client.completions_model == "gpt-4o-mini"

@@ -5,7 +5,7 @@ Importing pydub normally triggers a DeprecationWarning because it
 pulls in the soon-to-be-removed std-lib module `audioop`.  We avoid
 that by importing pydub only when audio functions are actually used.
 Usage:
-    from upside_lib_ai_api_unified.util._lazy_pydub import AudioSegment, play
+    from ai_api_unified.util._lazy_pydub import AudioSegment, play
 """
 
 from __future__ import annotations
@@ -23,11 +23,11 @@ if sys.version_info >= (3, 13):
         import audioop
     except ImportError:
         try:
-            import audioop_lts as audioop  # type: ignore
+            import audioop_lts as audioop
+
             sys.modules["audioop"] = audioop
         except ImportError:
             pass
-
 
 
 class _LazyPydub(types.ModuleType):
@@ -54,14 +54,18 @@ class _LazyPydub(types.ModuleType):
 _lazy_pydub = _LazyPydub("pydub_lazy")
 
 # Re-export the two most common symbols.
-AudioSegment = _lazy_pydub.AudioSegment  # type: ignore[attr-defined]
+AudioSegment: Any = _lazy_pydub.AudioSegment
+
 
 def play(*args, **kwargs):
     """Lazily import and call pydub.playback.play."""
     return importlib.import_module("pydub.playback").play(*args, **kwargs)
+
+
 def get_CouldntDecodeError():
     """Lazily import and return pydub.exceptions.CouldntDecodeError."""
     return importlib.import_module("pydub.exceptions").CouldntDecodeError
+
 
 # For convenience, provide a property-like alias
 class _CouldntDecodeErrorProxy:
@@ -69,5 +73,6 @@ class _CouldntDecodeErrorProxy:
         if name == "CouldntDecodeError":
             return get_CouldntDecodeError()
         raise AttributeError(f"module has no attribute {name!r}")
+
 
 CouldntDecodeError = _CouldntDecodeErrorProxy().CouldntDecodeError

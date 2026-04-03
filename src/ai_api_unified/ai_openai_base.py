@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+
 from openai import OpenAI
 from ai_api_unified.util.env_settings import EnvSettings
 

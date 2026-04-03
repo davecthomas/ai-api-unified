@@ -1,83 +1,80 @@
-# src/ai_api_unified/voice/ai_voice_factory.py
+"""
+Factory for creating voice provider clients through centralized lazy loading.
+"""
+
+from __future__ import annotations
+
 import logging
+
+from ai_api_unified.ai_provider_exceptions import (
+    AiProviderConfigurationError,
+    AiProviderDependencyUnavailableError,
+    AiProviderRuntimeError,
+)
+from ai_api_unified.ai_provider_loader import load_ai_provider_class
+from ai_api_unified.ai_provider_registry import (
+    AiProviderSpec,
+    AI_PROVIDER_CAPABILITY_VOICE,
+    get_ai_provider_spec,
+)
+from ai_api_unified.util.env_settings import EnvSettings
+from ai_api_unified.voice.ai_voice_base import AIVoiceBase
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
-import os
-
-from .ai_voice_base import AIVoiceBase
-from .ai_voice_openai import AIVoiceOpenAI
-
-# ElevenLabs voice (optional extra)
-try:
-    from .ai_voice_elevenlabs import AIVoiceElevenLabs  # type: ignore
-except ImportError:
-    AIVoiceElevenLabs = None  # type: ignore[assignment]
-    ELEVENLABS_AVAILABLE: bool = False
-else:
-    ELEVENLABS_AVAILABLE: bool = True
-
-# Google voice (optional extra)
-try:
-    from .ai_voice_google import AIVoiceGoogle  # type: ignore
-except ImportError:
-    AIVoiceGoogle = None  # type: ignore[assignment]
-    GOOGLE_VOICE_AVAILABLE: bool = False
-else:
-    GOOGLE_VOICE_AVAILABLE: bool = True
-
-# Azure TTS (optional extra)
-try:
-    from .ai_voice_azure import AIVoiceAzure  # type: ignore
-except ImportError:
-    AIVoiceAzure = None  # type: ignore[assignment]
-    AZURE_TTS_AVAILABLE: bool = False
-else:
-    AZURE_TTS_AVAILABLE: bool = True
+AI_VOICE_ENGINE_ENV_KEY: str = "AI_VOICE_ENGINE"
 
 
 class AIVoiceFactory:
-    """Factory to create AI Voice instances based on environment configuration."""
+    """
+    Factory to create AI voice clients based on environment configuration.
+    """
 
     @staticmethod
     def create() -> AIVoiceBase:
-        engine = os.getenv("AI_VOICE_ENGINE", "").strip().lower()
-        match engine:
-            case "elevenlabs":
-                if not ELEVENLABS_AVAILABLE:
-                    _LOGGER.warning(
-                        "ElevenLabs voice requested but the optional extra is not installed. Install it with: poetry add 'ai-api-unified[elevenlabs]'"
-                    )
-                    raise RuntimeError(
-                        "ElevenLabs voice requested but the optional extra is not installed. "
-                        "Install it with: poetry add 'ai-api-unified[elevenlabs]'"
-                    )
-                return AIVoiceElevenLabs(engine=engine)  # type: ignore[call-arg]
+        """
+        Creates a voice provider client based on the configured voice engine.
 
-            case "google":
-                if not GOOGLE_VOICE_AVAILABLE:
-                    _LOGGER.warning(
-                        "Google voice requested but the optional extra is not installed. Install it with: poetry add 'ai-api-unified[google_gemini]'"
-                    )
-                    raise RuntimeError(
-                        "Google voice requested but the optional extra is not installed. "
-                        "Install it with: poetry add 'ai-api-unified[google_gemini]'"
-                    )
-                return AIVoiceGoogle(engine=engine)  # type: ignore[call-arg]
+        Args:
+            None
 
-            case "openai":
-                return AIVoiceOpenAI(engine=engine)
+        Returns:
+            Concrete AIVoiceBase implementation for the configured voice engine.
+            Raises ValueError for unsupported engines and RuntimeError-derived
+            provider exceptions for dependency/runtime loading failures.
+        """
+        env_settings: EnvSettings = EnvSettings()
+        object_engine_value: object = env_settings.get_setting(AI_VOICE_ENGINE_ENV_KEY, "")
+        str_engine: str = (
+            str(object_engine_value).strip().lower()
+            if object_engine_value is not None
+            else ""
+        )
+        if not str_engine:
+            raise ValueError(
+                "AI_VOICE_ENGINE must be configured explicitly; there is no default provider."
+            )
 
-            case "azure":
-                if not AZURE_TTS_AVAILABLE:
-                    _LOGGER.warning(
-                        "Azure TTS requested but the optional extra is not installed. Install it with: poetry add 'ai-api-unified[azure_tts]'"
-                    )
-                    raise RuntimeError(
-                        "Azure TTS requested but the optional extra is not installed. "
-                        "Install it with: poetry add 'ai-api-unified[azure_tts]'"
-                    )
-                return AIVoiceAzure(engine=engine)  # type: ignore[call-arg]
-            case _:
-                _LOGGER.error(f"Unsupported AI_VOICE_ENGINE: {engine}")
-                raise ValueError(f"Unsupported AI_VOICE_ENGINE: {engine}")
+        try:
+            ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+                AI_PROVIDER_CAPABILITY_VOICE, str_engine
+            )
+            class_ai_voice_provider: type[AIVoiceBase] = load_ai_provider_class(
+                ai_provider_spec,
+                AIVoiceBase,
+            )
+            voice_provider_client: AIVoiceBase = class_ai_voice_provider(
+                engine=str_engine
+            )
+            # Normal return with resolved voice provider client.
+            return voice_provider_client
+        except AiProviderConfigurationError as exception:
+            _LOGGER.error("Unsupported AI_VOICE_ENGINE: %s", str_engine)
+            raise ValueError(
+                f"Unsupported AI_VOICE_ENGINE: {str_engine}"
+            ) from exception
+        except AiProviderDependencyUnavailableError as exception:
+            _LOGGER.warning(str(exception))
+            raise
+        except AiProviderRuntimeError:
+            raise

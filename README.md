@@ -1,734 +1,477 @@
-# ai-api-unified - a Vendor-Agnostic AI Services Library
+# ai-api-unified
 
-> Latest version: 1.3.0
+`ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
-`ai-api-unified` is a unified, typed client for **Completions**, **Embeddings**, and **Voice** that lets you switch providers by **changing configuration, not code**. Your app targets stable base interfaces; factories select concrete providers at runtime based on environment variables. This keeps call sites clean and makes vendor swaps low-risk.
+This release adopts a registry-backed lazy-loading architecture:
 
-> **Key idea:** Write to the **base interfaces** (completions, embeddings, voice). Change the provider via **env/config** only.
+- provider SDKs are optional extras, not base dependencies
+- providers are resolved only when a factory selects them
+- package `__init__` modules export stable interfaces only
+- missing provider selectors are configuration errors, not implicit fallbacks
 
----
+Install name: `ai-api-unified`  
+Import path: `ai_api_unified`
 
-## Model Categories & Capability Matrix
+## Breaking Changes in 2.x
 
-| Category    | Base Interface             | Providers (examples)                                       | Required Poetry extra(s)                                                                  |
-| ----------- | -------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Completions | `AIBaseCompletions`        | **OpenAI**, AWS Bedrock (Nova), Google Gemini              | OpenAI: _none_; Bedrock: `bedrock`; Gemini: `google_gemini`                               |
-| Embeddings  | `AIBaseEmbeddings`         | **OpenAI**, Amazon Titan, Google Gemini                    | OpenAI: _none_; Titan: `bedrock`; Gemini: `google_gemini`                                 |
-| Images      | `AIBaseImages`             | **OpenAI**, AWS Bedrock (Nova Canvas), Google Gemini       | OpenAI: _none_; Bedrock: `bedrock`; Gemini: `google_gemini`                               |
-| Voice TTS   | `AIVoiceBase`              | OpenAI, Google Vertex AI Gemini TTS, Azure TTS, ElevenLabs | Google: `google_gemini` (Vertex Gemini SDK); Azure: `azure_tts`; ElevenLabs: `elevenlabs` |
-| Voice STT   | `AIVoiceBase` (if enabled) | Google (and others if configured)                          | Typically `google_gemini`                                                                 |
+- Provider SDKs, including OpenAI, are no longer included in the base install.
+- `COMPLETIONS_ENGINE`, `EMBEDDING_ENGINE`, `IMAGE_ENGINE`, and `AI_VOICE_ENGINE` must be set explicitly when that capability is used.
+- Root and subpackage `__init__.py` modules no longer re-export optional concrete provider classes.
+- Provider dispatch now goes through the lazy provider registry and loader instead of eager import branching.
+- Google-backed providers now default to `GOOGLE_AUTH_METHOD=api_key`. Service-account auth is still available, but it is explicit.
 
-> Only **OpenAI** works with the base package alone. **All other providers require the appropriate Poetry extra(s).**
-> Install extras with:
-> `poetry add 'ai-api-unified[<extra name>]'`
+## Capabilities
 
----
+| Capability  | Stable interface    | Engines                                                                                                                       | Required extra(s)                                    |
+| ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Completions | `AIBaseCompletions` | `openai`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `google_gemini`, `bedrock`                 |
+| Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`                                                                                            | `openai`, `bedrock`, `google_gemini`                 |
+| Images      | `AIBaseImages`      | `openai`, `google-gemini`, `nova-canvas` and Bedrock image aliases                                                            | `openai`, `google_gemini`, `bedrock`                 |
+| Voice TTS   | `AIVoiceBase`       | `openai`, `google`, `azure`, `elevenlabs`                                                                                     | `openai`, `google_gemini`, `azure_tts`, `elevenlabs` |
+| Voice STT   | `AIVoiceBase`       | provider-specific support such as Google and ElevenLabs                                                                       | `google_gemini`, `elevenlabs`                        |
 
-## Table of Contents
+Default model guidance in the checked-in OSS env files:
 
-1. [Supported Providers & Models](#supported-providers--models)
-2. [Installation](#installation)
-   2.1. [Python & System Requirements](#python--system-requirements)
-   2.2. [Choose Provider Extras](#choose-provider-extras)
-   2.3. [Smoke Test](#smoke-test)
-3. [Quickstart: Factory → Client → Use It](#quickstart-factory--client--use-it)
-   3.1. [Completions](#completions)
-   3.2. [Embeddings](#embeddings)
-   3.3. [Voice TTS](#voice-tts)
-4. [Configuration & Environment Variables](#configuration--environment-variables)
-   4.1. [Global Selectors](#global-selectors)
-   4.2. [Provider-Specific Variables](#provider-specific-variables)
-   4.3. [Geo-restricted Data Residency](#geo-restricted-data-residency)
-5. [Vendor Setup Guides](#vendor-setup-guides)
-   5.1. [OpenAI](#openai)
-   5.2. [AWS Bedrock & Amazon Titan](#aws-bedrock--amazon-titan)
-   5.3. [Google Gemini](#google-gemini)
-   5.4. [Azure Cognitive Services TTS](#azure-cognitive-services-tts)
-   5.5. [ElevenLabs](#elevenlabs)
-6. [API Programming Guide](#api-programming-guide)
-   6.1. [Factories & Clients](#factories--clients)
-   6.2. [Completions API](#completions-api)
-   6.3. [Embeddings API](#embeddings-api)
-   6.4. [Voice API](#voice-api)
-   6.5. [Structured Prompts](#structured-prompts)
-   6.6. [Token Counting & Cost Hints](#token-counting--cost-hints)
-7. [Advanced Topics](#advanced-topics)
-   7.1. [Retries & Backoff](#retries--backoff)
-8. [Class Flow Diagram](#class-flow-diagram)
-9. [Repository Layout, Tests, Examples](#repository-layout-tests-examples)
-10. [Troubleshooting](#troubleshooting)
-11. [Versioning & License](#versioning--license)
-
----
-
-## Supported Providers & Models
-
-- **OpenAI**
-
-  - Completions: current GPT-4.x / 4o family
-  - Embeddings: `text-embedding-3-small` / `-large`
-  - Voice: OpenAI TTS
-
-- **AWS Bedrock & Amazon Titan**
-
-  - Completions: Nova family (and other Bedrock models configured in your env)
-  - Embeddings: Titan (`amazon.titan-embed-text-v2:0`, etc.)
-  - Images: Nova Canvas
-
-- **Google Gemini**
-
-  - Completions: Gemini 1.5 / 2.x family
-  - Embeddings: `gemini-embedding-001`
-  - Images: Imagen 3.0
-  - Voice: Google Cloud Text-to-Speech
-
-- **Azure Cognitive Services** (TTS)
-- **ElevenLabs** (TTS)
-
-> Exact model names are selected by env variables in this library; see **Configuration** and **Vendor Guides**.
-
----
+- Google completions: `gemini-2.5-flash`
+- Google embeddings: `gemini-embedding-001`
+- Google images: `imagen-4.0-generate-001`
+- Google voice: `gemini-2.5-pro-tts`
 
 ## Installation
 
-### Python & System Requirements
+### Python Requirements
 
-Use a supported Python version per your project settings. If deploying to AWS Lambda, consult **Troubleshooting** for wheel guidance.
+This package requires Python `>=3.11,<3.14`.
 
-### Choose Provider Extras
+### Install as a Dependency
 
-**OpenAI only:** > `poetry add 'ai-api-unified'`
+Base package only:
 
-**Google Gemini (completions or embeddings, and Google TTS/STT):** > `poetry add 'ai-api-unified[google_gemini]'`
+```bash
+poetry add ai-api-unified
+```
 
-**AWS Bedrock (Nova) and Amazon Titan (embeddings):** > `poetry add 'ai-api-unified[bedrock]'`
+Install with one or more provider extras:
 
-**Azure TTS:** > `poetry add 'ai-api-unified[azure_tts]'`
+```bash
+poetry add 'ai-api-unified[google_gemini]'
+poetry add 'ai-api-unified[openai]'
+poetry add 'ai-api-unified[bedrock,google_gemini]'
+```
 
-**ElevenLabs TTS:** > `poetry add 'ai-api-unified[elevenlabs]'`
+### Install in a Local Clone
 
-**Optional similarity helpers (NumPy, etc.):** > `poetry add 'ai-api-unified[similarity_score]'`
+Base install:
 
-**Multiple extras:**
-`poetry add 'ai-api-unified[bedrock,google_gemini]'`
+```bash
+poetry install
+```
 
-**Why:** non-OpenAI providers ship heavier SDKs; extras keep default installs slim.
+Common local development installs:
+
+```bash
+poetry install --with dev
+poetry install --extras "google_gemini"
+poetry install --extras "openai"
+poetry install --all-extras --with dev
+```
+
+### Optional Extras
+
+| Extra                            | Installs                                                               |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| `openai`                         | OpenAI completions, embeddings, images, and voice                      |
+| `google_gemini`                  | Google Gemini completions, embeddings, images, and Google voice        |
+| `bedrock`                        | AWS Bedrock completions, Titan embeddings, and Bedrock image providers |
+| `azure_tts`                      | Azure Cognitive Services TTS                                           |
+| `elevenlabs`                     | ElevenLabs TTS and STT                                                 |
+| `middleware-pii-redaction`       | Presidio + `usaddress` without packaged spaCy model wheels             |
+| `middleware-pii-redaction-small` | Presidio + `usaddress` + packaged `en_core_web_sm`                     |
+| `middleware-pii-redaction-large` | Presidio + `usaddress` + packaged `en_core_web_lg`                     |
+| `similarity_score`               | NumPy-based similarity helpers                                         |
+| `dev`                            | Optional dev dependencies from `[project.optional-dependencies]`       |
+
+### Environment File
+
+Copy [`env_template`](env_template) to `.env` and fill in only the providers you use.
+
+The OSS template now defaults to Google API-key auth:
+
+```dotenv
+COMPLETIONS_ENGINE=google-gemini
+EMBEDDING_ENGINE=google-gemini
+IMAGE_ENGINE=google-gemini
+AI_VOICE_ENGINE=google
+
+GOOGLE_GEMINI_API_KEY=...
+GOOGLE_AUTH_METHOD=api_key
+
+COMPLETIONS_MODEL_NAME=gemini-2.5-flash
+EMBEDDING_MODEL_NAME=gemini-embedding-001
+IMAGE_MODEL_NAME=imagen-4.0-generate-001
+DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
+```
+
+Leave `EMBEDDING_DIMENSIONS` unset unless you deliberately want a provider-specific override. The library now preserves provider defaults instead of forcing a generic value.
 
 ### Smoke Test
 
 ```bash
-python -c "import ai_api_unified as m; print('ok')"
+python -c "import ai_api_unified; print(ai_api_unified.__version__)"
 ```
 
-**Why:** quick import check to confirm resolver and credentials are correct.
+## Quickstart
 
----
-
-## Quickstart: Factory → Client → Use It
-
-Set the **global selectors** and **provider credentials** before running the examples. All required env vars are shown above each snippet.
+The examples below assume the Google API-key-first OSS defaults shown above. The same APIs work with OpenAI, Bedrock, Azure, or ElevenLabs by changing env selectors and installing the matching extras.
 
 ### Completions
 
 ```python
-# Required env (OpenAI):
-#   COMPLETIONS_ENGINE=openai
-#   OPENAI_API_KEY=...
-# Optional:
-#   COMPLETIONS_MODEL_NAME=gpt-4o-mini
-
-from ai_api_unified.ai_factory import AIFactory
-from ai_api_unified.ai_base import AIBaseCompletions
+from ai_api_unified import AIFactory, AIBaseCompletions
 
 client: AIBaseCompletions = AIFactory.get_ai_completions_client()
-text: str = client.send_prompt("Say hello in one short sentence.")
-print(text)
+response: str = client.send_prompt("Say hello in one short sentence.")
+print(response)
 ```
-
-**What it does and why:** obtains a provider-selected completions client using env settings; your code speaks only the base interface, so vendor swaps require **no code changes**.
 
 ### Embeddings
 
 ```python
-# Required env (OpenAI example):
-#   EMBEDDING_ENGINE=openai
-#   OPENAI_API_KEY=...
-# Optional:
-#   EMBEDDING_MODEL_NAME=text-embedding-3-small
-#   EMBEDDING_DIMENSIONS=1536
+from ai_api_unified import AIFactory, AIBaseEmbeddings
 
-from ai_api_unified.ai_factory import AIFactory
-from ai_api_unified.ai_base import AIBaseEmbeddings
-
-emb: AIBaseEmbeddings = AIFactory.get_ai_embedding_client()
-res: dict[str, object] = emb.generate_embeddings("hello world")
-vector = res.get("embedding")
-print(len(vector) if vector else None)
+client: AIBaseEmbeddings = AIFactory.get_ai_embedding_client()
+result: dict[str, object] = client.generate_embeddings("hello world")
+embedding = result.get("embedding")
+print(len(embedding) if embedding else None)
 ```
 
-**What it does and why:** generates a vector under a stable key suitable for storage or downstream retrieval. Dimensions and model are env-configurable.
-
-### Voice TTS
+### Image Generation
 
 ```python
-# Example using Google TTS:
-#   poetry add 'ai-api-unified[google_gemini]'
-# Required env:
-#   AI_VOICE_ENGINE=google
-#   GOOGLE_APPLICATION_CREDENTIALS=/path/to/service_account.json
-#   GOOGLE_PROJECT_ID=<gcp-project-id>
-# Optional:
-#   GOOGLE_LOCATION=us-central1
-#   AI_VOICE_LANGUAGE=en-US
+from ai_api_unified import AIFactory, AIBaseImageProperties, AIBaseImages
 
-from ai_api_unified.ai_voice_factory import AIVoiceFactory
-from ai_api_unified.ai_voice_base import AIVoiceBase
+client: AIBaseImages = AIFactory.get_ai_images_client()
+images: list[bytes] = client.generate_images(
+    "A watercolor skyline at sunrise.",
+    AIBaseImageProperties(width=1024, height=1024, format="png", num_images=1),
+)
 
-voice: AIVoiceBase = AIVoiceFactory.get_voice_client()
-audio_bytes: bytes = voice.text_to_speech("Hello from a unified voice API")
-with open("out.wav", "wb") as f:
-    f.write(audio_bytes)
-# or
-voice.play(audio_bytes)
+with open("generated_image.png", "wb") as generated_file:
+    generated_file.write(images[0])
 ```
 
-**What it does and why:** selects the configured voice engine and synthesizes audio. SDKs load only when the engine is selected.
+### Voice
 
----
+```python
+from ai_api_unified import AIVoiceBase, AIVoiceFactory
 
-## Configuration & Environment Variables
+voice: AIVoiceBase = AIVoiceFactory.create()
+audio_bytes: bytes = voice.text_to_speech("Hello from ai-api-unified")
 
-### Global Selectors
+with open("out.wav", "wb") as output_file:
+    output_file.write(audio_bytes)
+```
 
-These choose the **provider** for each category:
+## Configuration
 
-- `COMPLETIONS_ENGINE` = `openai` | `nova` | `google-gemini`
-- `EMBEDDING_ENGINE` = `openai` | `titan` | `google-gemini`
-- `IMAGE_ENGINE` = `openai` | `nova-canvas` | `google-gemini`
-- `AI_VOICE_ENGINE` = `openai` | `google` | `azure` | `elevenlabs`
+### Required Engine Selectors
 
-Common optional knobs:
+There is no implicit default provider. Set the selector for each capability you use.
 
-- `COMPLETIONS_MODEL_NAME` (e.g., `gpt-4o-mini`, `gemini-3.0-flash`, `amazon.nova-lite-v1:0`)
-- `EMBEDDING_MODEL_NAME` (e.g., `text-embedding-3-small`, `amazon.titan-embed-text-v2:0`, `gemini-embedding-001`)
-- `EMBEDDING_DIMENSIONS` (provider-specific defaults, e.g., 1536 for OpenAI text-embedding-3-small)
+| Environment variable | Valid values                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `COMPLETIONS_ENGINE` | `openai`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
+| `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
+| `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
+| `AI_VOICE_ENGINE`    | `openai`, `google`, `azure`, `elevenlabs`                                                                                     |
 
-### Provider-Specific Variables
+### Common Model Settings
 
-**OpenAI (no extra needed)**
+| Environment variable        | Notes                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------- |
+| `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
+| `EMBEDDING_MODEL_NAME`      | Optional embeddings model override                                                          |
+| `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
+| `DEFAULT_GEMINI_TTS_MODEL`  | Optional Google voice model override                                                        |
+| `EMBEDDING_DIMENSIONS`      | Optional embeddings dimension override. Leave unset for provider defaults.                  |
+| `AI_API_GEO_RESIDENCY`      | Optional geo hint. `US`, `USA`, or `United States` normalize to US routing where supported. |
+| `AI_MIDDLEWARE_CONFIG_PATH` | Optional YAML config path for observability and PII middleware                              |
+
+### Provider Authentication
+
+#### OpenAI
+
+Required:
 
 - `OPENAI_API_KEY`
-- Optional: `COMPLETIONS_MODEL_NAME`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`, `IMAGE_MODEL_NAME`
 
-**AWS Bedrock & Amazon Titan** _(requires extra: `bedrock`)_
+Common optional settings:
 
-- `AWS_REGION` (e.g., `us-east-1`)
-- Optional: `COMPLETIONS_MODEL_NAME` (Nova), `EMBEDDING_MODEL_NAME` (Titan), `EMBEDDING_DIMENSIONS`, `IMAGE_MODEL_NAME` (Nova Canvas)
+- `OPENAI_BASE_URL`
+- `COMPLETIONS_MODEL_NAME`
+- `EMBEDDING_MODEL_NAME`
+- `IMAGE_MODEL_NAME`
+- `EMBEDDING_DIMENSIONS`
+- `AI_API_GEO_RESIDENCY`
 
-**Google Gemini** _(requires extra: `google_gemini`)_
+#### AWS Bedrock and Titan
 
-You can authenticate using either an API Key or Google Application Default Credentials (ADC).
+Required:
 
-*Option A: API Key (Consumer-grade)*
+- `AWS_REGION`
+- standard AWS credentials in environment or runtime IAM context
+
+Common optional settings:
+
+- `COMPLETIONS_MODEL_NAME`
+- `EMBEDDING_MODEL_NAME`
+- `IMAGE_MODEL_NAME`
+- `EMBEDDING_DIMENSIONS`
+- `AI_API_GEO_RESIDENCY`
+
+For current Bedrock model IDs, use the AWS documentation:
+
+- [Supported foundation models in Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html)
+- [Amazon Bedrock foundation model reference](https://docs.aws.amazon.com/bedrock/latest/userguide/foundation-models-reference.html)
+
+#### Google-backed Providers
+
+Required for the default OSS path:
+
+- `GOOGLE_GEMINI_API_KEY`
+
+Default auth mode:
+
 - `GOOGLE_AUTH_METHOD=api_key`
-- `GOOGLE_GEMINI_API_KEY` (your Gemini API key)
 
-*Option B: Application Default Credentials / Vertex AI*
-- `GOOGLE_AUTH_METHOD=service_account` (or leave unset)
-- `GOOGLE_APPLICATION_CREDENTIALS` (path to service account JSON)
-- Optional: `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`
+Optional service-account mode:
 
-*Common Options:*
-- Optional: `COMPLETIONS_MODEL_NAME`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSIONS`, `IMAGE_MODEL_NAME`
+- `GOOGLE_AUTH_METHOD=service_account`
+- `GOOGLE_APPLICATION_CREDENTIALS=/path/to/service_account.json`
+- `GOOGLE_PROJECT_ID=<gcp-project-id>`
+- `GOOGLE_LOCATION=us-central1`
 
-**Azure Cognitive Services TTS** _(requires extra: `azure_tts`)_
+This auth policy applies across Google completions, embeddings, images, and voice.
+
+#### Azure TTS
+
+Required:
 
 - `MICROSOFT_COGNITIVE_SERVICES_API_KEY`
 - `MICROSOFT_COGNITIVE_SERVICES_REGION`
-- Optional: `MICROSOFT_COGNITIVE_SERVICES_ENDPOINT`, `AI_VOICE_LANGUAGE`
 
-**ElevenLabs TTS** _(requires extra: `elevenlabs`)_
+Optional:
+
+- `MICROSOFT_COGNITIVE_SERVICES_ENDPOINT`
+- `AI_VOICE_LANGUAGE`
+
+#### ElevenLabs
+
+Required:
 
 - `ELEVEN_LABS_API_KEY`
-- Optional: voice selection variables used by your implementation
 
-**Voice (common option)**
+## Lazy Loading and Imports
 
-- `AI_VOICE_LANGUAGE` (e.g., `en-US`)
-
-### Geo-restricted Data Residency
-
-If your deployment must keep data in the U.S., set:
-
-- `AI_API_GEO_RESIDENCY=US` (or `USA` / `United States`)
-
-Providers that support regional endpoints will route via U.S. URLs when this is set; others may log a warning if the SDK does not expose regional control.
-
----
-
-## Vendor Setup Guides
-
-### OpenAI
-
-**Install:**
-`poetry add 'ai-api-unified'`
-
-**Env:**
-
-```
-COMPLETIONS_ENGINE=openai
-EMBEDDING_ENGINE=openai
-OPENAI_API_KEY=...
-# Optional:
-COMPLETIONS_MODEL_NAME=gpt-4o-mini
-EMBEDDING_MODEL_NAME=text-embedding-3-small
-EMBEDDING_DIMENSIONS=1536
-AI_API_GEO_RESIDENCY=US   # optional
-```
-
-**Sanity check:**
+Prefer the stable interfaces and factories exported from the root package:
 
 ```python
-from ai_api_unified.ai_factory import AIFactory
-c = AIFactory.get_ai_completions_client()
-print(c.send_prompt("Ping"))
+from ai_api_unified import (
+    AIFactory,
+    AIVoiceFactory,
+    AIBaseCompletions,
+    AIBaseEmbeddings,
+    AIBaseImages,
+    AIVoiceBase,
+)
 ```
 
-**Why:** verifies key wiring and model selection.
+Factory entry points:
 
----
+- `AIFactory.get_ai_completions_client()`
+- `AIFactory.get_ai_embedding_client()`
+- `AIFactory.get_ai_images_client()`
+- `AIVoiceFactory.create()`
 
-### AWS Bedrock & Amazon Titan
-
-**Install:**
-`poetry add 'ai-api-unified[bedrock]'`
-
-**Env:**
-
-```
-COMPLETIONS_ENGINE=nova
-EMBEDDING_ENGINE=titan
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-# Optional if using temporary creds:
-AWS_SESSION_TOKEN=...
-# Optional:
-COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
-EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
-EMBEDDING_DIMENSIONS=1024
-IMAGE_MODEL_NAME=amazon.nova-canvas-v1:0
-AI_API_GEO_RESIDENCY=US   # optional
-```
-
-**Sanity check:**
+Concrete providers are no longer re-exported from package `__init__.py` modules. If you need a concrete class directly, import it from its implementation module, for example:
 
 ```python
-from ai_api_unified.ai_factory import AIFactory
-c = AIFactory.get_ai_completions_client()
-print(c.send_prompt("Ping from Bedrock"))
+from ai_api_unified.completions.ai_google_gemini_completions import (
+    GoogleGeminiCompletions,
+)
 ```
 
-**Why:** confirms region and IAM credentials are valid.
+Typical factory failure modes:
 
----
+- unsupported engine selector: `ValueError`
+- selected provider extra is not installed: `AiProviderDependencyUnavailableError`
+- provider load/runtime failure: `AiProviderRuntimeError`
 
-### Google Gemini
+## Middleware
 
-**Install:**
-`poetry add 'ai-api-unified[google_gemini]'`
+Middleware is configured by YAML referenced through `AI_MIDDLEWARE_CONFIG_PATH`.
 
-**Env:**
+### Observability
 
-Configure your preferred authentication method:
+Observability middleware is built into the base package and does not require a separate extra.
 
-*Option A: API Key (Consumer-grade)*
-```
-GOOGLE_AUTH_METHOD=api_key
-GOOGLE_GEMINI_API_KEY=...
-```
+Features:
 
-*Option B: Application Default Credentials / Vertex AI*
-```
-GOOGLE_AUTH_METHOD=service_account
-GOOGLE_APPLICATION_CREDENTIALS=/path/service_account.json
-# Optional:
-GOOGLE_PROJECT_ID=...
-GOOGLE_LOCATION=us-central1
-```
+- metadata-only input, output, and error events
+- request-scoped correlation via `set_observability_context(...)`
+- coverage for completions, embeddings, images, and text-to-speech
 
-*Common Settings:*
-```
-COMPLETIONS_ENGINE=google-gemini
-EMBEDDING_ENGINE=google-gemini
-IMAGE_ENGINE=google-gemini
-COMPLETIONS_MODEL_NAME=gemini-3.0-flash
-EMBEDDING_MODEL_NAME=gemini-embedding-001
-IMAGE_MODEL_NAME=imagen-3.0-generate-001
-EMBEDDING_DIMENSIONS=3072
-AI_API_GEO_RESIDENCY=US   # optional; may log warning if SDK lacks regional control
+Minimal config:
+
+```yaml
+middleware:
+  - name: 'observability'
+    enabled: true
 ```
 
-**Sanity check:**
+See [`docs/observability_middleware_example.yaml`](docs/observability_middleware_example.yaml) and [`docs/observability_middleware_design.md`](docs/observability_middleware_design.md).
+
+### PII Redaction
+
+PII redaction is optional and requires one of:
+
+- `middleware-pii-redaction`
+- `middleware-pii-redaction-small`
+- `middleware-pii-redaction-large`
+
+Minimal config:
+
+```yaml
+middleware:
+  - name: 'pii_redaction'
+    enabled: true
+    settings:
+      direction: 'input_only'
+```
+
+Notes:
+
+- `strict_mode: true` enables fail-closed behavior
+- `balanced`, `high_accuracy`, and `low_memory` detection profiles are supported
+- recognizer customization is configured in YAML, not hard-coded in provider implementations
+
+See [`docs/pii_redaction_design.md`](docs/pii_redaction_design.md) for the fuller contract and deployment tradeoffs.
+
+## Structured Responses
+
+Use `AIStructuredPrompt` together with `strict_schema_prompt(...)` when you want schema-validated structured output.
 
 ```python
-from ai_api_unified.ai_factory import AIFactory
-c = AIFactory.get_ai_completions_client()
-print(c.send_prompt("Ping from Gemini"))
-```
+from copy import deepcopy
+from typing import Any
 
-**Why:** verifies service account auth and model selection.
+from ai_api_unified import (
+    AIFactory,
+    AIStructuredPrompt,
+    StructuredResponseTokenLimitError,
+)
 
----
 
-### Azure Cognitive Services TTS
-
-**Install:**
-`poetry add 'ai-api-unified[azure_tts]'`
-
-**Env:**
-
-```
-AI_VOICE_ENGINE=azure
-MICROSOFT_COGNITIVE_SERVICES_API_KEY=...
-MICROSOFT_COGNITIVE_SERVICES_REGION=...
-# Optional:
-MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=...
-AI_VOICE_LANGUAGE=en-US
-```
-
-**Sanity check:**
-
-```python
-from ai_api_unified.ai_voice_factory import AIVoiceFactory
-v = AIVoiceFactory.get_voice_client()
-open("azure.wav","wb").write(v.text_to_speech("Azure TTS ready"))
-```
-
-**Why:** synthesizes a short WAV to confirm credentials and region.
-
----
-
-### ElevenLabs
-
-**Install:**
-`poetry add 'ai-api-unified[elevenlabs]'`
-
-**Env:**
-
-```
-AI_VOICE_ENGINE=elevenlabs
-ELEVEN_LABS_API_KEY=...
-# Optional: voice selection variables if supported
-```
-
-**Sanity check:**
-
-```python
-from ai_api_unified.ai_voice_factory import AIVoiceFactory
-v = AIVoiceFactory.get_voice_client()
-open("11labs.wav","wb").write(v.text_to_speech("Testing ElevenLabs"))
-```
-
-**Why:** produces short audio to verify API key wiring.
-
----
-
-## API Programming Guide
-
-**Design principle:** your code targets the **base interfaces**. Factories return provider-specific implementations based on env/config.
-
-### Factories & Clients
-
-Typical entry points (check your code for the authoritative signatures):
-
-```python
-from ai_api_unified.ai_factory import AIFactory
-from ai_api_unified.ai_base import AIBaseCompletions, AIBaseEmbeddings
-
-completions_client: AIBaseCompletions = AIFactory.get_ai_completions_client()
-embedding_client:  AIBaseEmbeddings  = AIFactory.get_ai_embedding_client()
-```
-
-**Why:** centralizes provider selection and keeps your business logic provider-agnostic.
-
-### Completions API
-
-Common methods exposed by the base layer:
-
-- `send_prompt(prompt: str, *, other_params: AICompletionsPromptParamsBase | None = None) -> str`
-- `strict_schema_prompt(prompt: str, response_model: type[AIStructuredPrompt], max_response_tokens: int = 512, *, other_params: AICompletionsPromptParamsBase | None = None) -> AIStructuredPrompt`
-
-**Free-form example:**
-
-```python
-resp: str = comp.send_prompt("Say hello in Spanish.")
-print(resp)
-```
-
-**Why:** simplest way to get text output across providers.
-
-Got it. Here’s a crisp, library-specific description that matches your code and explains the _point_ of the feature without fluff.
-
-# Structured Prompting (Schema-validated)
-
-**What it is:**
-A way to turn an LLM call into a **typed function**: you declare the expected output as a Pydantic model (subclassing `AIStructuredPrompt`), and the library enforces that the model returned by the LLM **conforms to your JSON schema** before you ever touch the data.
-
-**Why it exists:**
-
-- You get a **strong contract** for LLM outputs (types + required fields).
-- Your prompt logic, output schema, and runtime call live in **one place** you can unit-test.
-- It’s **provider-agnostic**: the same pattern works no matter which completions engine you select via env/config.
-
-**Creating a structured prompt, a Tutorial:**
-
-1. **Define a structured prompt type**
-   Example: `NameAgeCityStructuredPrompt(AIStructuredPrompt)` with:
-
-   - **Input field**: `input_text` (the raw text to extract from).
-   - **Output fields**: `name`, `age`, `city` (start as `None` and will be populated by the LLM if valid).
-
-2. **Build the natural-language prompt on the instance**
-
-   - `get_prompt(input_text: str) -> str` returns the instruction (“Extract the name, age, and city from the following text: …”).
-   - An `@model_validator(mode="after")` sets `self.prompt` from `get_prompt(...)` so the prompt is derived from the instance’s inputs and always stays in sync.
-
-3. **Declare the _output_ JSON schema**
-
-   - Override `model_json_schema()` to **describe only the LLM’s output** (not the inputs).
-   - Add `name` (string), `age` (integer), `city` (string) and mark them **required**.
-   - This schema is what the LLM is instructed to produce and what the library uses to validate the response.
-
-4. **Call the LLM through the base completions client**
-
-   - `structured_prompt.send_structured_prompt(ai_completions_client, NameAgeCityStructuredPrompt)` sends:
-
-     - the **prompt** (from step 2), and
-     - the **output schema** (from step 3).
-
-   - Under the hood, the client routes to the selected provider and requests **schema-conformant JSON**.
-
-5. **Validation & parsing**
-
-   - The raw LLM JSON is parsed and validated against your schema.
-   - On success, you get a **typed instance** of `NameAgeCityStructuredPrompt` with `name/age/city` populated.
-
-6. **Use the typed result**
-
-   - Access `structured_prompt_result.name`, `.age`, `.city` directly—no ad-hoc JSON handling.
-
-**What guarantees you get:**
-
-- If the model fails to provide the required fields or violates types (e.g., `age` isn’t an integer), the call **fails fast with a validation error**, rather than leaking malformed data into your pipeline.
-- The same schema + prompt pattern works across OpenAI/Gemini/Bedrock because it’s implemented in the **base completions interface**.
-
-**When to use it:**
-
-- Any time you need **extract-transform** style outputs (entities, classifications, records) you plan to store or forward.
-- Anywhere a downstream consumer expects **fields with types**, not free-form text.
-
-## Structured Prompt code sample
-
-```python
-from pydantic import BaseModel
-from ai_api_unified.ai_base import AIStructuredPrompt
-
-class NameAgeCityStructuredPrompt(AIStructuredPrompt):
-    """Example structured prompt for testing."""
-
+class ContactExtraction(AIStructuredPrompt):
     name: str | None = None
-    age: int | None = None
     city: str | None = None
-    input_text: str | None = None
-
-    @model_validator(mode="after")
-    def _populate_prompt(
-        self: "NameAgeCityStructuredPrompt", __: Any
-    ) -> "NameAgeCityStructuredPrompt":
-        object.__setattr__(
-            self,
-            "prompt",
-            self.get_prompt(input_text=self.input_text),
-        )
-        return self
 
     @staticmethod
-    def get_prompt(input_text: str) -> str:
-        prompt: str = textwrap.dedent(
-            f"""
-            Extract the name, age, and city from the following text:
-            {input_text}
-            """
-        ).strip()
-        return prompt
+    def get_prompt() -> str:
+        return "Extract the person's name and city from: Alice lives in Paris."
 
     @classmethod
     def model_json_schema(cls) -> dict[str, Any]:
-        """
-        JSON schema for the LLM’s *output* only.
-        """
-        # start with a fresh copy of the base schema (deep-copied there)
-        schema: dict[str, Any] = deepcopy(super().model_json_schema())
-        # add the output field
-        schema["properties"]["name"] = {"type": "string"}
-        schema["properties"]["age"] = {"type": "integer"}
-        schema["properties"]["city"] = {"type": "string"}
-        schema.setdefault("required", [])
-        schema["required"].append("name")
-        schema["required"].append("age")
-        schema["required"].append("city")
+        schema = deepcopy(super().model_json_schema())
+        schema["properties"] = {
+            "name": {"type": "string"},
+            "city": {"type": "string"},
+        }
+        schema["required"] = ["name", "city"]
         return schema
 
-def structured_prompt(ai_completions_client: AIBaseCompletions) -> None:
 
-    text: str = "My name is Alice, I am 30 years old, and I live in Paris."
+client = AIFactory.get_ai_completions_client()
 
-    structured_prompt = GenericStructuredPromptTest(input_text=text)
-    structured_prompt_result: GenericStructuredPromptTest = (
-        structured_prompt.send_structured_prompt(
-            ai_completions_client, GenericStructuredPromptTest
-        )
+try:
+    result = client.strict_schema_prompt(
+        prompt=ContactExtraction.get_prompt(),
+        response_model=ContactExtraction,
+        max_response_tokens=2048,
     )
-    print("\nAsking the LLM to extract name, age, and city from the following text:")
-    print(text)
-    print(f"\nName: {structured_prompt_result.name}")
-    print(f"Age: {structured_prompt_result.age}")
-    print(f"City: {structured_prompt_result.city}")
+    print(result.name, result.city)
+except StructuredResponseTokenLimitError as exc:
+    print(exc)
 ```
 
-**Why:** requests a structured response that can be safely parsed and validated.
+Key behavior:
 
-### Embeddings API
+- structured prompts are provider-agnostic at the call site
+- the library validates the response against your output schema
+- undersized or truncated structured responses raise `StructuredResponseTokenLimitError`
 
-Common methods:
+`AIStructuredPrompt.send_structured_prompt(...)` is also available when you want the prompt to live on the model instance itself.
 
-- `generate_embeddings(text: str) -> dict[str, object]`
-- `generate_embeddings_batch(texts: list[str]) -> list[dict[str, object]]`
+## Testing
 
-**Example:**
+Regular test run:
 
-```python
-r = emb.generate_embeddings("The quick brown fox")
-vec = r.get("embedding")
-print(type(vec), len(vec) if vec else None)
+```bash
+poetry run pytest -m "not nonmock"
 ```
 
-**Why:** produces vectors for retrieval, clustering, or similarity search.
+Live provider tests:
 
-> **Similarity score:** if your project computes similarity, install the `similarity_score` extra. Use your existing utilities or the project’s examples to compute scores; do **not** re-implement here.
-
-### Voice API
-
-**TTS example:**
-
-```python
-audio = voice.text_to_speech("Unified voice makes provider swaps trivial")
-open("voice.wav","wb").write(audio)
+```bash
+poetry run pytest -m nonmock -s -vv
 ```
 
-**Why:** the same call works across voice providers chosen via env.
+Notes for live tests:
 
-### Structured Prompts
+- install the matching provider extras first
+- configure credentials in `.env`
+- some tests may skip when a provider account lacks quota, a paid image tier, or an enabled cloud service
 
-- Define a Pydantic model that represents the desired output.
-- Call `strict_schema_prompt(...)` with `response_model=YourModel`.
-- Handle validation errors as you would in any Pydantic workflow.
+## Release and PyPI Publishing
 
-**Why:** consistent structured outputs across providers.
+The OSS repository publishes to public PyPI only.
 
-### Token Counting & Cost Hints
+Before publishing:
 
-The base layer includes token counting utilities and model metadata (context limits, price hints) so you can size prompts safely and estimate costs. Use these to enforce guardrails before sending requests.
+1. Bump the version in `pyproject.toml`.
+2. Bump the version in `src/ai_api_unified/__version__.py`.
+3. Ensure the working tree is clean.
+4. Ensure your PyPI token is configured for Poetry.
 
----
+Publish with the checked-in script:
 
-## Advanced Topics
-
-### Retries & Backoff
-
-- Transient errors (rate limits, 5xx, network) are retried with exponential backoff.
-- Configure attempt counts and backoff intervals via env or constructor knobs exposed by your concrete clients.
-
-**Why:** smooths over brief provider outages without complicating call sites.
-
----
-
-## Class Flow Diagram
-
-```mermaid
-flowchart LR
-  subgraph App Code
-    Caller[Your app code]
-  end
-
-  subgraph Unified Library
-    AF[AIFactory] --> IFace[Base interfaces<br>Completions, Embeddings,  Voice]
-    IFace --> OA[OpenAI completions client]
-    IFace --> OAE[OpenAI embeddings client]
-    IFace --> OAV[OpenAI TTS client]
-    IFace --> GG[Google Gemini completions client]
-    IFace --> GGE[Google Gemini embeddings client]
-    IFace --> GGV[Google Gemini TTS client]
-    IFace --> AB[AWS Bedrock completions client]
-    IFace --> ABE[AWS Bedrock Titan embeddings client]
-    IFace --> AZ[Azure TTS client]
-    IFace --> ELV[ElevenLabs TTS client]
-  end
-
-  Caller --> AF
+```bash
+./publish.sh
 ```
 
-_Why this matters:_ shows the provider swap enabled by configuration while your app stays focused on base interfaces.
+The script:
 
----
+- checks for uncommitted changes
+- confirms the version
+- removes old build artifacts
+- runs `poetry publish --build`
 
-## Repository Layout, Tests, Examples
+After publishing, tag and push the release:
 
-- Explore tests for runnable patterns (completions, embeddings, voice).
-- Local dev: `poetry install --with dev` → `pytest -q`.
-
-**Why:** tests double as examples and guard against regressions.
-
----
+```bash
+git tag v<version>
+git push origin v<version>
+```
 
 ## Troubleshooting
 
-- **Credential issues:** verify env vars and scope; ensure files (e.g., `GOOGLE_APPLICATION_CREDENTIALS`) are mounted in containerized deployments. GCP requires a local json file so if you have creds stored in a secrets manager you will need to
-  save this to a temp file and point your config at that filename.
+- `COMPLETIONS_ENGINE must be configured explicitly` or similar: set the required engine selector for that capability.
+- `AiProviderDependencyUnavailableError`: install the extra for the selected provider.
+- Google auth errors: the OSS default is `GOOGLE_AUTH_METHOD=api_key`. If you switch to `service_account`, make sure `GOOGLE_APPLICATION_CREDENTIALS` points to a valid local JSON credential file and set `GOOGLE_PROJECT_ID` and `GOOGLE_LOCATION` when required.
+- Unexpected embeddings dimensions: leave `EMBEDDING_DIMENSIONS` unset unless you intentionally want a non-default size.
+- Google image generation or TTS failures in live tests can reflect account/service state rather than library bugs, for example a disabled cloud API or missing paid-plan access.
+- `AI_API_GEO_RESIDENCY=US` is a best-effort routing hint. Only providers that expose regional routing controls can honor it directly.
 
----
+## License
 
-## Publishing
-
-To publish a new version to PyPI, follow these steps:
-
-1. **Configure Poetry Auth (One-time setup):**
-   Ensure Poetry is configured with your PyPI API token:
-   ```bash
-   poetry config pypi-token.pypi <your-pypi-token>
-   ```
-
-2. **Bump the Version:**
-   Update the version number to the new release version in both:
-   - `pyproject.toml` (e.g., `version = "1.0.2"`)
-   - `src/ai_api_unified/__version__.py`
-
-3. **Run the Publish Script:**
-   Execute the included bash script. It will verify that your git working tree is clean, ask for confirmation of the version, clean out old build artifacts, and publish the new version via Poetry.
-   ```bash
-   ./publish.sh
-   ```
-
-4. **Tag the Release:**
-   After a successful publish, it is strongly recommended to tag the release in git:
-   ```bash
-   git tag v1.0.2
-   git push origin v1.0.2
-   ```
-
-## Versioning & License
-
-- Semantic versioning.
-- License as specified in the repository.
-
+This project is released under the MIT License.

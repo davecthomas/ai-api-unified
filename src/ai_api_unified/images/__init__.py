@@ -1,21 +1,11 @@
-# src/ai_api_unified/images/__init__.py
+"""
+Image generation provider package.
+
+This module intentionally does not re-export concrete provider classes. Import
+provider implementations directly from their module files, or use `AIFactory`
+for runtime provider selection.
+"""
+
 from __future__ import annotations
 
-from .ai_openai_images import AIOpenAIImages
-
-__all__: list[str] = [
-    "AIOpenAIImages",
-]
-
-# ----- Optional providers (import if available; otherwise skip) -----
-
-has_bedrock: bool = False
-try:
-    from .ai_bedrock_images import AINovaCanvasImages
-
-    has_bedrock = True
-except ImportError:
-    pass
-
-if has_bedrock:
-    __all__.append("AINovaCanvasImages")
+__all__: list[str] = []

@@ -2,6 +2,7 @@ from __future__ import (
     annotations,
 )  # Postpone evaluation of type hints to avoid circular imports and allow forward references with | None
 
+import socket
 import textwrap
 from copy import deepcopy
 from typing import Any
@@ -16,6 +17,34 @@ from ai_api_unified.ai_base import (
     AIStructuredPrompt,
 )
 from ai_api_unified.ai_factory import AIFactory
+from ai_api_unified.ai_provider_exceptions import (
+    AiProviderDependencyUnavailableError,
+)
+
+pytestmark = pytest.mark.nonmock
+EXPLICIT_MAX_RESPONSE_TOKENS: int = 2048
+GOOGLE_GEMINI_HOSTNAME: str = "generativelanguage.googleapis.com"
+
+
+def _skip_if_google_dns_unavailable(aiprovider: str) -> None:
+    """Skip Google live tests quickly when provider DNS is unavailable."""
+    if aiprovider not in {"google-gemini", "google"}:
+        return
+    try:
+        socket.getaddrinfo(GOOGLE_GEMINI_HOSTNAME, 443)
+    except OSError as exception:
+        pytest.skip(
+            f"Skipping Google completions test because DNS is unavailable for {GOOGLE_GEMINI_HOSTNAME}: {exception}"
+        )
+
+
+def _skip_if_google_quota_exhausted(exception: Exception) -> None:
+    """Skip live Gemini tests when the current API key has exhausted its quota."""
+    message: str = str(exception)
+    if "RESOURCE_EXHAUSTED" in message or "quota exceeded" in message.lower():
+        pytest.skip(
+            "Skipping Google Gemini nonmock test because the current API key quota is exhausted."
+        )
 
 
 class ExampleStructuredPrompt(AIStructuredPrompt):
@@ -71,49 +100,90 @@ class ExampleStructuredPrompt(AIStructuredPrompt):
 
 
 @pytest.fixture
-def embedding_client() -> AIBaseEmbeddings:
+def embedding_client(aiprovider: str, embedmodel: str) -> AIBaseEmbeddings:
     """
     Returns an embeddings client for testing.
     """
-    return AIFactory.get_ai_embedding_client()
+    _skip_if_google_dns_unavailable(aiprovider)
+    try:
+        return AIFactory.get_ai_embedding_client(
+            embedding_engine=aiprovider,
+            model_name=embedmodel,
+        )
+    except AiProviderDependencyUnavailableError as exception:
+        pytest.skip(f"Skipping embeddings test due to missing dependency: {exception}")
 
 
 @pytest.fixture
-def completion_client_simple() -> AIBaseCompletions:
+def completion_client_simple(aiprovider: str, llmmodel: str) -> AIBaseCompletions:
     """
     Returns a completions client for testing.
     """
-    return AIFactory.get_ai_completions_client()
+    _skip_if_google_dns_unavailable(aiprovider)
+    try:
+        return AIFactory.get_ai_completions_client(
+            completions_engine=aiprovider,
+            model_name=llmmodel,
+        )
+    except AiProviderDependencyUnavailableError as exception:
+        pytest.skip(f"Skipping completions test due to missing dependency: {exception}")
 
 
 @pytest.fixture
-def completion_client() -> AIBaseCompletions:
+def completion_client(aiprovider: str, llmmodel: str) -> AIBaseCompletions:
     """
     Returns a completions client for testing.
     """
-    return AIFactory.get_ai_completions_client()
+    _skip_if_google_dns_unavailable(aiprovider)
+    try:
+        return AIFactory.get_ai_completions_client(
+            completions_engine=aiprovider,
+            model_name=llmmodel,
+        )
+    except AiProviderDependencyUnavailableError as exception:
+        pytest.skip(f"Skipping completions test due to missing dependency: {exception}")
 
 
-def test_send_prompt(completion_client: AIBaseCompletions) -> None:
+def test_send_prompt(
+    completion_client: AIBaseCompletions,
+    aiprovider: str,
+) -> None:
     """
     The completion client should uppercase the input string.
     """
     input_message = "hello"
-    response = completion_client.send_prompt(input_message)
+    try:
+        response = completion_client.send_prompt(input_message)
+    except RuntimeError as exception:
+        if aiprovider in {"google-gemini", "google"}:
+            _skip_if_google_quota_exhausted(exception)
+        raise
     assert response != ""
 
 
-def test_structured_prompt(completion_client: AIBaseCompletions) -> None:
+def test_structured_prompt(
+    completion_client: AIBaseCompletions,
+    aiprovider: str,
+) -> None:
     """
     Sending a structured prompt should return an instance of ExampleStructuredPrompt
     with its `test_output` set to the uppercased prompt.
     """
     structured_prompt = ExampleStructuredPrompt(message_input="hello")
-    structured_prompt_result: ExampleStructuredPrompt = (
-        structured_prompt.send_structured_prompt(
-            completion_client, ExampleStructuredPrompt
+    try:
+        structured_prompt_result: ExampleStructuredPrompt = (
+            structured_prompt.send_structured_prompt(
+                completion_client, ExampleStructuredPrompt
+            )
         )
-    )
+    except RuntimeError as exception:
+        if aiprovider in {"google-gemini", "google"}:
+            _skip_if_google_quota_exhausted(exception)
+        raise
+    if structured_prompt_result is None and aiprovider in {"google-gemini", "google"}:
+        pytest.skip(
+            "Skipping Google Gemini structured nonmock test because the provider did not return a structured result."
+        )
 
     assert isinstance(structured_prompt_result, ExampleStructuredPrompt)
     # The `message` attribute comes from AIStructuredPrompt; it should equal prompt.prompt.upper()
@@ -122,7 +192,40 @@ def test_structured_prompt(completion_client: AIBaseCompletions) -> None:
     )
 
 
-def test_system_prompt_override(completion_client: AIBaseCompletions) -> None:
+def test_structured_prompt_with_max_response_tokens(
+    completion_client: AIBaseCompletions,
+    aiprovider: str,
+) -> None:
+    """
+    Sending a structured prompt with an explicit token cap should still return a
+    valid structured response.
+    """
+    structured_prompt: ExampleStructuredPrompt = ExampleStructuredPrompt(
+        message_input="hello"
+    )
+    try:
+        structured_prompt_result: ExampleStructuredPrompt = (
+            completion_client.strict_schema_prompt(
+                structured_prompt.prompt,
+                ExampleStructuredPrompt,
+                max_response_tokens=EXPLICIT_MAX_RESPONSE_TOKENS,
+            )
+        )
+    except RuntimeError as exception:
+        if aiprovider in {"google-gemini", "google"}:
+            _skip_if_google_quota_exhausted(exception)
+        raise
+
+    assert isinstance(structured_prompt_result, ExampleStructuredPrompt)
+    assert (
+        structured_prompt_result.test_output == structured_prompt.message_input.upper()
+    )
+
+
+def test_system_prompt_override(
+    completion_client: AIBaseCompletions,
+    aiprovider: str,
+) -> None:
     """
     Verifies that providing a custom system prompt influences the request payload.
     """
@@ -136,9 +239,14 @@ def test_system_prompt_override(completion_client: AIBaseCompletions) -> None:
         system_prompt=system_prompt
     )
 
-    response: str = completion_client.send_prompt(
-        prompt_text,
-        other_params=params,
-    )
+    try:
+        response: str = completion_client.send_prompt(
+            prompt_text,
+            other_params=params,
+        )
+    except RuntimeError as exception:
+        if aiprovider in {"google-gemini", "google"}:
+            _skip_if_google_quota_exhausted(exception)
+        raise
 
     assert response == "STATUS: acknowledged."

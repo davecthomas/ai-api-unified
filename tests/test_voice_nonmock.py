@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import os
+import socket
 
 import pytest
 
+from ai_api_unified.ai_provider_exceptions import (
+    AiProviderDependencyUnavailableError,
+)
 # Import interfaces for type hints
 from ai_api_unified.voice import (
     AIVoiceBase,
@@ -13,9 +17,42 @@ from ai_api_unified.voice import (
     AudioFormat,
 )
 
+VOICE_ENGINE_BY_PROVIDER: dict[str, str] = {
+    "openai": "openai",
+    "google-gemini": "google",
+    "google": "google",
+    "azure": "azure",
+    "elevenlabs": "elevenlabs",
+}
+GOOGLE_TTS_HOSTNAME: str = "texttospeech.googleapis.com"
+
+
+def _skip_if_dns_unavailable(hostname: str) -> None:
+    """Skip live provider tests quickly when DNS/network prerequisites are unavailable."""
+    try:
+        socket.getaddrinfo(hostname, 443)
+    except OSError as exception:
+        pytest.skip(f"Skipping: DNS unavailable for {hostname}: {exception}")
+
+
+def _skip_if_google_tts_service_unavailable(exception: Exception) -> None:
+    """Skip live Google TTS tests when the backing Cloud TTS service is disabled."""
+    message: str = str(exception)
+    if (
+        "texttospeech.googleapis.com" in message
+        or "Cloud Text-to-Speech API has not been used" in message
+        or "SERVICE_DISABLED" in message
+    ):
+        pytest.skip(
+            "Skipping Google voice nonmock test because Cloud Text-to-Speech is disabled for the current project."
+        )
+
 
 @pytest.mark.nonmock
-def test_voice_nonmock(aiprovider: str | None) -> None:
+def test_voice_nonmock(
+    aiprovider: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Live TTS test:
     1) Build a voice client via the factory
@@ -23,7 +60,38 @@ def test_voice_nonmock(aiprovider: str | None) -> None:
     3) Play the audio (no-op in Hex env; local pydub backend otherwise)
     4) Assert basic invariants so the test is meaningful
     """
-    ai_voice_client: AIVoiceBase = AIVoiceFactory.create()
+    if not aiprovider:
+        pytest.skip("Skipping voice test because no provider was supplied.")
+
+    voice_engine: str | None = VOICE_ENGINE_BY_PROVIDER.get(aiprovider)
+    if voice_engine is None:
+        pytest.skip(f"Skipping voice test for unsupported provider: {aiprovider}")
+
+    monkeypatch.setenv("AI_VOICE_ENGINE", voice_engine)
+    if voice_engine == "openai" and not os.environ.get("OPENAI_API_KEY"):
+        pytest.skip("Skipping voice test because OPENAI_API_KEY is not set.")
+    if voice_engine == "google" and not os.environ.get("GOOGLE_GEMINI_API_KEY"):
+        pytest.skip(
+            "Skipping voice test because GOOGLE_GEMINI_API_KEY is not set."
+        )
+    if voice_engine == "google":
+        _skip_if_dns_unavailable(GOOGLE_TTS_HOSTNAME)
+        monkeypatch.setenv("GOOGLE_AUTH_METHOD", "api_key")
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    if voice_engine == "azure" and not (
+        os.environ.get("MICROSOFT_COGNITIVE_SERVICES_API_KEY")
+        and os.environ.get("MICROSOFT_COGNITIVE_SERVICES_REGION")
+    ):
+        pytest.skip(
+            "Skipping voice test because Azure speech credentials are not fully configured."
+        )
+    if voice_engine == "elevenlabs" and not os.environ.get("ELEVEN_LABS_API_KEY"):
+        pytest.skip("Skipping voice test because ELEVEN_LABS_API_KEY is not set.")
+
+    try:
+        ai_voice_client: AIVoiceBase = AIVoiceFactory.create()
+    except AiProviderDependencyUnavailableError as exception:
+        pytest.skip(f"Skipping voice test due to missing dependency: {exception}")
 
     list_available_voices: list[AIVoiceSelectionBase] = (
         ai_voice_client.get_available_voices()
@@ -54,13 +122,18 @@ def test_voice_nonmock(aiprovider: str | None) -> None:
             audio_format = list_output_formats[0]
         else:
             raise AssertionError("No audio formats available from provider")
+    selected_audio_format: AudioFormat = audio_format
 
     test_text: str = "my dog has cute ears!"
-    audio_bytes: bytes = ai_voice_client.text_to_voice(
-        text_to_convert=test_text,
-        voice=voice,
-        audio_format=audio_format,  # type: ignore[arg-type]
-    )
+    try:
+        audio_bytes: bytes = ai_voice_client.text_to_voice(
+            text_to_convert=test_text,
+            voice=voice,
+            audio_format=selected_audio_format,
+        )
+    except RuntimeError as exception:
+        _skip_if_google_tts_service_unavailable(exception)
+        raise
 
     assert isinstance(audio_bytes, (bytes, bytearray))
     assert len(audio_bytes) > 256, "Audio output is unexpectedly small"
@@ -82,11 +155,15 @@ def test_voice_nonmock(aiprovider: str | None) -> None:
         voice_deprecated: AIVoiceSelectionBase = ai_voice_client.get_voice(
             voice_id="en-US • Chirp3-HD • Orus"
         )
-        audio_bytes: bytes = ai_voice_client.text_to_voice(
-            text_to_convert=test_text2,
-            voice=voice_deprecated,
-            audio_format=audio_format,  # type: ignore[arg-type]
-        )
+        try:
+            audio_bytes = ai_voice_client.text_to_voice(
+                text_to_convert=test_text2,
+                voice=voice_deprecated,
+                audio_format=selected_audio_format,
+            )
+        except RuntimeError as exception:
+            _skip_if_google_tts_service_unavailable(exception)
+            raise
 
         assert isinstance(audio_bytes, (bytes, bytearray))
         assert len(audio_bytes) > 256, "Audio output is unexpectedly small"
@@ -106,23 +183,31 @@ def test_voice_nonmock(aiprovider: str | None) -> None:
         voice_deprecated: AIVoiceSelectionBase = ai_voice_client.get_voice(
             voice_id="es-MX • Chirp3-HD • Orus"
         )
-        audio_bytes: bytes = ai_voice_client.text_to_voice(
-            text_to_convert=test_text2,
-            voice=voice_deprecated,
-            audio_format=audio_format,  # type: ignore[arg-type]
-        )
+        try:
+            audio_bytes = ai_voice_client.text_to_voice(
+                text_to_convert=test_text2,
+                voice=voice_deprecated,
+                audio_format=selected_audio_format,
+            )
+        except RuntimeError as exception:
+            _skip_if_google_tts_service_unavailable(exception)
+            raise
 
         assert isinstance(audio_bytes, (bytes, bytearray))
         assert len(audio_bytes) > 256, "Audio output is unexpectedly small"
         ai_voice_client.play(audio_bytes)
 
         # Testing ability to use deprecated voice format with emotion prompt
-        audio_bytes: bytes = ai_voice_client.text_to_voice_with_emotion_prompt(
-            emotion_prompt="Spoken sardonically and sarcastically",
-            text_to_convert=test_text2,
-            voice=voice_deprecated,
-            audio_format=audio_format,  # type: ignore[arg-type]
-        )
+        try:
+            audio_bytes = ai_voice_client.text_to_voice_with_emotion_prompt(
+                emotion_prompt="Spoken sardonically and sarcastically",
+                text_to_convert=test_text2,
+                voice=voice_deprecated,
+                audio_format=selected_audio_format,
+            )
+        except RuntimeError as exception:
+            _skip_if_google_tts_service_unavailable(exception)
+            raise
 
         assert isinstance(audio_bytes, (bytes, bytearray))
         assert len(audio_bytes) > 256, "Audio output is unexpectedly small"
@@ -134,11 +219,15 @@ def test_voice_nonmock(aiprovider: str | None) -> None:
             voice_id="Orus", locale="es-MX"
         )
         test_text_es: str = "¡Mi perro tiene orejas lindas!"
-        audio_bytes: bytes = ai_voice_client.text_to_voice(
-            text_to_convert=test_text_es,
-            voice=voice_es,
-            audio_format=audio_format,  # type: ignore[arg-type]
-        )
+        try:
+            audio_bytes = ai_voice_client.text_to_voice(
+                text_to_convert=test_text_es,
+                voice=voice_es,
+                audio_format=selected_audio_format,
+            )
+        except RuntimeError as exception:
+            _skip_if_google_tts_service_unavailable(exception)
+            raise
 
         assert isinstance(audio_bytes, (bytes, bytearray))
         assert len(audio_bytes) > 256, "Audio output is unexpectedly small"
@@ -154,14 +243,18 @@ def test_voice_nonmock(aiprovider: str | None) -> None:
         ai_voice_client.play(audio_bytes)
         # ai_voice_client.save_generated_audio(audio_bytes, "test_voice_nonmock.wav")
 
-        audio_bytes2: bytes = ai_voice_client.text_to_voice_with_emotion_prompt(
-            emotion_prompt="Spoken sardonically and sarcastically",
-            text_to_convert="Oh sí, [laughs dryly], "
-            + test_text_es
-            + " Si eso dices. [sighs dramatically]",
-            voice=voice_es,
-            audio_format=audio_format,
-        )
+        try:
+            audio_bytes2: bytes = ai_voice_client.text_to_voice_with_emotion_prompt(
+                emotion_prompt="Spoken sardonically and sarcastically",
+                text_to_convert="Oh sí, [laughs dryly], "
+                + test_text_es
+                + " Si eso dices. [sighs dramatically]",
+                voice=voice_es,
+                audio_format=selected_audio_format,
+            )
+        except RuntimeError as exception:
+            _skip_if_google_tts_service_unavailable(exception)
+            raise
         assert isinstance(audio_bytes2, (bytes, bytearray))
         assert len(audio_bytes2) > 256, "Audio output is unexpectedly small"
         ai_voice_client.play(audio_bytes2)
@@ -173,7 +266,7 @@ def test_voice_nonmock(aiprovider: str | None) -> None:
             + test_text
             + " If you say so. [sighs dramatically]",
             voice=voice,
-            audio_format=audio_format,
+            audio_format=selected_audio_format,
         )
         assert isinstance(audio_bytes2, (bytes, bytearray))
         assert len(audio_bytes2) > 256, "Audio output is unexpectedly small"

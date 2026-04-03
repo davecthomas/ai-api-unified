@@ -1,11 +1,11 @@
-# utils.py
-import os
 import logging
 from typing import Any
 
+from .env_settings import EnvSettings
+
 has_numpy: bool = False
 try:
-    import numpy as np  # type: ignore[import]
+    import numpy as np
 
     has_numpy = True
 except ImportError:
@@ -70,8 +70,8 @@ def similarity_score(embedding1: dict[str, Any], embedding2: dict[str, Any]) -> 
 def is_hex_enabled() -> bool:
     """Check if the we are running in Hex or not based on an environment variable."""
 
-    # check for boolean env var
-    return os.getenv("IS_HEX_ENABLED", "false").lower() in (
+    value: Any = EnvSettings().get_setting("IS_HEX_ENABLED", "false")
+    return str(value).lower() in (
         "1",
         "true",
         "yes",

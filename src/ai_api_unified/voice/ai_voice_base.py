@@ -2,22 +2,41 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from io import BytesIO
 from itertools import islice
 import logging
 from pathlib import Path
 import re
 import struct
+from types import MappingProxyType
+import uuid
 from time import sleep
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from ai_api_unified.middleware.observability import (
+    AiApiObservabilityMiddleware,
+    get_observability_middleware,
+)
+from ai_api_unified.middleware.observability_runtime import (
+    AiApiCallContextModel,
+    AiApiCallResultSummaryModel,
+    OBSERVABILITY_DIRECTION_INPUT,
+    ObservabilityMetadataValue,
+    TOKEN_COUNT_SOURCE_NONE,
+    execute_observed_call,
+    get_observability_context,
+    resolve_originating_caller,
+)
 from ai_api_unified.util._lazy_pydub import AudioSegment, play
 
 from .audio_models import AudioFormat
 from ..util.utils import is_hex_enabled
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -38,7 +57,7 @@ class AIVoiceSelectionBase(BaseModel):
         description="Gender of the voice, e.g. 'male', 'female', 'neutral'",
     )
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ConfigDict = ConfigDict(frozen=True, extra="forbid")
 
     def as_tuple(self) -> tuple[str, str]:
         """Return ``(voice_id, voice_name)`` for convenience."""
@@ -55,13 +74,13 @@ class AIVoiceSelectionBase(BaseModel):
 
 class AIVoiceCapabilities(BaseModel):
     supports_ssml: bool = Field(
-        default=False, description="Whether the TTS implementation supports SSML."
+        False, description="Whether the TTS implementation supports SSML."
     )
     supports_streaming: bool = Field(
-        default=False, description="Whether the TTS implementation supports streaming audio."
+        False, description="Whether the TTS implementation supports streaming audio."
     )
     supports_speech_to_text: bool = Field(
-        default=False, description="Whether the TTS implementation supports built-in STT."
+        False, description="Whether the TTS implementation supports built-in STT."
     )
 
     # ───── Additional capabilities ─────
@@ -77,28 +96,28 @@ class AIVoiceCapabilities(BaseModel):
         default_factory=list, description="See AudioFormat"
     )
     supports_custom_voice: bool = Field(
-        default=False, description="Whether you can train or clone custom voices."
+        False, description="Whether you can train or clone custom voices."
     )
     supports_emotion_control: bool = Field(
-        default=False, description="Whether you can tweak emotion/style markers."
+        False, description="Whether you can tweak emotion/style markers."
     )
     supports_prosody_settings: bool = Field(
-        default=False, description="Tune pitch/rate/volume via API parameters."
+        False, description="Tune pitch/rate/volume via API parameters."
     )
     supports_viseme_events: bool = Field(
-        default=False, description="Emit viseme (lip-sync) timing data."
+        False, description="Emit viseme (lip-sync) timing data."
     )
     supports_word_timestamps: bool = Field(
-        default=False, description="Return word-level time offsets in the audio."
+        False, description="Return word-level time offsets in the audio."
     )
     supports_batch_synthesis: bool = Field(
-        default=False, description="Asynchronous long-form (batch) TTS for audiobooks, etc."
+        False, description="Asynchronous long-form (batch) TTS for audiobooks, etc."
     )
     supports_pronunciation_lexicon: bool = Field(
-        default=False, description="Upload or reference custom lexicons for pronunciation."
+        False, description="Upload or reference custom lexicons for pronunciation."
     )
     supports_audio_profiles: bool = Field(
-        default=False,
+        False,
         description="Vendor-provided audio profiles (e.g. telephone vs headphone).",
     )
     min_speaking_rate: float | None = Field(
@@ -130,12 +149,56 @@ class AIVoiceModelBase(BaseModel):
     )
 
 
+@dataclass(frozen=True)
+class AiApiObservedTtsResultModel:
+    """
+    Stores one TTS-provider result alongside metadata needed for observability emission.
+
+    Args:
+        return_value: Caller-facing audio bytes produced by the provider path.
+        output_audio_byte_count: Total number of bytes returned to the caller.
+        dict_metadata: Additional scalar metadata derived from the provider path.
+
+    Returns:
+        Immutable container used to build metadata-only observability output summaries.
+    """
+
+    return_value: bytes
+    output_audio_byte_count: int
+    dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(
+        default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        """
+        Freezes caller-supplied metadata so the observed TTS result remains effectively immutable.
+
+        Args:
+            None
+
+        Returns:
+            None after metadata has been copied and wrapped in an immutable mapping.
+        """
+        frozen_metadata: Mapping[str, ObservabilityMetadataValue] = MappingProxyType(
+            dict(self.dict_metadata)
+        )
+        object.__setattr__(self, "dict_metadata", frozen_metadata)
+        # Normal return after replacing metadata with an immutable mapping copy.
+        return None
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Vendor-agnostic TTS interface
 # ──────────────────────────────────────────────────────────────────────────────
 class AIVoiceBase(BaseModel, ABC):
     """Vendor-agnostic AI Voice interface."""
 
+    OBSERVABILITY_CAPABILITY_TTS: ClassVar[str] = "tts"
+    PROVIDER_VENDOR_OPENAI: ClassVar[str] = "openai"
+    PROVIDER_VENDOR_GOOGLE: ClassVar[str] = "google"
+    PROVIDER_VENDOR_AZURE: ClassVar[str] = "azure"
+    PROVIDER_VENDOR_ELEVENLABS: ClassVar[str] = "elevenlabs"
+    PROVIDER_ENGINE_GOOGLE_GEMINI: ClassVar[str] = "google-gemini"
     MIN_SPEED: ClassVar[float] = 0.5
     MAX_SPEED: ClassVar[float] = 2.0
     _MP3_SAMPLE_RATE_HZ: ClassVar[int] = 24_000
@@ -166,7 +229,7 @@ class AIVoiceBase(BaseModel, ABC):
         description="Name of the TTS engine, e.g. 'elevenlabs', 'google', etc.",
     )
     # ─── required class overrides ───
-    client: AIVoiceBase | None = Field(
+    client: AIVoiceBase = Field(
         default=None, description="Vendor-specific client instance."
     )
     list_output_formats: list[AudioFormat] = Field(
@@ -178,7 +241,7 @@ class AIVoiceBase(BaseModel, ABC):
         description="Default audio output format (must override in subclass).",
     )
     common_vendor_capabilities: AIVoiceCapabilities = Field(
-        default_factory=lambda: AIVoiceCapabilities(),
+        default_factory=AIVoiceCapabilities,
         description="Capabilities of the TTS implementation.",
     )
 
@@ -196,9 +259,284 @@ class AIVoiceBase(BaseModel, ABC):
 
     #: cached list of every vendor voice
     list_available_voices: list[AIVoiceSelectionBase] = Field(default_factory=list)
+    _observability_middleware: AiApiObservabilityMiddleware | None = PrivateAttr(
+        default=None
+    )
 
     # Pydantic V2 config
     model_config = {"arbitrary_types_allowed": True}
+
+    def _get_observability_middleware(self) -> AiApiObservabilityMiddleware:
+        """
+        Returns the effective observability middleware instance for this voice client.
+
+        Args:
+            None
+
+        Returns:
+            Effective observability middleware instance, lazily initialized when first needed.
+        """
+        if self._observability_middleware is None:
+            self._observability_middleware = get_observability_middleware()
+        # Normal return with the lazily initialized observability middleware instance.
+        return self._observability_middleware
+
+    def _build_observability_call_context(
+        self,
+        *,
+        operation: str,
+        dict_metadata: dict[str, ObservabilityMetadataValue] | None = None,
+        legacy_caller_id: str | None = None,
+    ) -> AiApiCallContextModel:
+        """
+        Builds the immutable shared call-context object for one voice provider call sequence.
+
+        Args:
+            operation: Public operation name such as `text_to_voice` or `stream_audio`.
+            dict_metadata: Optional scalar metadata describing the request side of the call.
+            legacy_caller_id: Optional explicit legacy caller hint supplied by existing config.
+
+        Returns:
+            AiApiCallContextModel containing shared metadata for input, output, and error events.
+        """
+        observability_context = get_observability_context()
+        resolved_caller_id, caller_id_source = resolve_originating_caller(
+            legacy_caller_id=legacy_caller_id
+        )
+        dict_context_metadata: dict[str, ObservabilityMetadataValue] = dict(
+            dict_metadata or {}
+        )
+        if observability_context.session_id is not None:
+            dict_context_metadata["session_id"] = observability_context.session_id
+        if observability_context.workflow_id is not None:
+            dict_context_metadata["workflow_id"] = observability_context.workflow_id
+        model_name: str | None = self._resolve_observability_model_name()
+        ai_api_call_context: AiApiCallContextModel = AiApiCallContextModel(
+            call_id=str(uuid.uuid4()),
+            event_time_utc=self._get_observability_event_time_utc(),
+            capability=self.OBSERVABILITY_CAPABILITY_TTS,
+            operation=operation,
+            provider_vendor=self._resolve_observability_provider_vendor(),
+            provider_engine=self._resolve_observability_provider_engine(),
+            model_name=model_name,
+            model_version=model_name,
+            direction=OBSERVABILITY_DIRECTION_INPUT,
+            originating_caller_id=resolved_caller_id,
+            originating_caller_id_source=caller_id_source,
+            dict_metadata=dict_context_metadata,
+        )
+        # Normal return with immutable voice provider call metadata.
+        return ai_api_call_context
+
+    def _execute_voice_call_with_observability(
+        self,
+        *,
+        operation: str,
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] | None,
+        callable_execute: Callable[[], bytes],
+        callable_build_result_summary: Callable[
+            [bytes, float], AiApiCallResultSummaryModel
+        ],
+        legacy_caller_id: str | None = None,
+    ) -> bytes:
+        """
+        Wraps one voice provider call with shared observability lifecycle helpers when enabled.
+
+        Args:
+            operation: Public operation name such as `text_to_voice` or `stream_audio`.
+            dict_input_metadata: Optional scalar request metadata safe for input-event logs.
+            callable_execute: Zero-argument callable that performs the provider call.
+            callable_build_result_summary: Callable that summarizes provider output and elapsed time.
+            legacy_caller_id: Optional explicit legacy caller hint supplied by existing config.
+
+        Returns:
+            Original provider byte payload from `callable_execute`.
+        """
+        observability_middleware: AiApiObservabilityMiddleware = (
+            self._get_observability_middleware()
+        )
+        audio_bytes: bytes = execute_observed_call(
+            observability_middleware=observability_middleware,
+            callable_build_call_context=lambda: self._build_observability_call_context(
+                operation=operation,
+                dict_metadata=dict_input_metadata,
+                legacy_caller_id=legacy_caller_id,
+            ),
+            callable_execute=callable_execute,
+            callable_build_result_summary=callable_build_result_summary,
+        )
+        # Normal return with the original provider byte payload after optional observability wrapping.
+        return audio_bytes
+
+    def _build_tts_observability_input_metadata(
+        self,
+        *,
+        text_to_convert: str,
+        voice: AIVoiceSelectionBase | None,
+        audio_format: AudioFormat | None,
+        speaking_rate: float,
+        use_ssml: bool,
+        bool_is_streaming: bool,
+        emotion_prompt: str | None = None,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only input fields for one TTS provider call.
+
+        Args:
+            text_to_convert: Sanitized text that will be synthesized by the provider.
+            voice: Resolved voice selection used for the provider call when known.
+            audio_format: Resolved caller-facing audio format when known.
+            speaking_rate: Requested speaking-rate multiplier supplied to the provider path.
+            use_ssml: True when the provider call uses SSML input.
+            bool_is_streaming: True when the public API surface is the streaming variant.
+            emotion_prompt: Optional emotion or style prompt supplied by the caller.
+
+        Returns:
+            Dictionary of metadata-only input fields safe for observability logging.
+        """
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = {
+            "input_text_char_count": len(text_to_convert),
+            "streaming_mode": bool_is_streaming,
+            "speaking_rate": speaking_rate,
+            "use_ssml": use_ssml,
+        }
+        if voice is not None:
+            dict_input_metadata["voice_id"] = voice.voice_id
+            dict_input_metadata["voice_name"] = voice.voice_name
+            dict_input_metadata["voice_locale"] = voice.locale
+        if audio_format is not None:
+            dict_input_metadata["requested_audio_format"] = audio_format.key
+            dict_input_metadata["requested_audio_extension"] = (
+                audio_format.file_extension
+            )
+        if emotion_prompt is not None and emotion_prompt.strip() != "":
+            dict_input_metadata["emotion_prompt_char_count"] = len(
+                emotion_prompt.strip()
+            )
+        # Normal return with TTS input metadata only.
+        return dict_input_metadata
+
+    def _build_tts_observability_result_summary(
+        self,
+        *,
+        observed_result: AiApiObservedTtsResultModel,
+        provider_elapsed_ms: float,
+    ) -> AiApiCallResultSummaryModel:
+        """
+        Builds metadata-only output fields for one observed TTS provider result.
+
+        Args:
+            observed_result: Raw provider result container returned by the wrapped call.
+            provider_elapsed_ms: Measured elapsed milliseconds for the wrapped provider path.
+
+        Returns:
+            AiApiCallResultSummaryModel containing output metadata safe for observability logging.
+        """
+        call_result_summary: AiApiCallResultSummaryModel = AiApiCallResultSummaryModel(
+            provider_elapsed_ms=provider_elapsed_ms,
+            input_token_count=None,
+            input_token_count_source=TOKEN_COUNT_SOURCE_NONE,
+            output_token_count=None,
+            output_token_count_source=TOKEN_COUNT_SOURCE_NONE,
+            provider_prompt_tokens=None,
+            provider_completion_tokens=None,
+            provider_total_tokens=None,
+            finish_reason=None,
+            dict_metadata={
+                "output_audio_byte_count": observed_result.output_audio_byte_count,
+                **observed_result.dict_metadata,
+            },
+        )
+        # Normal return with TTS output summary metadata derived from the provider result.
+        return call_result_summary
+
+    def _get_observability_event_time_utc(self) -> datetime:
+        """
+        Returns the UTC timestamp used when building shared observability call-context objects.
+
+        Args:
+            None
+
+        Returns:
+            Current UTC datetime object used for the input-side call-context event time.
+        """
+        event_time_utc: datetime = datetime.now(timezone.utc)
+        # Normal return with the current UTC event timestamp.
+        return event_time_utc
+
+    def _resolve_observability_model_name(self) -> str | None:
+        """
+        Resolves a best-effort model identifier from the configured voice client state.
+
+        Args:
+            None
+
+        Returns:
+            Best-effort model identifier string, or None when the client does not expose one.
+        """
+        if self.selected_model is not None:
+            # Early return with the actively selected voice model identifier.
+            return self.selected_model.name
+        if self.default_model_id.strip() != "":
+            # Early return with the configured default voice model identifier.
+            return self.default_model_id
+        # Early return because no voice model identifier is currently available.
+        return None
+
+    def _resolve_observability_provider_vendor(self) -> str:
+        """
+        Resolves a best-effort provider vendor label for shared observability metadata.
+
+        Args:
+            None
+
+        Returns:
+            Best-effort provider vendor label derived from the concrete voice client module.
+        """
+        lower_module_name: str = self.__class__.__module__.lower()
+        if "openai" in lower_module_name:
+            # Early return for OpenAI-backed voice clients.
+            return self.PROVIDER_VENDOR_OPENAI
+        if "google" in lower_module_name or "gemini" in lower_module_name:
+            # Early return for Google-backed voice clients.
+            return self.PROVIDER_VENDOR_GOOGLE
+        if "azure" in lower_module_name:
+            # Early return for Azure-backed voice clients.
+            return self.PROVIDER_VENDOR_AZURE
+        if "elevenlabs" in lower_module_name:
+            # Early return for ElevenLabs-backed voice clients.
+            return self.PROVIDER_VENDOR_ELEVENLABS
+        # Normal return with a stable lower-case class-name fallback.
+        return self.__class__.__name__.lower()
+
+    def _resolve_observability_provider_engine(self) -> str:
+        """
+        Resolves a best-effort provider engine label for shared observability metadata.
+
+        Args:
+            None
+
+        Returns:
+            Best-effort provider engine label derived from configured engine or module name.
+        """
+        if self.engine.strip() != "":
+            # Early return with the explicit configured voice engine identifier.
+            return self.engine.strip().lower()
+        lower_module_name: str = self.__class__.__module__.lower()
+        if "google" in lower_module_name or "gemini" in lower_module_name:
+            # Early return for Google-backed voice clients.
+            return self.PROVIDER_ENGINE_GOOGLE_GEMINI
+        if "openai" in lower_module_name:
+            # Early return for OpenAI-backed voice clients.
+            return self.PROVIDER_VENDOR_OPENAI
+        if "azure" in lower_module_name:
+            # Early return for Azure-backed voice clients.
+            return self.PROVIDER_VENDOR_AZURE
+        if "elevenlabs" in lower_module_name:
+            # Early return for ElevenLabs-backed voice clients.
+            return self.PROVIDER_VENDOR_ELEVENLABS
+        # Normal return with a stable lower-case class-name fallback.
+        return self.__class__.__name__.lower()
 
     def get_default_model(self) -> AIVoiceModelBase:
         """
@@ -239,7 +577,7 @@ class AIVoiceBase(BaseModel, ABC):
     def get_audio_duration(self, audio_bytes: bytes) -> float:
         """Return the duration of *audio_bytes* in seconds."""
         try:
-            str_format: str = self.default_audio_format.file_extension.lstrip(".") # type: ignore 
+            str_format: str = self.default_audio_format.file_extension.lstrip(".")
             segment: AudioSegment = AudioSegment.from_file(
                 BytesIO(audio_bytes), format=str_format
             )
@@ -248,7 +586,7 @@ class AIVoiceBase(BaseModel, ABC):
             pass
 
         try:
-            key: str = self.default_audio_format.key # type: ignore 
+            key: str = self.default_audio_format.key
             if key.startswith("mp3_"):
                 _, _, bitrate_kbps = key.split("_")
                 bitrate_bps: float = float(bitrate_kbps) * 1000
@@ -307,6 +645,9 @@ class AIVoiceBase(BaseModel, ABC):
             voice_name=first_voice.voice_name,
         )
 
+    def get_available_voices(self) -> list[AIVoiceSelectionBase]:
+        """Return the cached list of voices."""
+        return self.list_voices()
 
     def get_voice_name(self) -> str:
         """Return the name of the currently-selected voice, or empty if unset."""
@@ -404,7 +745,7 @@ class AIVoiceBase(BaseModel, ABC):
     def _get_first_pair(entries: dict[Any, Any]) -> dict[Any, Any]:
         return dict(islice(entries.items(), 1))
 
-    def get_voice_by_name(self, voice_name: str | None = None) -> AIVoiceSelectionBase:
+    def get_voice_by_name(self, voice_name: str = None) -> AIVoiceSelectionBase:
         """
         Return a voice selection by its name.
 
@@ -424,7 +765,7 @@ class AIVoiceBase(BaseModel, ABC):
         try:
             seg: AudioSegment = AudioSegment.from_file(
                 BytesIO(audio_bytes),
-                format=self.default_audio_format.file_extension[1:], # type: ignore 
+                format=self.default_audio_format.file_extension[1:],
             )
             # Resample to 48 kHz for glitch-free output
             seg = seg.set_frame_rate(48_000)
@@ -461,14 +802,6 @@ class AIVoiceBase(BaseModel, ABC):
         factor: float = current_duration_s / target_duration_s
         proposed: float = current_speed * factor
         return float(min(self.MAX_SPEED, max(self.MIN_SPEED, proposed)))
-
-    def get_available_voices(self) -> list[AIVoiceSelectionBase]:
-        """
-        Return a copy of the list of all available voices.
-
-        This is a convenience method that returns the cached list.
-        """
-        return self.list_available_voices
 
     def get_voices_by_locales(
         self, list_locales: list[str]
@@ -523,10 +856,14 @@ class AIVoiceBase(BaseModel, ABC):
                 )
 
                 if user_input == "q":
-                    print("Aborting voice test.")
+                    _LOGGER.info("Aborting voice test.")
                     break
 
-            print(f"\n\tAuditioning voice: Name={voice_name!r}; ID={voice_id!r}")
+            _LOGGER.info(
+                "Auditioning voice: Name=%r; ID=%r",
+                voice_name,
+                voice_id,
+            )
 
             spoken_voice_name = (
                 voice_name.replace("-", " ").replace("•", "").replace("en US", "")
@@ -537,16 +874,21 @@ class AIVoiceBase(BaseModel, ABC):
             sample_sentence = f"{intro} {sample_sentence}"
             try:
                 ai_voice_client.selected_voice = voice
-                chosen_format: AudioFormat = ai_voice_client.default_audio_format # type: ignore 
+                chosen_format: AudioFormat = ai_voice_client.default_audio_format
+                bool_use_ssml_candidate: bool = bool(
+                    re.search(r"<\/?[a-z][^>]*>", sample_sentence)
+                )
 
-                print(f"\t{sample_sentence}\n")
+                _LOGGER.info(
+                    "Audition sample sentence metadata: char_count=%s use_ssml_candidate=%s",
+                    len(sample_sentence),
+                    bool_use_ssml_candidate,
+                )
 
                 supports_ssml: bool = getattr(
                     self.common_vendor_capabilities, "supports_ssml", False
                 )
-                use_ssml: bool = bool(
-                    supports_ssml and re.search(r"<\/?[a-z][^>]*>", sample_sentence)
-                )
+                use_ssml: bool = bool(supports_ssml and bool_use_ssml_candidate)
                 audio_bytes: bytes = ai_voice_client.text_to_voice(
                     text_to_convert=sample_sentence,
                     voice=voice,
@@ -554,17 +896,17 @@ class AIVoiceBase(BaseModel, ABC):
                     use_ssml=use_ssml,
                 )
 
-                ai_voice_client.play(audio_bytes)  # type: ignore
+                ai_voice_client.play(audio_bytes)
             except NotImplementedError as e:
-                print(f"[!] Playback not supported by this engine: {e}")
+                _LOGGER.warning("Playback not supported by this engine: %s", e)
             except Exception as e:
-                print(f"[!] Error during synthesis/playback: {e}")
+                _LOGGER.exception("Error during synthesis/playback: %s", e)
 
             if not pause_between_auditions:
                 # pause for 0.5 seconds between voices
                 sleep(0.5)
 
-        print("\n✅ Voice auditioning complete.")
+        _LOGGER.info("Voice auditioning complete.")
 
     def speech_to_text_from_file(
         self, file_path: str | Path, language: str | None = None
@@ -598,8 +940,8 @@ class AIVoiceBase(BaseModel, ABC):
         *,
         emotion_prompt: str | None,
         text_to_convert: str,
-        voice: AIVoiceSelectionBase | None,
-        audio_format: AudioFormat | None,
+        voice: AIVoiceSelectionBase,
+        audio_format: AudioFormat,
         speaking_rate: float = 1.0,  # Not supported by all vendors
     ) -> bytes:
         """

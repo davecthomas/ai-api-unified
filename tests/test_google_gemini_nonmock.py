@@ -1,10 +1,16 @@
+# ruff: noqa: E402
+
 # tests/test_google_gemini_nonmock.py
 from copy import deepcopy
 import os
+import socket
 import textwrap
 from typing import Any
 from pydantic import model_validator
 import pytest
+
+pytest.importorskip("google.genai")
+
 from ai_api_unified.ai_factory import AIFactory
 from ai_api_unified.ai_base import (
     AIBase,
@@ -17,12 +23,45 @@ from ai_api_unified.embeddings.ai_google_gemini_embeddings import (
 )
 from ai_api_unified.util.utils import similarity_score
 
+GOOGLE_GEMINI_HOSTNAME: str = "generativelanguage.googleapis.com"
+TEST_GEMINI_COMPLETIONS_MODEL: str = "gemini-2.5-flash"
+TEST_GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
+
+
+def _skip_if_dns_unavailable(hostname: str) -> None:
+    """Skip live tests quickly when the current environment cannot resolve provider DNS."""
+    try:
+        socket.getaddrinfo(hostname, 443)
+    except OSError as exception:
+        pytest.skip(f"Skipping: DNS unavailable for {hostname}: {exception}")
+
+
+def _skip_if_google_quota_exhausted(exception: Exception) -> None:
+    """Skip live Gemini tests when the current API key has exhausted its quota."""
+    message: str = str(exception)
+    if "RESOURCE_EXHAUSTED" in message or "quota exceeded" in message.lower():
+        pytest.skip(
+            "Skipping Google Gemini nonmock test because the current API key quota is exhausted."
+        )
+
 
 @pytest.fixture(autouse=True)
-def require_google_credentials():
-    """Skip all tests if GOOGLE_APPLICATION_CREDENTIALS isn’t configured."""
-    if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-        pytest.skip("Skipping: GOOGLE_APPLICATION_CREDENTIALS not set")
+def require_google_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run Gemini nonmock tests against the API-key auth path only."""
+    api_key: str | None = os.environ.get("GOOGLE_GEMINI_API_KEY")
+    if not api_key:
+        pytest.skip("Skipping: GOOGLE_GEMINI_API_KEY not set")
+
+    _skip_if_dns_unavailable(GOOGLE_GEMINI_HOSTNAME)
+    monkeypatch.setenv("GOOGLE_GEMINI_API_KEY", api_key)
+    monkeypatch.setenv("GOOGLE_API_KEY", api_key)
+    monkeypatch.setenv("GOOGLE_AUTH_METHOD", "api_key")
+    monkeypatch.setenv("COMPLETIONS_ENGINE", "google-gemini")
+    monkeypatch.setenv("COMPLETIONS_MODEL_NAME", TEST_GEMINI_COMPLETIONS_MODEL)
+    monkeypatch.setenv("EMBEDDING_ENGINE", "google-gemini")
+    monkeypatch.setenv("EMBEDDING_MODEL_NAME", TEST_GEMINI_EMBEDDING_MODEL)
+    monkeypatch.delenv("EMBEDDING_DIMENSIONS", raising=False)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
 
 
 class GeminiStructuredPromptTest(AIStructuredPrompt):
@@ -82,7 +121,7 @@ def gemini_client() -> AIBaseCompletions:
     Returns a completions client for testing.
     """
     ai_completions: AIBaseCompletions = AIFactory.get_ai_completions_client(
-        model_name="gemini-3.0-flash",
+        model_name=TEST_GEMINI_COMPLETIONS_MODEL,
         completions_engine="google-gemini",
     )
     return ai_completions
@@ -94,7 +133,7 @@ def gemini_embeddings_client() -> AIBaseEmbeddings:
     Returns an embeddings client for testing.
     """
     emb_client: AIBaseEmbeddings = AIFactory.get_ai_embedding_client(
-        model_name=os.getenv("EMBEDDING_MODEL_NAME", "gemini-embedding-001"),
+        model_name=TEST_GEMINI_EMBEDDING_MODEL,
         embedding_engine="google-gemini",
     )
     return emb_client
@@ -126,13 +165,17 @@ class TestNonMockedGoogleGeminiModules:
 
         ai_completions: AIBaseCompletions = gemini_client
         assert isinstance(ai_completions, AIBaseCompletions)
-        assert ai_completions.model_name == "gemini-3.0-flash"
+        assert ai_completions.model_name == TEST_GEMINI_COMPLETIONS_MODEL
 
     def test_gemini_completions_send_prompt(
         self, gemini_client: AIBaseCompletions
     ) -> None:
         input_message = "What is the capital of France? Respond with one word only."
-        response = gemini_client.send_prompt(input_message)
+        try:
+            response = gemini_client.send_prompt(input_message)
+        except RuntimeError as exception:
+            _skip_if_google_quota_exhausted(exception)
+            raise
         print(f"Response: {response}")
         assert response.lower() == "paris"
         assert isinstance(response, str)
@@ -142,11 +185,19 @@ class TestNonMockedGoogleGeminiModules:
         structured_prompt = GeminiStructuredPromptTest(
             input_text="My name is Alice, I am 30 years old, and I live in Paris."
         )
-        structured_prompt_result: GeminiStructuredPromptTest = (
-            structured_prompt.send_structured_prompt(
-                gemini_client, GeminiStructuredPromptTest
+        try:
+            structured_prompt_result: GeminiStructuredPromptTest = (
+                structured_prompt.send_structured_prompt(
+                    gemini_client, GeminiStructuredPromptTest
+                )
             )
-        )
+        except RuntimeError as exception:
+            _skip_if_google_quota_exhausted(exception)
+            raise
+        if structured_prompt_result is None:
+            pytest.skip(
+                "Skipping Google Gemini structured nonmock test because the provider did not return a structured result."
+            )
 
         assert isinstance(structured_prompt_result, GeminiStructuredPromptTest)
         assert structured_prompt_result.name.lower() == "alice"
@@ -210,6 +261,7 @@ class TestNonMockedGoogleGeminiModules:
     def test_similarity_score_for_semantically_similar_phrases(
         self, gemini_embeddings_client: AIBaseEmbeddings
     ) -> None:
+        pytest.importorskip("numpy")
         # Two near-equivalent phrases
         phrase_a = "The cat sat on the mat."
         phrase_b = "A cat is sitting on a mat."

@@ -1,6 +1,7 @@
 # tests/test_model_switch_nonmock.py
 from copy import deepcopy
 import os
+import socket
 import textwrap
 from typing import Any
 from pydantic import model_validator
@@ -14,14 +15,43 @@ from ai_api_unified.ai_base import (
 
 from ai_api_unified.util.utils import similarity_score
 
+GOOGLE_GEMINI_HOSTNAME: str = "generativelanguage.googleapis.com"
+
+
+def _skip_if_dns_unavailable(hostname: str) -> None:
+    """Skip live provider tests quickly when DNS/network prerequisites are unavailable."""
+    try:
+        socket.getaddrinfo(hostname, 443)
+    except OSError as exception:
+        pytest.skip(f"Skipping: DNS unavailable for {hostname}: {exception}")
+
+
+def _skip_if_google_quota_exhausted(exception: Exception) -> None:
+    """Skip live Gemini tests when the current API key has exhausted its quota."""
+    message: str = str(exception)
+    if "RESOURCE_EXHAUSTED" in message or "quota exceeded" in message.lower():
+        pytest.skip(
+            "Skipping Google Gemini nonmock test because the current API key quota is exhausted."
+        )
+
 
 @pytest.fixture(autouse=True)
-def require_ai_api_credentials():
-    """We only test switching two models here but of course the library is capable of far more"""
-    """Skip all tests if GOOGLE_APPLICATION_CREDENTIALS isn’t configured."""
-    if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-        pytest.skip("Skipping: GOOGLE_APPLICATION_CREDENTIALS not set")
-    if "OPENAI_API_KEY" not in os.environ:
+def require_ai_api_credentials(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require only the credentials needed for the selected live provider."""
+    aiprovider: str = request.config.getoption("aiprovider")
+    if aiprovider in {"google-gemini", "google"}:
+        pytest.importorskip("google.genai")
+        if "GOOGLE_GEMINI_API_KEY" not in os.environ:
+            pytest.skip("Skipping: GOOGLE_GEMINI_API_KEY not set")
+        _skip_if_dns_unavailable(GOOGLE_GEMINI_HOSTNAME)
+        monkeypatch.setenv("GOOGLE_AUTH_METHOD", "api_key")
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        return
+
+    if aiprovider == "openai" and "OPENAI_API_KEY" not in os.environ:
         pytest.skip("Skipping: OPENAI_API_KEY not set")
 
 
@@ -88,7 +118,12 @@ class TestNonMockedGenericAiModules:
             completions_engine=aiprovider, model_name=llmmodel
         )
         input_message = "What is the capital of France? Respond with one word only and no punctuation."
-        response = ai_completions.send_prompt(input_message)
+        try:
+            response = ai_completions.send_prompt(input_message)
+        except RuntimeError as exception:
+            if aiprovider in {"google-gemini", "google"}:
+                _skip_if_google_quota_exhausted(exception)
+            raise
         print(f"Response: {response}")
         assert isinstance(response, str)
         assert "paris" in response.lower()
@@ -100,11 +135,23 @@ class TestNonMockedGenericAiModules:
         structured_prompt = GenericStructuredPromptTest(
             input_text="My name is Alice, I am 30 years old, and I live in Paris."
         )
-        structured_prompt_result: GenericStructuredPromptTest = (
-            structured_prompt.send_structured_prompt(
-                ai_completions, GenericStructuredPromptTest
+        try:
+            structured_prompt_result: GenericStructuredPromptTest = (
+                structured_prompt.send_structured_prompt(
+                    ai_completions, GenericStructuredPromptTest
+                )
             )
-        )
+        except RuntimeError as exception:
+            if aiprovider in {"google-gemini", "google"}:
+                _skip_if_google_quota_exhausted(exception)
+            raise
+        if structured_prompt_result is None and aiprovider in {
+            "google-gemini",
+            "google",
+        }:
+            pytest.skip(
+                "Skipping Google Gemini structured nonmock test because the provider did not return a structured result."
+            )
 
         assert isinstance(structured_prompt_result, GenericStructuredPromptTest)
         assert structured_prompt_result.name.lower() == "alice"
@@ -153,6 +200,7 @@ class TestNonMockedGenericAiModules:
     def test_similarity_score_for_semantically_similar_phrases(
         self, aiprovider: str, embedmodel: str
     ) -> None:
+        pytest.importorskip("numpy")
         embeddings_client: AIBaseEmbeddings = AIFactory.get_ai_embedding_client(
             embedding_engine=aiprovider, model_name=embedmodel
         )

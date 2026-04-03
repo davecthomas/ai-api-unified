@@ -11,7 +11,11 @@ from openai import OpenAIError
 
 from ai_api_unified.ai_openai_base import AIOpenAIBase
 
-from ..ai_base import AIBaseImageProperties, AIBaseImages
+from ..ai_base import (
+    AIBaseImageProperties,
+    AIBaseImages,
+    AiApiObservedImagesResultModel,
+)
 from pydantic import model_validator
 
 
@@ -67,12 +71,10 @@ class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
             )
         self.image_model_name: str = image_model.strip()
 
-    @property
     def model_name(self) -> str:
         """Return the name of the image model in use."""
         return self.image_model_name
 
-    @property
     def list_model_names(self) -> list[str]:
         """Return the list of image model names supported by this client."""
         return ["gpt-image-1", "dall-e-2", "dall-e-3"]
@@ -113,9 +115,17 @@ class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
             "prompt": image_prompt,
             "size": size_param,
             "quality": openai_props.quality,
-            "user": self.user,
             "n": openai_props.num_images,
         }
+        explicit_caller_id: str | None = self._get_explicit_observability_caller_id()
+        if explicit_caller_id is not None:
+            request_payload["user"] = explicit_caller_id
+        dict_input_metadata: dict[str, str | int | float | bool | None] = (
+            self._build_images_observability_input_metadata(
+                image_prompt=image_prompt,
+                image_properties=openai_props,
+            )
+        )
 
         # Reference: https://platform.openai.com/docs/guides/images for parameter details.
         if "gpt-image" in normalized_model:
@@ -123,93 +133,197 @@ class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
         else:
             request_payload["response_format"] = "b64_json"
 
-        max_retries: int = len(self.backoff_delays)
-        for attempt_index in range(1, max_retries + 1):
-            try:
-                response = self.client.images.generate(**request_payload)
-                if not response.data:
-                    raise ValueError(
-                        "OpenAI image generation returned no data entries."
-                    )
-
-                image_bytes_results: list[bytes] = []
-                for data_item in response.data:
-                    encoded_image: str | None = getattr(data_item, "b64_json", None)
-                    if encoded_image is None:
-                        encoded_image = getattr(data_item, "image_base64", None)
-                    if encoded_image is None and hasattr(data_item, "content"):
-                        content_list: Any = getattr(data_item, "content")
-                        for content_entry in content_list or []:
-                            entry_b64: str | None = getattr(
-                                content_entry, "b64_json", None
-                            )
-                            if entry_b64 is None:
-                                entry_b64 = getattr(content_entry, "image_base64", None)
-                            if entry_b64 is not None:
-                                encoded_image = entry_b64
-                                break
-                    if encoded_image is None:
+        def _execute_image_generation() -> AiApiObservedImagesResultModel[list[bytes]]:
+            max_retries: int = len(self.backoff_delays)
+            for attempt_index in range(1, max_retries + 1):
+                try:
+                    response = self.client.images.generate(**request_payload)
+                    if not response.data:
                         raise ValueError(
-                            "OpenAI image generation response did not include base64 content."
+                            "OpenAI image generation returned no data entries."
+                        )
+                    if len(response.data) != openai_props.num_images:
+                        raise ValueError(
+                            "OpenAI image generation returned an unexpected number of images. "
+                            f"Requested {openai_props.num_images} but received {len(response.data)}."
                         )
 
-                    image_bytes: bytes = base64.b64decode(encoded_image, validate=True)
-                    image_bytes_results.append(image_bytes)
+                    image_bytes_results: list[bytes] = []
+                    # Loop through provider image entries so the caller-facing payload preserves response order.
+                    for data_item in response.data:
+                        encoded_image: str | None = getattr(data_item, "b64_json", None)
+                        if encoded_image is None:
+                            encoded_image = getattr(data_item, "image_base64", None)
+                        if encoded_image is None and hasattr(data_item, "content"):
+                            content_list: Any = getattr(data_item, "content")
+                            # Loop through nested content entries until a base64 image payload is found.
+                            for content_entry in content_list or []:
+                                entry_b64: str | None = getattr(
+                                    content_entry, "b64_json", None
+                                )
+                                if entry_b64 is None:
+                                    entry_b64 = getattr(
+                                        content_entry, "image_base64", None
+                                    )
+                                if entry_b64 is not None:
+                                    encoded_image = entry_b64
+                                    break
+                        if encoded_image is None:
+                            raise ValueError(
+                                "OpenAI image generation response did not include base64 content."
+                            )
 
-                if not image_bytes_results:
-                    raise ValueError(
-                        "OpenAI image generation did not produce any image bytes."
+                        image_bytes: bytes = base64.b64decode(
+                            encoded_image, validate=True
+                        )
+                        image_bytes_results.append(image_bytes)
+
+                    if not image_bytes_results:
+                        raise ValueError(
+                            "OpenAI image generation did not produce any image bytes."
+                        )
+
+                    _LOGGER.info(
+                        "openai_image_generated",
+                        extra={
+                            "model": self.image_model_name,
+                            "width": openai_props.width,
+                            "height": openai_props.height,
+                            "format": normalized_format,
+                            "attempt": attempt_index,
+                            "count": len(image_bytes_results),
+                        },
                     )
-
-                _LOGGER.info(
-                    "openai_image_generated",
-                    extra={
-                        "model": self.image_model_name,
-                        "width": openai_props.width,
-                        "height": openai_props.height,
-                        "format": normalized_format,
-                        "attempt": attempt_index,
-                        "count": len(image_bytes_results),
-                    },
-                )
-                return image_bytes_results
-            except ValueError as exc:
-                _LOGGER.error(
-                    "openai_image_generation_invalid_response",
-                    extra={
-                        "model": self.image_model_name,
-                        "size": size_param,
-                        "format": normalized_format,
-                        "error_type": exc.__class__.__name__,
-                    },
-                )
-                raise
-            except (OpenAIError, binascii.Error) as exc:
-                wait_seconds: int = self.backoff_delays[attempt_index - 1]
-                if attempt_index == max_retries:
+                    observed_result: AiApiObservedImagesResultModel[list[bytes]] = (
+                        AiApiObservedImagesResultModel(
+                            return_value=image_bytes_results,
+                            generated_image_count=len(image_bytes_results),
+                            total_output_bytes=sum(
+                                len(image_bytes) for image_bytes in image_bytes_results
+                            ),
+                            provider_input_tokens=self._extract_openai_image_input_tokens(
+                                response
+                            ),
+                            provider_total_tokens=self._extract_openai_image_total_tokens(
+                                response
+                            ),
+                            dict_metadata={
+                                "output_format": normalized_format,
+                            },
+                        )
+                    )
+                    # Normal return with the caller-facing image bytes payload and metadata-only summary inputs.
+                    return observed_result
+                except ValueError as exc:
                     _LOGGER.error(
-                        "openai_image_generation_failed",
+                        "openai_image_generation_invalid_response",
                         extra={
                             "model": self.image_model_name,
                             "size": size_param,
                             "format": normalized_format,
-                            "attempts": attempt_index,
                             "error_type": exc.__class__.__name__,
                         },
                     )
-                    raise RuntimeError(
-                        "OpenAI image generation failed after multiple retries."
-                    ) from exc
-                _LOGGER.warning(
-                    "openai_image_generation_retry",
-                    extra={
-                        "model": self.image_model_name,
-                        "size": size_param,
-                        "format": normalized_format,
-                        "attempt": attempt_index,
-                        "retry_in_seconds": wait_seconds,
-                    },
-                )
-                time.sleep(wait_seconds)
-        
-        return []
+                    raise
+                except (OpenAIError, binascii.Error) as exc:
+                    wait_seconds: int = self.backoff_delays[attempt_index - 1]
+                    if attempt_index == max_retries:
+                        _LOGGER.error(
+                            "openai_image_generation_failed",
+                            extra={
+                                "model": self.image_model_name,
+                                "size": size_param,
+                                "format": normalized_format,
+                                "attempts": attempt_index,
+                                "error_type": exc.__class__.__name__,
+                            },
+                        )
+                        raise RuntimeError(
+                            "OpenAI image generation failed after multiple retries."
+                        ) from exc
+                    _LOGGER.warning(
+                        "openai_image_generation_retry",
+                        extra={
+                            "model": self.image_model_name,
+                            "size": size_param,
+                            "format": normalized_format,
+                            "attempt": attempt_index,
+                            "retry_in_seconds": wait_seconds,
+                            "error_type": exc.__class__.__name__,
+                        },
+                    )
+                    time.sleep(wait_seconds)
+
+            raise RuntimeError(
+                "OpenAI image generation retries exhausted unexpectedly."
+            )
+
+        observed_result: AiApiObservedImagesResultModel[list[bytes]] = (
+            self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_IMAGES,
+                operation="generate_images",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_image_generation,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_images_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+                legacy_caller_id=self.user,
+            )
+        )
+        # Normal return with the caller-facing image bytes payload.
+        return observed_result.return_value
+
+    def _extract_openai_image_input_tokens(self, response: Any) -> int | None:
+        """
+        Extracts provider-reported input token counts from an OpenAI images response when exposed.
+
+        Args:
+            response: OpenAI images response object returned by the provider SDK.
+
+        Returns:
+            Provider-reported input token count, or None when the SDK response does not expose one.
+        """
+        try:
+            usage = response.usage
+        except AttributeError:
+            # Early return because the images response object did not expose usage metadata.
+            return None
+        if usage is None:
+            # Early return because the provider did not include usage metadata.
+            return None
+        try:
+            # Normal return with provider-reported image input token count.
+            return usage.input_tokens
+        except AttributeError:
+            try:
+                # Normal return with provider-reported prompt token count from alternate usage naming.
+                return usage.prompt_tokens
+            except AttributeError:
+                # Early return because the usage object did not expose a recognized input token field.
+                return None
+
+    def _extract_openai_image_total_tokens(self, response: Any) -> int | None:
+        """
+        Extracts provider-reported total token counts from an OpenAI images response when exposed.
+
+        Args:
+            response: OpenAI images response object returned by the provider SDK.
+
+        Returns:
+            Provider-reported total token count, or None when the SDK response does not expose one.
+        """
+        try:
+            usage = response.usage
+        except AttributeError:
+            # Early return because the images response object did not expose usage metadata.
+            return None
+        if usage is None:
+            # Early return because the provider did not include usage metadata.
+            return None
+        try:
+            # Normal return with provider-reported total token count.
+            return usage.total_tokens
+        except AttributeError:
+            # Early return because the usage object did not expose total token counts.
+            return None

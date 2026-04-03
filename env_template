@@ -19,17 +19,15 @@ COMPLETIONS_ENGINE=google-gemini
 
 # Generic AI settings
 # Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001)
-EMBEDDING_MODEL_NAME=text-embedding-3-small
+EMBEDDING_MODEL_NAME=gemini-embedding-001
 # EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
-# EMBEDDING_MODEL_NAME=text-embedding-004
-# Completions model name (gpt-4o-mini | amazon.nova-micro-v1:0 or amazon.nova-lite-v1:0 | gemini-3.0-flash)
-COMPLETIONS_MODEL_NAME=gpt-4o-mini
+# Completions model name (gpt-4o-mini | amazon.nova-micro-v1:0 | amazon.nova-lite-v1:0 | gemini-2.5-flash)
+COMPLETIONS_MODEL_NAME=gemini-2.5-flash
 # COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
-# COMPLETIONS_MODEL_NAME=gemini-3.0-flash
-# Embedding dimensions (1536 for OpenAI | 1024 for Titan | 768 for Gemini)
+# Embedding dimensions (1536 for OpenAI | 1024 for Titan | 3072 default for Gemini)
+# Leave unset to use the provider default for the selected engine.
 # EMBEDDING_DIMENSIONS=1024
-# EMBEDDING_DIMENSIONS=768
-EMBEDDING_DIMENSIONS=1536
+# EMBEDDING_DIMENSIONS=3072
 # Vector metric (cosine for Pinecone | cosinesimil for OpenSearch | COSINE for Redis)
 # VECTOR_METRIC=cosinesimil
 VECTOR_METRIC=cosine
@@ -55,24 +53,24 @@ AI_VOICE_ENGINE=google
 AI_VOICE_LANGUAGE=en
 
 ########################################################################
-#   Google AI Voice Settings (Vertex AI Gemini TTS shares credentials with completions)
-# Auth Method: api_key or service_account (defaults to service_account)
-GOOGLE_AUTH_METHOD=service_account
-GOOGLE_GEMINI_API_KEY=
-GOOGLE_APPLICATION_CREDENTIALS=credentials/<filename>.json
-GOOGLE_PROJECT_ID=
-GOOGLE_LOCATION=us-central1
-# Preferred Vertex AI Gemini TTS model
+#   Google AI Voice Settings
+# OSS defaults to API-key auth for Google. Service-account / Vertex mode remains
+# available by setting GOOGLE_AUTH_METHOD=service_account and providing the
+# usual Google credentials below.
+# GOOGLE_APPLICATION_CREDENTIALS=credentials/<filename>.json
+# GOOGLE_PROJECT_ID=
+# GOOGLE_LOCATION=us-central1
+# Preferred Google TTS model
 DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
 
 ########################################################################
 #   Google Gemini AI Settings (Completions & Embeddings)
-# Uses the same GOOGLE_APPLICATION_CREDENTIALS as voice settings above
+# Uses GOOGLE_GEMINI_API_KEY by default.
 # COMPLETIONS_ENGINE=google-gemini
 # EMBEDDING_ENGINE=google-gemini
 # Default models:
-#   Completions: gemini-3.0-flash
-#   Embeddings: text-embedding-004
+#   Completions: gemini-2.5-flash
+#   Embeddings: gemini-embedding-001
 
 ########################################################################
 # OpenAI AI Voice Settings
@@ -88,6 +86,6 @@ MICROSOFT_COGNITIVE_SERVICES_REGION=eastus
 MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=https://eastus.api.cognitive.microsoft.com/
 
 # Image engine: openai | nova-canvas | google-gemini
-IMAGE_ENGINE=openai
-# image model used for image generation requests: openai: gpt-image-1 ; amazon nova: amazon.nova-canvas-v1:0 ; google gemini: imagen-3.0-generate-001
-IMAGE_MODEL_NAME=gpt-image-1
+IMAGE_ENGINE=google-gemini
+# image model used for image generation requests: openai: gpt-image-1 ; amazon nova: amazon.nova-canvas-v1:0 ; google gemini: imagen-4.0-generate-001
+IMAGE_MODEL_NAME=imagen-4.0-generate-001

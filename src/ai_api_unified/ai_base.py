@@ -3,15 +3,46 @@ from __future__ import (
 )  # Postpone evaluation of type hints to avoid circular imports and allow forward references with | None
 
 import json
+import logging
 import math
 import uuid
 from abc import ABC, abstractmethod
-from datetime import date
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Iterator, Type
+from types import MappingProxyType
+from collections.abc import Mapping
+from typing import Any, ClassVar, Generic, Iterator, Literal, NoReturn, Type, TypeVar
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
+
+from ai_api_unified.ai_completions_exceptions import (
+    StructuredResponseTokenLimitError,
+)
+from ai_api_unified.middleware.observability import (
+    AiApiObservabilityMiddleware,
+    get_observability_middleware,
+)
+from ai_api_unified.middleware.observability_runtime import (
+    AiApiCallContextModel,
+    AiApiCallResultSummaryModel,
+    OBSERVABILITY_DIRECTION_INPUT,
+    ObservabilityMetadataValue,
+    TOKEN_COUNT_SOURCE_NONE,
+    TOKEN_COUNT_SOURCE_PROVIDER,
+    execute_observed_call,
+    get_observability_context,
+    resolve_originating_caller,
+)
+from ai_api_unified.middleware.pii_redactor import AiApiPiiMiddleware
+
+_LOGGER: logging.Logger = logging.getLogger(__name__)
+ProviderCallReturnType = TypeVar("ProviderCallReturnType")
+CompletionsReturnType = TypeVar("CompletionsReturnType")
+EmbeddingsReturnType = TypeVar("EmbeddingsReturnType")
+ImagesReturnType = TypeVar("ImagesReturnType")
 
 
 class SupportedDataType(Enum):
@@ -140,8 +171,15 @@ class AIBase(ABC):
     CLIENT_TYPE_EMBEDDING = "embedding"
     CLIENT_TYPE_COMPLETIONS = "completions"
     CLIENT_TYPE_IMAGES = "images"
+    PROVIDER_VENDOR_OPENAI = "openai"
+    PROVIDER_VENDOR_BEDROCK = "bedrock"
+    PROVIDER_VENDOR_GOOGLE = "google"
+    PROVIDER_VENDOR_AZURE = "azure"
+    PROVIDER_VENDOR_ELEVENLABS = "elevenlabs"
+    PROVIDER_ENGINE_GOOGLE_GEMINI = "google-gemini"
+    _observability_middleware: AiApiObservabilityMiddleware | None = None
 
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, **kwargs):
         super().__init__()
         self.model: str | None = model
 
@@ -158,6 +196,353 @@ class AIBase(ABC):
         """Supported model identifiers for this client."""
         ...
 
+    def _get_observability_middleware(self) -> AiApiObservabilityMiddleware:
+        """
+        Returns the effective observability middleware instance for this client.
+
+        Args:
+            None
+
+        Returns:
+            Effective observability middleware instance, lazily initialized when first needed.
+        """
+        if self._observability_middleware is None:
+            self._observability_middleware = get_observability_middleware()
+        # Normal return with the lazily initialized observability middleware instance.
+        return self._observability_middleware
+
+    def _get_explicit_observability_caller_id(self) -> str | None:
+        """
+        Returns the request-scoped caller identifier only when application code set it explicitly.
+
+        Args:
+            None
+
+        Returns:
+            Explicit application caller identifier, or None when the current request context
+            did not set caller correlation data.
+        """
+        observability_context = get_observability_context()
+        # Normal return with the explicit request-scoped caller identifier when present.
+        return observability_context.caller_id
+
+    def _build_observability_call_context(
+        self,
+        *,
+        capability: str,
+        operation: str,
+        dict_metadata: dict[str, ObservabilityMetadataValue] | None = None,
+        legacy_caller_id: str | None = None,
+    ) -> AiApiCallContextModel:
+        """
+        Builds the immutable shared call-context object for one provider-boundary event sequence.
+
+        Args:
+            capability: Capability label for the public API surface being invoked.
+            operation: Public operation name such as `send_prompt` or `generate_embeddings`.
+            dict_metadata: Optional scalar metadata describing the request side of the call.
+            legacy_caller_id: Optional explicit legacy caller hint supplied by existing config.
+
+        Returns:
+            AiApiCallContextModel containing shared metadata for input, output, and error events.
+        """
+        observability_context = get_observability_context()
+        resolved_caller_id, caller_id_source = resolve_originating_caller(
+            legacy_caller_id=legacy_caller_id
+        )
+        dict_context_metadata: dict[str, ObservabilityMetadataValue] = dict(
+            dict_metadata or {}
+        )
+        if observability_context.session_id is not None:
+            dict_context_metadata["session_id"] = observability_context.session_id
+        if observability_context.workflow_id is not None:
+            dict_context_metadata["workflow_id"] = observability_context.workflow_id
+        model_name: str | None = self._resolve_observability_model_name()
+        model_version: str | None = self._resolve_observability_model_version(
+            model_name=model_name
+        )
+        ai_api_call_context: AiApiCallContextModel = AiApiCallContextModel(
+            call_id=str(uuid.uuid4()),
+            event_time_utc=self._get_observability_event_time_utc(),
+            capability=capability,
+            operation=operation,
+            provider_vendor=self._resolve_observability_provider_vendor(),
+            provider_engine=self._resolve_observability_provider_engine(),
+            model_name=model_name,
+            model_version=model_version,
+            direction=OBSERVABILITY_DIRECTION_INPUT,
+            originating_caller_id=resolved_caller_id,
+            originating_caller_id_source=caller_id_source,
+            dict_metadata=dict_context_metadata,
+        )
+        # Normal return with immutable provider-boundary call metadata.
+        return ai_api_call_context
+
+    def _execute_provider_call_with_observability(
+        self,
+        *,
+        capability: str,
+        operation: str,
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] | None,
+        callable_execute: Callable[[], ProviderCallReturnType],
+        callable_build_result_summary: Callable[
+            [ProviderCallReturnType, float], AiApiCallResultSummaryModel
+        ],
+        legacy_caller_id: str | None = None,
+    ) -> ProviderCallReturnType:
+        """
+        Wraps one provider call with shared observability lifecycle helpers when enabled.
+
+        Args:
+            capability: Capability label for the public API surface being invoked.
+            operation: Public operation name such as `send_prompt` or `generate_embeddings`.
+            dict_input_metadata: Optional scalar request metadata safe for input-event logs.
+            callable_execute: Zero-argument callable that performs the provider call.
+            callable_build_result_summary: Callable that summarizes provider output and elapsed time.
+            legacy_caller_id: Optional explicit legacy caller hint supplied by existing config.
+
+        Returns:
+            Original provider return value from `callable_execute`.
+        """
+        observability_middleware: AiApiObservabilityMiddleware = (
+            self._get_observability_middleware()
+        )
+        provider_result: ProviderCallReturnType = execute_observed_call(
+            observability_middleware=observability_middleware,
+            callable_build_call_context=lambda: self._build_observability_call_context(
+                capability=capability,
+                operation=operation,
+                dict_metadata=dict_input_metadata,
+                legacy_caller_id=legacy_caller_id,
+            ),
+            callable_execute=callable_execute,
+            callable_build_result_summary=callable_build_result_summary,
+        )
+        # Normal return with the original provider result after optional observability wrapping.
+        return provider_result
+
+    def _resolve_observability_provider_vendor(self) -> str:
+        """
+        Resolves a best-effort provider vendor label for shared observability metadata.
+
+        Args:
+            None
+
+        Returns:
+            Best-effort provider vendor label derived from the concrete client module or class.
+        """
+        lower_module_name: str = self.__class__.__module__.lower()
+        if "openai" in lower_module_name:
+            # Early return for OpenAI-backed clients.
+            return self.PROVIDER_VENDOR_OPENAI
+        if "bedrock" in lower_module_name:
+            # Early return for Bedrock-backed clients.
+            return self.PROVIDER_VENDOR_BEDROCK
+        if "google" in lower_module_name or "gemini" in lower_module_name:
+            # Early return for Google-backed clients.
+            return self.PROVIDER_VENDOR_GOOGLE
+        if "azure" in lower_module_name:
+            # Early return for Azure-backed clients.
+            return self.PROVIDER_VENDOR_AZURE
+        if "elevenlabs" in lower_module_name:
+            # Early return for ElevenLabs-backed clients.
+            return self.PROVIDER_VENDOR_ELEVENLABS
+        # Normal return with a stable lower-case class-name fallback.
+        return self.__class__.__name__.lower()
+
+    def _resolve_observability_provider_engine(self) -> str:
+        """
+        Resolves a best-effort provider engine label for shared observability metadata.
+
+        Args:
+            None
+
+        Returns:
+            Best-effort provider engine label derived from the concrete client module or class.
+        """
+        lower_module_name: str = self.__class__.__module__.lower()
+        if "google_gemini" in lower_module_name or "gemini" in lower_module_name:
+            # Early return for Gemini-backed clients.
+            return self.PROVIDER_ENGINE_GOOGLE_GEMINI
+        if "openai" in lower_module_name:
+            # Early return for OpenAI-backed clients.
+            return self.PROVIDER_VENDOR_OPENAI
+        if "bedrock" in lower_module_name:
+            # Early return for Bedrock-backed clients.
+            return self.PROVIDER_VENDOR_BEDROCK
+        if "azure" in lower_module_name:
+            # Early return for Azure-backed clients.
+            return self.PROVIDER_VENDOR_AZURE
+        if "elevenlabs" in lower_module_name:
+            # Early return for ElevenLabs-backed clients.
+            return self.PROVIDER_VENDOR_ELEVENLABS
+        # Normal return with a stable lower-case class-name fallback.
+        return self.__class__.__name__.lower()
+
+    def _resolve_observability_model_name(self) -> str | None:
+        """
+        Resolves a best-effort model identifier from the concrete provider client.
+
+        Args:
+            None
+
+        Returns:
+            Best-effort model identifier string, or None when the client does not expose one.
+        """
+        model_name_candidate = self.model_name
+        if callable(model_name_candidate):
+            resolved_model_name: str | None = model_name_candidate()
+            # Normal return with a resolved callable model identifier.
+            return resolved_model_name
+        # Normal return with the property-based model identifier.
+        return model_name_candidate
+
+    def _resolve_observability_model_version(
+        self,
+        *,
+        model_name: str | None,
+    ) -> str | None:
+        """
+        Resolves a best-effort model-version identifier for shared observability metadata.
+
+        Args:
+            model_name: Best-effort resolved model identifier for the current client.
+
+        Returns:
+            Best-effort model-version identifier, defaulting to the resolved model name.
+        """
+        # Normal return because model version currently defaults to the resolved model name.
+        return model_name
+
+    def _get_observability_event_time_utc(self) -> datetime:
+        """
+        Returns the UTC timestamp used when building shared observability call-context objects.
+
+        Args:
+            None
+
+        Returns:
+            Current UTC datetime object used for the input-side call-context event time.
+        """
+        event_time_utc: datetime = datetime.now(timezone.utc)
+        # Normal return with the current UTC event timestamp.
+        return event_time_utc
+
+
+@dataclass(frozen=True)
+class AiApiObservedCompletionsResultModel(Generic[CompletionsReturnType]):
+    """
+    Stores one completions-provider result alongside metadata needed for observability emission.
+
+    Args:
+        return_value: Caller-facing return value produced by the provider path.
+        raw_output_text: Raw provider output text before output-side middleware transformation.
+        finish_reason: Optional provider finish reason for the final observed response.
+        provider_prompt_tokens: Optional provider-reported prompt token count.
+        provider_completion_tokens: Optional provider-reported completion token count.
+        provider_total_tokens: Optional provider-reported total token count.
+        dict_metadata: Additional metadata derived from the provider path.
+
+    Returns:
+        Immutable container used to build metadata-only observability output summaries.
+    """
+
+    return_value: CompletionsReturnType
+    raw_output_text: str
+    finish_reason: str | None = None
+    provider_prompt_tokens: int | None = None
+    provider_completion_tokens: int | None = None
+    provider_total_tokens: int | None = None
+    dict_metadata: dict[str, ObservabilityMetadataValue] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AiApiObservedEmbeddingsResultModel(Generic[EmbeddingsReturnType]):
+    """
+    Stores one embeddings-provider result alongside metadata needed for observability emission.
+
+    Args:
+        return_value: Caller-facing single or batch embedding payload produced by the provider path.
+        embedding_count: Number of vectors returned by the provider call.
+        returned_dimensions: Embedding width returned by the provider response when known.
+        provider_input_tokens: Optional provider-reported input token count.
+        provider_total_tokens: Optional provider-reported total token count.
+        dict_metadata: Additional metadata derived from the provider path.
+
+    Returns:
+        Immutable container used to build metadata-only observability output summaries.
+    """
+
+    return_value: EmbeddingsReturnType
+    embedding_count: int
+    returned_dimensions: int | None = None
+    provider_input_tokens: int | None = None
+    provider_total_tokens: int | None = None
+    dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(
+        default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        """
+        Freezes caller-supplied metadata so the observed embeddings result remains effectively immutable.
+
+        Args:
+            None
+
+        Returns:
+            None after metadata has been copied and wrapped in an immutable mapping.
+        """
+        frozen_metadata: Mapping[str, ObservabilityMetadataValue] = MappingProxyType(
+            dict(self.dict_metadata)
+        )
+        object.__setattr__(self, "dict_metadata", frozen_metadata)
+        # Normal return after replacing metadata with an immutable mapping copy.
+        return None
+
+
+@dataclass(frozen=True)
+class AiApiObservedImagesResultModel(Generic[ImagesReturnType]):
+    """
+    Stores one image-provider result alongside metadata needed for observability emission.
+
+    Args:
+        return_value: Caller-facing image payload produced by the provider path.
+        generated_image_count: Number of images returned by the provider call.
+        total_output_bytes: Total number of bytes across all generated image payloads.
+        provider_input_tokens: Optional provider-reported input token count.
+        provider_total_tokens: Optional provider-reported total token count.
+        dict_metadata: Additional metadata derived from the provider path.
+
+    Returns:
+        Immutable container used to build metadata-only observability output summaries.
+    """
+
+    return_value: ImagesReturnType
+    generated_image_count: int
+    total_output_bytes: int
+    provider_input_tokens: int | None = None
+    provider_total_tokens: int | None = None
+    dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(
+        default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        """
+        Freezes caller-supplied metadata so the observed image result remains effectively immutable.
+
+        Args:
+            None
+
+        Returns:
+            None after metadata has been copied and wrapped in an immutable mapping.
+        """
+        frozen_metadata: Mapping[str, ObservabilityMetadataValue] = MappingProxyType(
+            dict(self.dict_metadata)
+        )
+        object.__setattr__(self, "dict_metadata", frozen_metadata)
+        # Normal return after replacing metadata with an immutable mapping copy.
+        return None
+
 
 class AIBaseEmbeddings(AIBase):
     """
@@ -167,6 +552,77 @@ class AIBaseEmbeddings(AIBase):
     def __init__(self, model: str | None = None, dimensions: int = 0):
         super().__init__(model=model)
         self.dimensions = dimensions
+
+    def _build_embeddings_observability_input_metadata(
+        self,
+        *,
+        list_texts: list[str],
+        bool_is_batch: bool,
+        requested_dimensions: int | None,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only input fields for one embeddings provider call.
+
+        Args:
+            list_texts: Sanitized input texts that will be embedded by the provider.
+            bool_is_batch: True when the public API call embeds multiple texts.
+            requested_dimensions: Requested output dimensions when the provider exposes that input.
+
+        Returns:
+            Dictionary of metadata-only input fields safe for observability logging.
+        """
+        int_total_input_chars: int = sum(len(text) for text in list_texts)
+        int_max_input_chars: int = max((len(text) for text in list_texts), default=0)
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = {
+            "input_text_count": len(list_texts),
+            "input_text_total_chars": int_total_input_chars,
+            "input_text_max_chars": int_max_input_chars,
+            "batch_mode": bool_is_batch,
+            "requested_dimensions": requested_dimensions,
+        }
+        # Normal return with embeddings input metadata only.
+        return dict_input_metadata
+
+    def _build_embeddings_observability_result_summary(
+        self,
+        *,
+        observed_result: AiApiObservedEmbeddingsResultModel[Any],
+        provider_elapsed_ms: float,
+    ) -> AiApiCallResultSummaryModel:
+        """
+        Builds metadata-only output fields for one observed embeddings provider result.
+
+        Args:
+            observed_result: Raw provider result container returned by the wrapped call.
+            provider_elapsed_ms: Measured elapsed milliseconds for the wrapped provider path.
+
+        Returns:
+            AiApiCallResultSummaryModel containing output metadata safe for observability logging.
+        """
+        input_token_count: int | None = observed_result.provider_input_tokens
+        input_token_count_source: str = (
+            TOKEN_COUNT_SOURCE_PROVIDER
+            if input_token_count is not None
+            else TOKEN_COUNT_SOURCE_NONE
+        )
+        call_result_summary: AiApiCallResultSummaryModel = AiApiCallResultSummaryModel(
+            provider_elapsed_ms=provider_elapsed_ms,
+            input_token_count=input_token_count,
+            input_token_count_source=input_token_count_source,
+            output_token_count=None,
+            output_token_count_source=TOKEN_COUNT_SOURCE_NONE,
+            provider_prompt_tokens=observed_result.provider_input_tokens,
+            provider_completion_tokens=None,
+            provider_total_tokens=observed_result.provider_total_tokens,
+            finish_reason=None,
+            dict_metadata={
+                "embedding_count": observed_result.embedding_count,
+                "returned_dimensions": observed_result.returned_dimensions,
+                **observed_result.dict_metadata,
+            },
+        )
+        # Normal return with embeddings output summary metadata derived from the provider result.
+        return call_result_summary
 
     @abstractmethod
     def generate_embeddings(self, text: str) -> dict[str, Any]:
@@ -203,25 +659,10 @@ class AIStructuredPrompt(BaseModel):
         return self
 
     @classmethod
-    def model_json_schema(
-        cls,
-        by_alias: bool = True,
-        ref_template: str = "#/$defs/{model}",
-        schema_generator: Any = None,
-        mode: Any = "validation",
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+    def model_json_schema(cls) -> dict:
         from copy import deepcopy
 
-        schema = deepcopy(
-            super().model_json_schema(
-                by_alias=by_alias,
-                ref_template=ref_template,
-                schema_generator=schema_generator,
-                mode=mode,
-                **kwargs,
-            )
-        )
+        schema = deepcopy(super().model_json_schema())
         schema.setdefault("required", [])
         return schema
 
@@ -273,13 +714,19 @@ class AIStructuredPrompt(BaseModel):
                 other_params=other_params,
             )
         except ValidationError as ve:
-            print(f"Validation errors: {ve.errors()}")
+            _LOGGER.warning(
+                "Validation errors sending structured prompt: %s",
+                ve.errors(),
+            )
             # either return None or raise a more descriptive error:
             return None
 
         except Exception as exc:
             # any other unexpected error
-            print(f"Unexpected error sending structured prompt: {exc}")
+            _LOGGER.exception(
+                "Unexpected error sending structured prompt: %s",
+                exc,
+            )
             return None
 
 
@@ -287,6 +734,245 @@ class AIBaseCompletions(AIBase):
     """
     Base class for generating text completions.
     """
+
+    STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS: ClassVar[int] = 2048
+    STRUCTURED_ENFORCED_MIN_MAX_RESPONSE_TOKENS: ClassVar[int] = 2048
+    STRUCTURED_RECOMMENDED_MIN_MAX_RESPONSE_TOKENS: ClassVar[int] = 2048
+    STRUCTURED_TOKEN_LIMIT_FAILURE_MODE_PREFLIGHT: ClassVar[str] = "preflight"
+    STRUCTURED_TOKEN_LIMIT_FAILURE_MODE_PROVIDER_TRUNCATION: ClassVar[str] = (
+        "provider_truncation"
+    )
+    RESPONSE_MODE_TEXT: ClassVar[str] = "text"
+    RESPONSE_MODE_STRUCTURED: ClassVar[str] = "structured"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.pii_middleware = AiApiPiiMiddleware()
+
+    def _build_structured_token_limit_error_message(
+        self,
+        *,
+        provider_name: str,
+        model_name: str,
+        max_response_tokens: int,
+        failure_mode: Literal[
+            "preflight",
+            "provider_truncation",
+        ],
+        finish_reason: str | None = None,
+        raw_output_text: str | None = None,
+    ) -> str:
+        """
+        Build one high-signal error message for structured token-limit failures.
+
+        Args:
+            provider_name: Provider or engine name surfaced to the caller.
+            model_name: Concrete provider model identifier used for the call.
+            max_response_tokens: Structured response token limit requested by the caller.
+            failure_mode: Failure category label describing validation or provider truncation.
+            finish_reason: Optional provider finish reason associated with truncation.
+            raw_output_text: Optional raw output text captured before the failure was raised.
+
+        Returns:
+            Human-readable message explaining the failure and next-step remediation.
+        """
+        if failure_mode == self.STRUCTURED_TOKEN_LIMIT_FAILURE_MODE_PREFLIGHT:
+            # Normal return with the fail-fast validation message for undersized limits.
+            return (
+                "Structured response token limit is too small for "
+                f"provider={provider_name} model={model_name}. "
+                f"`max_response_tokens={max_response_tokens}` must be at least "
+                f"{self.STRUCTURED_ENFORCED_MIN_MAX_RESPONSE_TOKENS} for "
+                "`strict_schema_prompt()`. Increase `max_response_tokens` or omit it "
+                "to use the library default. For best reliability, use at least "
+                f"{self.STRUCTURED_RECOMMENDED_MIN_MAX_RESPONSE_TOKENS}."
+            )
+
+        int_raw_output_char_count: int = len(raw_output_text or "")
+        str_finish_reason_fragment: str = ""
+        if finish_reason is not None:
+            str_finish_reason_fragment = f" finish_reason={finish_reason}."
+        # Normal return with the provider truncation message for structured output.
+        return (
+            "Structured response generation was truncated for "
+            f"provider={provider_name} model={model_name} because "
+            f"`max_response_tokens={max_response_tokens}` was too small."
+            f"{str_finish_reason_fragment} raw_output_char_count="
+            f"{int_raw_output_char_count}. Increase `max_response_tokens` and retry "
+            "in client code."
+        )
+
+    def _validate_structured_max_response_tokens(
+        self,
+        *,
+        provider_name: str,
+        model_name: str,
+        max_response_tokens: int,
+    ) -> None:
+        """
+        Fail fast when a structured token cap is below the library-supported floor.
+
+        Args:
+            provider_name: Provider or engine name surfaced to the caller.
+            model_name: Concrete provider model identifier used for the call.
+            max_response_tokens: Structured response token limit requested by the caller.
+
+        Returns:
+            None when the supplied token limit passes validation.
+        """
+        if max_response_tokens < self.STRUCTURED_ENFORCED_MIN_MAX_RESPONSE_TOKENS:
+            raise StructuredResponseTokenLimitError(
+                message=self._build_structured_token_limit_error_message(
+                    provider_name=provider_name,
+                    model_name=model_name,
+                    max_response_tokens=max_response_tokens,
+                    failure_mode=self.STRUCTURED_TOKEN_LIMIT_FAILURE_MODE_PREFLIGHT,
+                ),
+                provider_name=provider_name,
+                model_name=model_name,
+                max_response_tokens=max_response_tokens,
+                minimum_supported_tokens=self.STRUCTURED_ENFORCED_MIN_MAX_RESPONSE_TOKENS,
+            )
+        # Normal return because the structured token cap passed library validation.
+        return None
+
+    def _raise_structured_token_limit_error(
+        self,
+        *,
+        provider_name: str,
+        model_name: str,
+        max_response_tokens: int,
+        finish_reason: str | None = None,
+        raw_output_text: str | None = None,
+    ) -> NoReturn:
+        """
+        Raise the shared structured token-limit exception for provider truncation.
+
+        Args:
+            provider_name: Provider or engine name surfaced to the caller.
+            model_name: Concrete provider model identifier used for the call.
+            max_response_tokens: Structured response token limit requested by the caller.
+            finish_reason: Optional provider finish reason associated with truncation.
+            raw_output_text: Optional raw output text captured before the failure was raised.
+
+        Returns:
+            This method does not return because it always raises a typed exception.
+        """
+        raise StructuredResponseTokenLimitError(
+            message=self._build_structured_token_limit_error_message(
+                provider_name=provider_name,
+                model_name=model_name,
+                max_response_tokens=max_response_tokens,
+                failure_mode=self.STRUCTURED_TOKEN_LIMIT_FAILURE_MODE_PROVIDER_TRUNCATION,
+                finish_reason=finish_reason,
+                raw_output_text=raw_output_text,
+            ),
+            provider_name=provider_name,
+            model_name=model_name,
+            max_response_tokens=max_response_tokens,
+            minimum_supported_tokens=self.STRUCTURED_ENFORCED_MIN_MAX_RESPONSE_TOKENS,
+            finish_reason=finish_reason,
+            raw_output_char_count=len(raw_output_text or ""),
+        )
+
+    def _build_completions_observability_input_metadata(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str | None,
+        other_params: AICompletionsPromptParamsBase | None,
+        response_mode: str,
+        max_response_tokens: int | None = None,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only input fields for one completions provider call.
+
+        Args:
+            prompt: Sanitized prompt text that will be sent to the provider.
+            system_prompt: System prompt value that will be sent to the provider.
+            other_params: Optional provider-specific prompt parameters.
+            response_mode: Response mode label (`text` or `structured`).
+            max_response_tokens: Optional maximum response token request for structured calls.
+
+        Returns:
+            Dictionary of metadata-only input fields safe for observability logging.
+        """
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = {
+            "prompt_char_count": len(prompt),
+            "prompt_token_count_source": TOKEN_COUNT_SOURCE_NONE,
+            "system_prompt_char_count": len(system_prompt or ""),
+            "system_prompt_token_count_source": TOKEN_COUNT_SOURCE_NONE,
+            "has_media_attachments": bool(
+                other_params is not None and other_params.has_included_media
+            ),
+            "response_mode": response_mode,
+        }
+        if max_response_tokens is not None:
+            dict_input_metadata["max_response_tokens"] = max_response_tokens
+        if other_params is None or not other_params.has_included_media:
+            # Normal return because there are no media attachments to summarize.
+            return dict_input_metadata
+
+        list_mime_types: list[str] = []
+        int_media_total_bytes: int = 0
+        int_media_attachment_count: int = 0
+        # Loop through media attachments to summarize counts, bytes, and MIME types.
+        for _, _, media_bytes, mime_type in other_params.iter_included_media():
+            int_media_attachment_count += 1
+            int_media_total_bytes += len(media_bytes)
+            list_mime_types.append(mime_type)
+
+        dict_input_metadata["media_attachment_count"] = int_media_attachment_count
+        dict_input_metadata["media_total_bytes"] = int_media_total_bytes
+        dict_input_metadata["media_mime_types"] = tuple(list_mime_types)
+        # Normal return with completions input metadata including media summary fields.
+        return dict_input_metadata
+
+    def _build_completions_observability_result_summary(
+        self,
+        *,
+        observed_result: AiApiObservedCompletionsResultModel[Any],
+        provider_elapsed_ms: float,
+    ) -> AiApiCallResultSummaryModel:
+        """
+        Builds metadata-only output fields for one observed completions provider result.
+
+        Args:
+            observed_result: Raw provider result container returned by the wrapped call.
+            provider_elapsed_ms: Measured elapsed milliseconds for the wrapped provider path.
+
+        Returns:
+            AiApiCallResultSummaryModel containing output metadata safe for observability logging.
+        """
+        output_token_count: int | None = observed_result.provider_completion_tokens
+        output_token_count_source: str = (
+            TOKEN_COUNT_SOURCE_PROVIDER
+            if output_token_count is not None
+            else TOKEN_COUNT_SOURCE_NONE
+        )
+        input_token_count: int | None = observed_result.provider_prompt_tokens
+        input_token_count_source: str = (
+            TOKEN_COUNT_SOURCE_PROVIDER
+            if input_token_count is not None
+            else TOKEN_COUNT_SOURCE_NONE
+        )
+        call_result_summary: AiApiCallResultSummaryModel = AiApiCallResultSummaryModel(
+            provider_elapsed_ms=provider_elapsed_ms,
+            input_token_count=input_token_count,
+            input_token_count_source=input_token_count_source,
+            output_token_count=output_token_count,
+            output_token_count_source=output_token_count_source,
+            provider_prompt_tokens=observed_result.provider_prompt_tokens,
+            provider_completion_tokens=observed_result.provider_completion_tokens,
+            provider_total_tokens=observed_result.provider_total_tokens,
+            finish_reason=observed_result.finish_reason,
+            dict_metadata={
+                "output_char_count": len(observed_result.raw_output_text),
+                **observed_result.dict_metadata,
+            },
+        )
+        # Normal return with completions output summary metadata derived from the raw provider result.
+        return call_result_summary
 
     @property
     @abstractmethod
@@ -395,7 +1081,7 @@ class AIBaseCompletions(AIBase):
         self,
         prompt: str,
         response_model: Type[AIStructuredPrompt],
-        max_response_tokens: int = 512,
+        max_response_tokens: int = STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS,
         *,
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> AIStructuredPrompt:
@@ -478,9 +1164,91 @@ class AIBaseImageProperties(BaseModel):
 
 
 class AIBaseImages(AIBase):
+    """
+    Abstract base class for image generation clients.
+    """
 
     def __init__(self, model: str | None = None, **kwargs: Any):
+        """
+        Initializes the shared image-generation base class.
+
+        Args:
+            model: Optional provider model identifier supplied by the concrete image client.
+            **kwargs: Additional provider-specific initialization arguments.
+
+        Returns:
+            None after the shared AI base initialization has completed.
+        """
         super().__init__(model=model, **kwargs)
+
+    def _build_images_observability_input_metadata(
+        self,
+        *,
+        image_prompt: str,
+        image_properties: AIBaseImageProperties,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only input fields for one image-generation provider call.
+
+        Args:
+            image_prompt: Prompt text sent to the image-generation provider.
+            image_properties: Requested image generation properties for the provider call.
+
+        Returns:
+            Dictionary of metadata-only input fields safe for observability logging.
+        """
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = {
+            "prompt_char_count": len(image_prompt),
+            "requested_width": image_properties.width,
+            "requested_height": image_properties.height,
+            "requested_num_images": image_properties.num_images,
+            "requested_format": image_properties.format.lower(),
+            "requested_quality": image_properties.quality.lower(),
+            "requested_background": image_properties.background.lower(),
+        }
+        # Normal return with image-generation input metadata only.
+        return dict_input_metadata
+
+    def _build_images_observability_result_summary(
+        self,
+        *,
+        observed_result: AiApiObservedImagesResultModel[Any],
+        provider_elapsed_ms: float,
+    ) -> AiApiCallResultSummaryModel:
+        """
+        Builds metadata-only output fields for one observed image-generation provider result.
+
+        Args:
+            observed_result: Raw provider result container returned by the wrapped call.
+            provider_elapsed_ms: Measured elapsed milliseconds for the wrapped provider path.
+
+        Returns:
+            AiApiCallResultSummaryModel containing output metadata safe for observability logging.
+        """
+        input_token_count: int | None = observed_result.provider_input_tokens
+        input_token_count_source: str = (
+            TOKEN_COUNT_SOURCE_PROVIDER
+            if input_token_count is not None
+            else TOKEN_COUNT_SOURCE_NONE
+        )
+        call_result_summary: AiApiCallResultSummaryModel = AiApiCallResultSummaryModel(
+            provider_elapsed_ms=provider_elapsed_ms,
+            input_token_count=input_token_count,
+            input_token_count_source=input_token_count_source,
+            output_token_count=None,
+            output_token_count_source=TOKEN_COUNT_SOURCE_NONE,
+            provider_prompt_tokens=observed_result.provider_input_tokens,
+            provider_completion_tokens=None,
+            provider_total_tokens=observed_result.provider_total_tokens,
+            finish_reason=None,
+            dict_metadata={
+                "generated_image_count": observed_result.generated_image_count,
+                "total_output_bytes": observed_result.total_output_bytes,
+                **observed_result.dict_metadata,
+            },
+        )
+        # Normal return with image-generation output summary metadata derived from the provider result.
+        return call_result_summary
 
     def generate_images(
         self, image_prompt: str, image_properties: AIBaseImageProperties

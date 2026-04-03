@@ -9,15 +9,20 @@ from typing import Any, ClassVar, Type
 
 from pydantic import ValidationError, model_validator
 
+from ai_api_unified.ai_completions_exceptions import (
+    StructuredResponseTokenLimitError,
+)
 from ai_api_unified.ai_openai_base import AIOpenAIBase
 
 from ..ai_base import (
     AIBaseCompletions,
+    AiApiObservedCompletionsResultModel,
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
     SupportedDataType,
 )
+from ..middleware.observability_runtime import ObservabilityMetadataValue
 
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -205,12 +210,12 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             model (str): The embedding model to use.
         """
         AIOpenAIBase.__init__(self, **kwargs)
-        AIBaseCompletions.__init__(self, model=model, **kwargs)
-        self.model = model
-
-        self.completions_model = self.env.get_setting(
+        explicit_model: str = model.strip() if model else ""
+        self.completions_model = explicit_model or self.env.get_setting(
             "COMPLETIONS_MODEL_NAME", "gpt-4o-mini"
         )
+        AIBaseCompletions.__init__(self, model=self.completions_model, **kwargs)
+        self.model = self.completions_model
         self._capabilities: AICompletionsCapabilitiesOpenAI = (
             AICompletionsCapabilitiesOpenAI.for_model(self.completions_model)
         )
@@ -319,7 +324,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         self,
         prompt: str,
         response_model: Type[AIStructuredPrompt],
-        max_response_tokens: int = 512,
+        max_response_tokens: int = AIBaseCompletions.STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS,
         *,
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> AIStructuredPrompt:
@@ -336,6 +341,13 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         Returns:
             PromptResult: An instance of the specified Pydantic model containing the parsed response.
         """
+        prompt = self.pii_middleware.process_input(prompt)
+        self._validate_structured_max_response_tokens(
+            provider_name=self.PROVIDER_VENDOR_OPENAI,
+            model_name=self.completions_model,
+            max_response_tokens=max_response_tokens,
+        )
+
         # Include a brief system instruction to nudge the model toward JSON-only output
         system_prompt: str = (
             AICompletionsPromptParamsBase.DEFAULT_STRICT_SCHEMA_SYSTEM_PROMPT
@@ -343,7 +355,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         if other_params is not None and other_params.system_prompt is not None:
             system_prompt = other_params.system_prompt
         user_content = self._build_user_message_content(prompt, other_params)
-        messages: Any = [
+        messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
@@ -359,46 +371,115 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
 
         max_retries = 3
         retry_delay = 2
-
-        for attempt in range(max_retries):
-            try:
-                completion = self.client.chat.completions.create(
-                    model=self.completions_model,
-                    messages=messages,
-                    functions=functions,  # type: ignore
-                    function_call={"name": "strict_schema_response"},
-                )
-
-                choice_msg = completion.choices[0].message
-
-                # If the model invoked our dummy function, grab its arguments (the JSON)
-                if choice_msg.function_call and choice_msg.function_call.arguments:
-                    content_str = choice_msg.function_call.arguments
-                else:
-                    content_str = choice_msg.content or ""
-
-                parsed_json = json.loads(content_str)
-                return response_model.model_validate(parsed_json)
-
-            except ValidationError as e:
-                # Handle validation errors
-                print(f"Validation error: {e}")
-                raise
-
-            except Exception as e:
-                # exponential backoff on failure
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                # on final failure, raise so caller can handle it
-                raise RuntimeError(
-                    f"strict_schema_prompt failed after {max_retries} attempts: {e}"
-                )
-
-        raise RuntimeError(
-            f"strict_schema_prompt failed to return a valid response after {max_retries} attempts."
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_completions_observability_input_metadata(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                other_params=other_params,
+                response_mode=self.RESPONSE_MODE_STRUCTURED,
+                max_response_tokens=max_response_tokens,
+            )
         )
+
+        def _execute_structured_prompt() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredPrompt]
+        ):
+            current_retry_delay: int = retry_delay
+            # Loop through structured-prompt retry attempts while preserving existing backoff behavior.
+            for attempt in range(max_retries):
+                try:
+                    completion = self.client.chat.completions.create(
+                        model=self.completions_model,
+                        messages=messages,
+                        functions=functions,
+                        function_call={"name": "strict_schema_response"},
+                        max_completion_tokens=max_response_tokens,
+                    )
+                    str_finish_reason: str = str(completion.choices[0].finish_reason)
+                    choice_msg = completion.choices[0].message
+
+                    if choice_msg.function_call and choice_msg.function_call.arguments:
+                        raw_output_text: str = choice_msg.function_call.arguments
+                    else:
+                        raw_output_text = choice_msg.content or ""
+
+                    if str_finish_reason == "length":
+                        self._raise_structured_token_limit_error(
+                            provider_name=self.PROVIDER_VENDOR_OPENAI,
+                            model_name=self.completions_model,
+                            max_response_tokens=max_response_tokens,
+                            finish_reason=str_finish_reason,
+                            raw_output_text=raw_output_text,
+                        )
+
+                    content_str: str = self.pii_middleware.process_output(
+                        raw_output_text
+                    )
+                    parsed_json: dict[str, Any] = json.loads(content_str)
+                    validated_response: AIStructuredPrompt = (
+                        response_model.model_validate(parsed_json)
+                    )
+                    observed_result: AiApiObservedCompletionsResultModel[
+                        AIStructuredPrompt
+                    ] = AiApiObservedCompletionsResultModel(
+                        return_value=validated_response,
+                        raw_output_text=raw_output_text,
+                        finish_reason=str_finish_reason,
+                        provider_prompt_tokens=self._extract_openai_prompt_tokens(
+                            completion
+                        ),
+                        provider_completion_tokens=self._extract_openai_completion_tokens(
+                            completion
+                        ),
+                        provider_total_tokens=self._extract_openai_total_tokens(
+                            completion
+                        ),
+                    )
+                    # Normal return with validated structured output and raw provider metadata.
+                    return observed_result
+
+                except ValidationError as validation_error:
+                    _LOGGER.exception(
+                        "Validation error in strict_schema_prompt: %s",
+                        validation_error,
+                    )
+                    raise
+
+                except StructuredResponseTokenLimitError:
+                    raise
+
+                except Exception as exception:
+                    if "MAX_TOKENS" in str(exception).upper():
+                        _LOGGER.error(
+                            "OpenAI structured prompt failed due to MAX_TOKENS for model=%s with max_response_tokens=%s.",
+                            self.completions_model,
+                            max_response_tokens,
+                        )
+                    if attempt < max_retries - 1:
+                        time.sleep(current_retry_delay)
+                        current_retry_delay *= 2
+                        continue
+                    raise RuntimeError(
+                        f"strict_schema_prompt failed after {max_retries} attempts: {exception}"
+                    ) from exception
+
+            raise RuntimeError("strict_schema_prompt exhausted retries unexpectedly.")
+
+        observed_result: AiApiObservedCompletionsResultModel[AIStructuredPrompt] = (
+            self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="strict_schema_prompt",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_structured_prompt,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+                legacy_caller_id=self.user,
+            )
+        )
+        # Normal return with validated structured output after observability wrapping.
+        return observed_result.return_value
 
     def send_prompt(
         self, prompt: str, *, other_params: AICompletionsPromptParamsBase | None = None
@@ -414,6 +495,8 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             str: The completion result as a string.
         """
         try:
+            prompt = self.pii_middleware.process_input(prompt)
+
             system_prompt: str = (
                 other_params.system_prompt
                 if other_params is not None and other_params.system_prompt is not None
@@ -421,34 +504,178 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             )
 
             user_content = self._build_user_message_content(prompt, other_params)
-
-            messages: Any = [
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {"role": "user", "content": user_content},
-            ]
-
-            response = self.client.chat.completions.create(
-                model=self.completions_model,
-                messages=messages,
+            dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+                self._build_completions_observability_input_metadata(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    other_params=other_params,
+                    response_mode=self.RESPONSE_MODE_TEXT,
+                )
             )
 
-            # Extract the response from the completion
-            completion = response.choices[0].message.content or ""
-
-            # If the content seems truncated, send a follow-up request or handle continuation
-            while response.choices[0].finish_reason == "length":
+            def _execute_text_prompt() -> AiApiObservedCompletionsResultModel[str]:
                 response = self.client.chat.completions.create(
                     model=self.completions_model,
                     messages=[
-                        {"role": "system", "content": "Continue."},
+                        {
+                            "role": "system",
+                            "content": system_prompt,
+                        },
+                        {"role": "user", "content": user_content},
                     ],
                 )
-                completion += response.choices[0].message.content or ""
+
+                raw_output_text: str = response.choices[0].message.content or ""
+                int_provider_prompt_tokens: int | None = (
+                    self._extract_openai_prompt_tokens(response)
+                )
+                int_provider_completion_tokens: int | None = (
+                    self._extract_openai_completion_tokens(response)
+                )
+                int_provider_total_tokens: int | None = (
+                    self._extract_openai_total_tokens(response)
+                )
+                bool_continued_response: bool = False
+
+                while response.choices[0].finish_reason == "length":
+                    bool_continued_response = True
+                    response = self.client.chat.completions.create(
+                        model=self.completions_model,
+                        messages=[
+                            {"role": "system", "content": "Continue."},
+                        ],
+                    )
+                    raw_output_text += response.choices[0].message.content or ""
+                    int_provider_prompt_tokens = self._sum_optional_ints(
+                        int_provider_prompt_tokens,
+                        self._extract_openai_prompt_tokens(response),
+                    )
+                    int_provider_completion_tokens = self._sum_optional_ints(
+                        int_provider_completion_tokens,
+                        self._extract_openai_completion_tokens(response),
+                    )
+                    int_provider_total_tokens = self._sum_optional_ints(
+                        int_provider_total_tokens,
+                        self._extract_openai_total_tokens(response),
+                    )
+
+                observed_result: AiApiObservedCompletionsResultModel[str] = (
+                    AiApiObservedCompletionsResultModel(
+                        return_value=raw_output_text,
+                        raw_output_text=raw_output_text,
+                        finish_reason=str(response.choices[0].finish_reason),
+                        provider_prompt_tokens=int_provider_prompt_tokens,
+                        provider_completion_tokens=int_provider_completion_tokens,
+                        provider_total_tokens=int_provider_total_tokens,
+                        dict_metadata={"continued_response": bool_continued_response},
+                    )
+                )
+                # Normal return with raw completion text and aggregated provider usage metadata.
+                return observed_result
+
+            observed_result: AiApiObservedCompletionsResultModel[str] = (
+                self._execute_provider_call_with_observability(
+                    capability=self.CLIENT_TYPE_COMPLETIONS,
+                    operation="send_prompt",
+                    dict_input_metadata=dict_input_metadata,
+                    callable_execute=_execute_text_prompt,
+                    callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                        observed_result=result,
+                        provider_elapsed_ms=provider_elapsed_ms,
+                    ),
+                    legacy_caller_id=self.user,
+                )
+            )
+            completion: str = self.pii_middleware.process_output(
+                observed_result.return_value
+            )
+            # Normal return with sanitized completion text after observability wrapping.
             return completion
 
         except Exception as e:
-            print(f"An error occurred while sending the prompt: {e}")
+            _LOGGER.exception("An error occurred while sending the prompt: %s", e)
             raise
+
+    @staticmethod
+    def _extract_openai_prompt_tokens(completion: Any) -> int | None:
+        """
+        Returns provider-reported prompt token counts from one OpenAI completion response.
+
+        Args:
+            completion: OpenAI SDK response object returned by `chat.completions.create`.
+
+        Returns:
+            Provider-reported prompt token count when available, otherwise None.
+        """
+        try:
+            if completion.usage is None:
+                # Early return because the provider response did not include usage metadata.
+                return None
+            # Normal return with provider-reported prompt token usage.
+            return completion.usage.prompt_tokens
+        except AttributeError:
+            # Early return because the SDK response did not expose usage metadata as expected.
+            return None
+
+    @staticmethod
+    def _extract_openai_completion_tokens(completion: Any) -> int | None:
+        """
+        Returns provider-reported completion token counts from one OpenAI completion response.
+
+        Args:
+            completion: OpenAI SDK response object returned by `chat.completions.create`.
+
+        Returns:
+            Provider-reported completion token count when available, otherwise None.
+        """
+        try:
+            if completion.usage is None:
+                # Early return because the provider response did not include usage metadata.
+                return None
+            # Normal return with provider-reported completion token usage.
+            return completion.usage.completion_tokens
+        except AttributeError:
+            # Early return because the SDK response did not expose usage metadata as expected.
+            return None
+
+    @staticmethod
+    def _extract_openai_total_tokens(completion: Any) -> int | None:
+        """
+        Returns provider-reported total token counts from one OpenAI completion response.
+
+        Args:
+            completion: OpenAI SDK response object returned by `chat.completions.create`.
+
+        Returns:
+            Provider-reported total token count when available, otherwise None.
+        """
+        try:
+            if completion.usage is None:
+                # Early return because the provider response did not include usage metadata.
+                return None
+            # Normal return with provider-reported total token usage.
+            return completion.usage.total_tokens
+        except AttributeError:
+            # Early return because the SDK response did not expose usage metadata as expected.
+            return None
+
+    @staticmethod
+    def _sum_optional_ints(
+        int_left: int | None,
+        int_right: int | None,
+    ) -> int | None:
+        """
+        Sums two optional integers while preserving None when both values are absent.
+
+        Args:
+            int_left: Existing optional integer accumulator.
+            int_right: Optional integer value to add.
+
+        Returns:
+            Summed integer when either value is present, otherwise None.
+        """
+        if int_left is None and int_right is None:
+            # Early return because neither side supplied a value to sum.
+            return None
+        # Normal return with the summed optional integer value.
+        return (int_left or 0) + (int_right or 0)
