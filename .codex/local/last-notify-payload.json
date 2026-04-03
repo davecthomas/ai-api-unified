@@ -1,0 +1,9 @@
+{
+  "cwd": "/Users/davidthomas/code/davecthomas/aiapi/ai_api_unified",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "Bootstrap complete. Here's what was produced:\n\n**5 decision-candidate event shards** written to `.agents/memory/daily/2026-04-03/events/`, plus a daily summary. All 5 were promoted to ADRs:\n\n| ADR | Decision |\n|---|---|\n| 0001 | Registry-based lazy provider loading + optional extras (SemVer 2.0.0 break) |\n| 0002 | YAML-driven middleware profile as sole source of truth; opaque to callers |\n| 0003 | Two middleware roles \u2014 text-transform (fail-hard) vs lifecycle/observability (fail-open) |\n| 0004 | Unified tool-calling abstraction with firm per-vendor API choices |\n| 0005 | Google API-key auth as the default for all Google-backed providers |\n\nSource: primarily the 2026-04-03 major commit (`7748caf`) and its nine accompanying design docs under `docs/`. ADRs 0001, 0002, and 0004 are flagged `must_read: true`.",
+  "permission_mode": "acceptEdits",
+  "session_id": "5d0b211e-fd07-4c31-b7ce-4d8d5b8bd46a",
+  "stop_hook_active": false,
+  "transcript_path": "/Users/davidthomas/.claude/projects/-Users-davidthomas-code-davecthomas-aiapi-ai-api-unified/5d0b211e-fd07-4c31-b7ce-4d8d5b8bd46a.jsonl"
+}

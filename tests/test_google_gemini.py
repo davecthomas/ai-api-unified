@@ -297,7 +297,7 @@ class TestGoogleGeminiModules:
                 with patch.object(completions_module, "EnvSettings") as mock_env:
                     mock_env_instance = Mock()
                     mock_env_instance.get_setting.side_effect = lambda key, default: {
-                        "COMPLETIONS_MODEL_NAME": "gemini-2.0-flash-lite"
+                        "COMPLETIONS_MODEL_NAME": "gemini-2.5-flash"
                     }.get(key, default)
                     mock_env.return_value = mock_env_instance
 
@@ -312,11 +312,11 @@ class TestGoogleGeminiModules:
                         GoogleGeminiCompletions,
                     )
 
-                    client = GoogleGeminiCompletions(model="gemini-2.0-flash-lite")
+                    client = GoogleGeminiCompletions(model="gemini-2.5-flash")
 
-                    assert client.model_name == "gemini-2.0-flash-lite"
+                    assert client.model_name == "gemini-2.5-flash"
                     assert isinstance(client.list_model_names, list)
-                    assert "gemini-2.0-flash-lite" in client.list_model_names
+                    assert "gemini-2.5-flash" in client.list_model_names
                     assert client.max_context_tokens > 0
                     assert client.price_per_1k_tokens > 0
 
@@ -378,7 +378,7 @@ class TestGoogleGeminiModules:
                 with patch.object(completions_module, "EnvSettings") as mock_env:
                     mock_env_instance = Mock()
                     mock_env_instance.get_setting.side_effect = lambda key, default: {
-                        "COMPLETIONS_MODEL_NAME": "gemini-2.0-flash-lite"
+                        "COMPLETIONS_MODEL_NAME": "gemini-2.5-flash"
                     }.get(key, default)
                     mock_env_instance.get_geo_residency.return_value = None
                     mock_env.return_value = mock_env_instance
@@ -428,7 +428,7 @@ class TestGoogleGeminiModules:
                 from ai_api_unified.ai_google_base import AIGoogleBase
 
                 base = AIGoogleBase()
-                client = base.get_client(model="gemini-2.0-flash-lite")
+                client = base.get_client(model="gemini-2.5-flash")
 
                 assert client is mock_client
                 mock_genai.Client.assert_called_once_with(api_key="test-api-key")
@@ -534,7 +534,7 @@ class TestGoogleGeminiModules:
                 with patch.object(completions_module, "EnvSettings") as mock_env:
                     mock_env_instance = Mock()
                     mock_env_instance.get_setting.side_effect = lambda key, default: {
-                        "COMPLETIONS_MODEL_NAME": "gemini-2.0-flash-lite"
+                        "COMPLETIONS_MODEL_NAME": "gemini-2.5-flash"
                     }.get(key, default)
                     mock_env_instance.get_geo_residency.return_value = None
                     mock_env.return_value = mock_env_instance
@@ -590,7 +590,7 @@ class TestGoogleGeminiModules:
                 with patch.object(completions_module, "EnvSettings") as mock_env:
                     mock_env_instance = Mock()
                     mock_env_instance.get_setting.side_effect = lambda key, default: {
-                        "COMPLETIONS_MODEL_NAME": "gemini-2.0-flash-lite"
+                        "COMPLETIONS_MODEL_NAME": "gemini-2.5-flash"
                     }.get(key, default)
                     mock_env_instance.get_geo_residency.return_value = None
                     mock_env.return_value = mock_env_instance

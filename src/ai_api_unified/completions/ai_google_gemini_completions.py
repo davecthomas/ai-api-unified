@@ -6,7 +6,7 @@ Environment Variables Required:
     GOOGLE_GEMINI_API_KEY: API key used by default when GOOGLE_AUTH_METHOD is unset.
     GOOGLE_AUTH_METHOD: (optional) api_key | service_account
     GOOGLE_APPLICATION_CREDENTIALS: Path to service account JSON file for service-account auth
-    COMPLETIONS_MODEL_NAME: (optional) Override default model, defaults to 'gemini-2.0-flash-lite'
+    COMPLETIONS_MODEL_NAME: (optional) Override default model, defaults to 'gemini-2.5-flash'
 
 Default Endpoints:
     Uses Google Gemini APIs for text generation, defaulting to API-key auth.
@@ -63,8 +63,8 @@ GOOGLE_GENAI_ERRORS: object = gerr
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_COMPLETIONS_MODEL: str = "gemini-2.0-flash-lite"
-DEFAULT_FALLBACK_MODEL: str = "gemini-2.0-flash"
+DEFAULT_COMPLETIONS_MODEL: str = "gemini-2.5-flash"
+DEFAULT_FALLBACK_MODEL: str = "gemini-2.5-flash"
 MAX_RETRIES: int = 5
 INITIAL_BACKOFF_DELAY: float = 1.0
 BACKOFF_MULTIPLIER: float = 2.0
