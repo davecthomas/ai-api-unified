@@ -25,7 +25,9 @@ def test_get_setting_uses_default_when_declared_field_is_unset() -> None:
     """
     settings: EnvSettings = EnvSettings()
 
-    assert settings.get_setting("COMPLETIONS_ENGINE", "google-gemini") == "google-gemini"
+    assert (
+        settings.get_setting("COMPLETIONS_ENGINE", "google-gemini") == "google-gemini"
+    )
 
 
 def test_get_setting_reads_declared_values_from_env_file(tmp_path: Path) -> None:

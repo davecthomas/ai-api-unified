@@ -32,7 +32,9 @@ def test_azure_voice_reads_credentials_from_env_settings_env_file(
             captured["region"] = region
 
     monkeypatch.setattr(ai_voice_azure_module, "EnvSettings", lambda: env_settings)
-    monkeypatch.setattr(ai_voice_azure_module.speechsdk, "SpeechConfig", FakeSpeechConfig)
+    monkeypatch.setattr(
+        ai_voice_azure_module.speechsdk, "SpeechConfig", FakeSpeechConfig
+    )
     monkeypatch.setattr(
         ai_voice_azure_module.AIVoiceAzure,
         "_build_voice_catalog",
