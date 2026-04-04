@@ -11,6 +11,7 @@ from ai_api_unified.ai_provider_registry import (
     AiProviderSpec,
     AI_PROVIDER_CAPABILITY_COMPLETIONS,
     AI_PROVIDER_CAPABILITY_IMAGES,
+    AI_PROVIDER_CAPABILITY_VIDEOS,
     get_ai_provider_spec,
 )
 
@@ -44,14 +45,10 @@ class TestAiProviderRegistry:
         ai_provider_spec: AiProviderSpec = AiProviderSpec(
             str_capability="completions",
             str_engine="  GOOGLE-GEMINI  ",
-            str_module_path=(
-                "ai_api_unified.completions.ai_google_gemini_completions"
-            ),
+            str_module_path=("ai_api_unified.completions.ai_google_gemini_completions"),
             str_class_name="GoogleGeminiCompletions",
             str_required_extra="google_gemini",
-            str_consumer_install_command=(
-                "poetry add 'ai-api-unified[google_gemini]'"
-            ),
+            str_consumer_install_command=("poetry add 'ai-api-unified[google_gemini]'"),
             str_local_install_command='poetry install --extras "google_gemini"',
             set_str_dependency_roots={"google"},
         )
@@ -69,4 +66,17 @@ class TestAiProviderRegistry:
             "ai_api_unified.images.ai_google_gemini_images"
         )
         assert ai_provider_spec.str_class_name == "AIGoogleGeminiImages"
+        assert ai_provider_spec.str_required_extra == "google_gemini"
+
+    def test_google_gemini_video_provider_is_registered(self) -> None:
+        """Gemini videos should participate in the centralized lazy-loading registry."""
+        ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+            AI_PROVIDER_CAPABILITY_VIDEOS,
+            "google-gemini",
+        )
+
+        assert ai_provider_spec.str_module_path == (
+            "ai_api_unified.videos.ai_google_gemini_videos"
+        )
+        assert ai_provider_spec.str_class_name == "AIGoogleGeminiVideos"
         assert ai_provider_spec.str_required_extra == "google_gemini"

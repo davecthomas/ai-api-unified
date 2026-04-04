@@ -2,9 +2,13 @@ from __future__ import (
     annotations,
 )  # Postpone evaluation of type hints to avoid circular imports and allow forward references with | None
 
+import base64
 import json
 import logging
 import math
+import mimetypes
+import tempfile
+import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -43,6 +47,7 @@ ProviderCallReturnType = TypeVar("ProviderCallReturnType")
 CompletionsReturnType = TypeVar("CompletionsReturnType")
 EmbeddingsReturnType = TypeVar("EmbeddingsReturnType")
 ImagesReturnType = TypeVar("ImagesReturnType")
+VideosReturnType = TypeVar("VideosReturnType")
 
 
 class SupportedDataType(Enum):
@@ -171,6 +176,7 @@ class AIBase(ABC):
     CLIENT_TYPE_EMBEDDING = "embedding"
     CLIENT_TYPE_COMPLETIONS = "completions"
     CLIENT_TYPE_IMAGES = "images"
+    CLIENT_TYPE_VIDEOS = "videos"
     PROVIDER_VENDOR_OPENAI = "openai"
     PROVIDER_VENDOR_BEDROCK = "bedrock"
     PROVIDER_VENDOR_GOOGLE = "google"
@@ -541,6 +547,223 @@ class AiApiObservedImagesResultModel(Generic[ImagesReturnType]):
         )
         object.__setattr__(self, "dict_metadata", frozen_metadata)
         # Normal return after replacing metadata with an immutable mapping copy.
+        return None
+
+
+class AIMediaReference(BaseModel):
+    """
+    Provider-agnostic reference to one media input used by multimodal APIs.
+    """
+
+    bytes_data: bytes | None = None
+    file_path: Path | None = None
+    remote_uri: str | None = None
+    mime_type: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_reference_source(self) -> "AIMediaReference":
+        """Ensure exactly one source is configured and infer the MIME type when possible."""
+
+        list_configured_sources: list[str] = [
+            source_name
+            for source_name, source_value in (
+                ("bytes_data", self.bytes_data),
+                ("file_path", self.file_path),
+                ("remote_uri", self.remote_uri),
+            )
+            if source_value is not None
+        ]
+        if len(list_configured_sources) != 1:
+            raise ValueError(
+                "AIMediaReference requires exactly one of bytes_data, file_path, or remote_uri."
+            )
+        if self.file_path is not None and not self.file_path.exists():
+            raise ValueError(
+                f"AIMediaReference.file_path does not exist: {self.file_path}"
+            )
+        if self.mime_type is None and self.file_path is not None:
+            inferred_mime_type, _ = mimetypes.guess_type(str(self.file_path))
+            if inferred_mime_type is not None:
+                self.mime_type = inferred_mime_type
+        return self
+
+    def read_bytes(self) -> bytes:
+        """
+        Materialize the reference into raw bytes when it is locally available.
+        """
+
+        if self.bytes_data is not None:
+            return self.bytes_data
+        if self.file_path is not None:
+            return self.file_path.read_bytes()
+        raise ValueError(
+            "AIMediaReference cannot read bytes from a remote_uri without a provider-specific fetch path."
+        )
+
+    def to_data_url(self) -> str:
+        """
+        Convert the reference into a data URL or remote URL suitable for provider APIs.
+        """
+
+        if self.remote_uri is not None:
+            return self.remote_uri
+        mime_type: str | None = self.mime_type
+        if mime_type is None or mime_type.strip() == "":
+            raise ValueError(
+                "AIMediaReference.mime_type is required when converting local media into a data URL."
+            )
+        media_bytes: bytes = self.read_bytes()
+        encoded_media: str = base64.b64encode(media_bytes).decode("ascii")
+        return f"data:{mime_type};base64,{encoded_media}"
+
+
+class AIVideoGenerationStatus(str, Enum):
+    """Normalized lifecycle states for video-generation jobs."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class AIVideoArtifact(BaseModel):
+    """
+    Normalized generated-video artifact.
+    """
+
+    mime_type: str = "video/mp4"
+    file_path: Path | None = None
+    remote_uri: str | None = None
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: int | None = None
+    fps: int | None = None
+    has_audio: bool | None = None
+    provider_metadata: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict
+    )
+
+    def read_bytes(self) -> bytes:
+        """
+        Read the artifact bytes from the materialized local file.
+        """
+
+        if self.file_path is None:
+            raise ValueError(
+                "AIVideoArtifact.read_bytes() requires a local file_path. Generate with download_outputs=True to materialize the artifact."
+            )
+        return self.file_path.read_bytes()
+
+
+class AIVideoGenerationJob(BaseModel):
+    """
+    Normalized video-generation job state.
+    """
+
+    job_id: str
+    provider_job_id: str
+    status: AIVideoGenerationStatus
+    progress_percent: float | None = None
+    submitted_at_utc: datetime | None = None
+    completed_at_utc: datetime | None = None
+    error_message: str | None = None
+    provider_engine: str
+    provider_model_name: str | None = None
+    provider_metadata: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict
+    )
+
+
+class AIVideoGenerationResult(BaseModel):
+    """
+    Normalized completed video-generation result.
+    """
+
+    job: AIVideoGenerationJob
+    artifacts: list[AIVideoArtifact]
+    provider_metadata: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict
+    )
+
+
+class AIBaseVideoProperties(BaseModel):
+    """
+    Portable video-generation request properties shared across providers.
+    """
+
+    duration_seconds: int | None = None
+    aspect_ratio: str | None = None
+    resolution: str | None = None
+    fps: int | None = None
+    num_videos: int = 1
+    seed: int | None = None
+    output_format: str = "mp4"
+    poll_interval_seconds: int = 10
+    timeout_seconds: int = 900
+    output_dir: Path | None = None
+    download_outputs: bool = True
+
+    @model_validator(mode="after")
+    def _validate_video_properties(self) -> "AIBaseVideoProperties":
+        """Validate shared video-generation property constraints."""
+
+        if self.duration_seconds is not None and self.duration_seconds <= 0:
+            raise ValueError(
+                "AIBaseVideoProperties.duration_seconds must be a positive integer when provided."
+            )
+        if self.fps is not None and self.fps <= 0:
+            raise ValueError(
+                "AIBaseVideoProperties.fps must be a positive integer when provided."
+            )
+        if self.num_videos <= 0:
+            raise ValueError(
+                "AIBaseVideoProperties.num_videos must be greater than zero."
+            )
+        if self.poll_interval_seconds <= 0:
+            raise ValueError(
+                "AIBaseVideoProperties.poll_interval_seconds must be greater than zero."
+            )
+        if self.timeout_seconds <= 0:
+            raise ValueError(
+                "AIBaseVideoProperties.timeout_seconds must be greater than zero."
+            )
+        if self.output_format.strip().lower() != "mp4":
+            raise ValueError(
+                "AIBaseVideoProperties.output_format must currently be 'mp4'."
+            )
+        self.output_format = self.output_format.strip().lower()
+        if self.aspect_ratio is not None:
+            self.aspect_ratio = self.aspect_ratio.strip()
+        if self.resolution is not None:
+            self.resolution = self.resolution.strip().lower()
+        return self
+
+
+@dataclass(frozen=True)
+class AiApiObservedVideosResultModel(Generic[VideosReturnType]):
+    """
+    Stores one video-provider result alongside metadata needed for observability emission.
+    """
+
+    return_value: VideosReturnType
+    generated_video_count: int
+    total_output_bytes: int = 0
+    provider_input_tokens: int | None = None
+    provider_total_tokens: int | None = None
+    dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(
+        default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        """
+        Freezes caller-supplied metadata so the observed video result remains effectively immutable.
+        """
+
+        frozen_metadata: Mapping[str, ObservabilityMetadataValue] = MappingProxyType(
+            dict(self.dict_metadata)
+        )
+        object.__setattr__(self, "dict_metadata", frozen_metadata)
         return None
 
 
@@ -1303,3 +1526,284 @@ class AIBaseImages(AIBase):
             saved_paths.append(file_path)
 
         return saved_paths
+
+
+class AIBaseVideos(AIBase):
+    """
+    Abstract base class for video-generation clients.
+    """
+
+    TERMINAL_STATUSES: ClassVar[set[AIVideoGenerationStatus]] = {
+        AIVideoGenerationStatus.COMPLETED,
+        AIVideoGenerationStatus.FAILED,
+        AIVideoGenerationStatus.CANCELLED,
+    }
+
+    def __init__(self, model: str | None = None, **kwargs: Any):
+        super().__init__(model=model, **kwargs)
+
+    def _build_videos_observability_input_metadata(
+        self,
+        *,
+        video_prompt: str,
+        video_properties: AIBaseVideoProperties,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only input fields for one video-generation provider call.
+        """
+
+        return {
+            "prompt_char_count": len(video_prompt),
+            "requested_duration_seconds": video_properties.duration_seconds,
+            "requested_aspect_ratio": video_properties.aspect_ratio,
+            "requested_resolution": video_properties.resolution,
+            "requested_fps": video_properties.fps,
+            "requested_num_videos": video_properties.num_videos,
+            "requested_output_format": video_properties.output_format,
+            "poll_interval_seconds": video_properties.poll_interval_seconds,
+            "timeout_seconds": video_properties.timeout_seconds,
+            "download_outputs": video_properties.download_outputs,
+            "has_output_dir": video_properties.output_dir is not None,
+        }
+
+    def _build_videos_observability_result_summary(
+        self,
+        *,
+        observed_result: AiApiObservedVideosResultModel[Any],
+        provider_elapsed_ms: float,
+    ) -> AiApiCallResultSummaryModel:
+        """
+        Builds metadata-only output fields for one observed video-generation provider result.
+        """
+
+        input_token_count: int | None = observed_result.provider_input_tokens
+        input_token_count_source: str = (
+            TOKEN_COUNT_SOURCE_PROVIDER
+            if input_token_count is not None
+            else TOKEN_COUNT_SOURCE_NONE
+        )
+        return AiApiCallResultSummaryModel(
+            provider_elapsed_ms=provider_elapsed_ms,
+            input_token_count=input_token_count,
+            input_token_count_source=input_token_count_source,
+            output_token_count=None,
+            output_token_count_source=TOKEN_COUNT_SOURCE_NONE,
+            provider_prompt_tokens=observed_result.provider_input_tokens,
+            provider_completion_tokens=None,
+            provider_total_tokens=observed_result.provider_total_tokens,
+            finish_reason=None,
+            dict_metadata={
+                "generated_video_count": observed_result.generated_video_count,
+                "total_output_bytes": observed_result.total_output_bytes,
+                **observed_result.dict_metadata,
+            },
+        )
+
+    def _resolve_video_output_dir(
+        self, video_properties: AIBaseVideoProperties
+    ) -> Path:
+        """
+        Resolve the local output directory for materialized video artifacts.
+        """
+
+        if video_properties.output_dir is not None:
+            output_dir: Path = video_properties.output_dir
+        else:
+            from ai_api_unified.util.env_settings import EnvSettings
+
+            env_settings: EnvSettings = EnvSettings()
+            configured_output_dir: str | None = env_settings.get_setting(
+                "VIDEO_OUTPUT_DIR",
+                None,
+            )
+            if configured_output_dir is not None and configured_output_dir.strip():
+                output_dir = Path(configured_output_dir)
+            else:
+                output_dir = (
+                    Path(tempfile.gettempdir())
+                    / "ai_api_unified"
+                    / "generated_videos"
+                    / self._resolve_observability_provider_engine()
+                )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def _apply_environment_video_property_defaults(
+        self,
+        video_properties: AIBaseVideoProperties,
+    ) -> AIBaseVideoProperties:
+        """
+        Apply environment-backed video defaults only for fields the caller did not set explicitly.
+        """
+
+        from ai_api_unified.util.env_settings import EnvSettings
+
+        normalized_properties: AIBaseVideoProperties = video_properties.model_copy(
+            deep=True
+        )
+        set_explicit_fields: set[str] = set(normalized_properties.model_fields_set)
+        env_settings: EnvSettings = EnvSettings()
+
+        if "output_dir" not in set_explicit_fields:
+            configured_output_dir: str | None = env_settings.get_setting(
+                "VIDEO_OUTPUT_DIR",
+                None,
+            )
+            if configured_output_dir is not None and configured_output_dir.strip():
+                normalized_properties.output_dir = Path(configured_output_dir)
+
+        if "poll_interval_seconds" not in set_explicit_fields:
+            raw_poll_interval_seconds: int | str | None = env_settings.get_setting(
+                "VIDEO_POLL_INTERVAL_SECONDS",
+                None,
+            )
+            if raw_poll_interval_seconds not in (None, ""):
+                normalized_properties.poll_interval_seconds = int(
+                    raw_poll_interval_seconds
+                )
+
+        if "timeout_seconds" not in set_explicit_fields:
+            raw_timeout_seconds: int | str | None = env_settings.get_setting(
+                "VIDEO_TIMEOUT_SECONDS",
+                None,
+            )
+            if raw_timeout_seconds not in (None, ""):
+                normalized_properties.timeout_seconds = int(raw_timeout_seconds)
+
+        return normalized_properties
+
+    def generate_video(
+        self,
+        video_prompt: str,
+        video_properties: AIBaseVideoProperties = AIBaseVideoProperties(),
+    ) -> AIVideoGenerationResult:
+        """
+        Submit, wait for, and materialize one normalized video-generation result.
+        """
+
+        if video_prompt.strip() == "":
+            raise ValueError("video_prompt must be a non-empty string.")
+        job: AIVideoGenerationJob = self.submit_video_generation(
+            video_prompt,
+            video_properties=video_properties,
+        )
+        completed_job: AIVideoGenerationJob = self.wait_for_video_generation(
+            job,
+            timeout_seconds=video_properties.timeout_seconds,
+            poll_interval_seconds=video_properties.poll_interval_seconds,
+        )
+        return self.download_video_result(completed_job)
+
+    def wait_for_video_generation(
+        self,
+        job: str | AIVideoGenerationJob,
+        *,
+        timeout_seconds: int | None = None,
+        poll_interval_seconds: int | None = None,
+    ) -> AIVideoGenerationJob:
+        """
+        Poll the provider until the target job reaches a terminal state.
+        """
+
+        started_at_monotonic: float = time.monotonic()
+        current_job: AIVideoGenerationJob = self.get_video_generation_job(job)
+        effective_timeout_seconds: int = (
+            timeout_seconds if timeout_seconds is not None else 900
+        )
+        effective_poll_interval_seconds: int = (
+            poll_interval_seconds if poll_interval_seconds is not None else 10
+        )
+
+        while current_job.status not in self.TERMINAL_STATUSES:
+            elapsed_seconds: float = time.monotonic() - started_at_monotonic
+            if elapsed_seconds > effective_timeout_seconds:
+                raise TimeoutError(
+                    "Video generation did not reach a terminal state before timeout. "
+                    f"provider_job_id={current_job.provider_job_id} timeout_seconds={effective_timeout_seconds}"
+                )
+            time.sleep(effective_poll_interval_seconds)
+            current_job = self.get_video_generation_job(current_job)
+
+        return current_job
+
+    @staticmethod
+    def extract_image_frames_from_video_buffer(
+        video_buffer: bytes,
+        *,
+        time_offsets_seconds: list[float] | None = None,
+        frame_indices: list[int] | None = None,
+        image_format: str = "png",
+    ) -> list[bytes]:
+        """
+        Extract one or more image buffers from a video buffer using the optional frame-decoding helpers.
+        """
+
+        from ai_api_unified.videos.frame_helpers import (
+            extract_image_frames_from_video_buffer,
+        )
+
+        return extract_image_frames_from_video_buffer(
+            video_buffer,
+            time_offsets_seconds=time_offsets_seconds,
+            frame_indices=frame_indices,
+            image_format=image_format,
+        )
+
+    @staticmethod
+    def save_image_buffers_as_files(
+        image_buffers: list[bytes],
+        *,
+        output_dir: Path,
+        root_file_name: str = "video_frame",
+        image_format: str = "png",
+    ) -> list[Path]:
+        """
+        Persist one or more image buffers as sequential files.
+        """
+
+        if not image_buffers:
+            raise ValueError("image_buffers must contain at least one image buffer.")
+        normalized_root_file_name: str = root_file_name.strip()
+        if normalized_root_file_name == "":
+            raise ValueError("root_file_name must be a non-empty string.")
+        normalized_image_format: str = image_format.strip().lower()
+        if normalized_image_format == "":
+            raise ValueError("image_format must be a non-empty string.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        saved_paths: list[Path] = []
+        for index, image_buffer in enumerate(image_buffers, start=1):
+            file_path: Path = (
+                output_dir
+                / f"{normalized_root_file_name}_{index}.{normalized_image_format}"
+            )
+            file_path.write_bytes(image_buffer)
+            saved_paths.append(file_path)
+        return saved_paths
+
+    @abstractmethod
+    def submit_video_generation(
+        self,
+        video_prompt: str,
+        video_properties: AIBaseVideoProperties = AIBaseVideoProperties(),
+    ) -> AIVideoGenerationJob:
+        """
+        Submit a provider-side video-generation job and return the normalized job handle.
+        """
+
+    @abstractmethod
+    def get_video_generation_job(
+        self,
+        job: str | AIVideoGenerationJob,
+    ) -> AIVideoGenerationJob:
+        """
+        Retrieve one normalized job snapshot from the provider.
+        """
+
+    @abstractmethod
+    def download_video_result(
+        self,
+        job: str | AIVideoGenerationJob,
+    ) -> AIVideoGenerationResult:
+        """
+        Materialize one completed provider video result into normalized file-backed artifacts.
+        """

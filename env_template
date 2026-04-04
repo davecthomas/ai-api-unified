@@ -89,3 +89,19 @@ MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=https://eastus.api.cognitive.microsoft.com
 IMAGE_ENGINE=google-gemini
 # image model used for image generation requests: openai: gpt-image-1 ; amazon nova: amazon.nova-canvas-v1:0 ; google gemini: imagen-4.0-generate-001
 IMAGE_MODEL_NAME=imagen-4.0-generate-001
+
+# Video engine: openai | google-gemini | nova-reel | nova | bedrock
+# The simplest OSS default path is Google Veo via API key auth.
+VIDEO_ENGINE=google-gemini
+# Video model defaults by provider when left unset:
+#   openai -> sora-2
+#   google-gemini -> veo-3.1-lite-generate-preview
+#   nova-reel / bedrock -> amazon.nova-reel-v1:1
+VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
+# Local directory used when the library materializes generated videos.
+VIDEO_OUTPUT_DIR=./generated_videos
+# Optional blocking-flow tuning for video polling.
+# VIDEO_POLL_INTERVAL_SECONDS=10
+# VIDEO_TIMEOUT_SECONDS=900
+# Required for Bedrock Nova Reel unless passed on the request itself.
+# BEDROCK_VIDEO_OUTPUT_S3_URI=s3://your-bucket/ai-api-unified/video-output/

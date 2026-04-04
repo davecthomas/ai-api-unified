@@ -36,7 +36,7 @@
 name = "ai_api_unified"
 
 version = "2.5.0" # keep in sync with src/ai_api_unified/__version__.py
-description = "Unified access layer for AI completions (LLM), embedding (semantic), image, and voice services"
+description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
 readme = "README.md"
@@ -48,6 +48,7 @@ keywords = [
   "vertex",
   "embeddings",
   "completion",
+  "video",
   "voice",
   "api",
 ]
@@ -106,6 +107,11 @@ middleware-pii-redaction-large = [
   "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
 ]
 similarity_score = ["numpy==2.2.6"]
+video_frames = [
+  "imageio>=2.37.0,<3.0.0",
+  "imageio-ffmpeg>=0.6.0,<1.0.0",
+  "Pillow>=11.0.0,<12.0.0",
+]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

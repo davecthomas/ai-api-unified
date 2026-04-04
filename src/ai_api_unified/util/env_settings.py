@@ -25,6 +25,12 @@ class EnvSettings(BaseSettings):
     _SUPPORTED_DATA_RESIDENCY_GEOS: tuple[str, ...] = ("us", "usa", "united states")
     IMAGE_MODEL_NAME: str | None = None
     IMAGE_ENGINE: str | None = None
+    VIDEO_MODEL_NAME: str | None = None
+    VIDEO_ENGINE: str | None = None
+    VIDEO_OUTPUT_DIR: str | None = None
+    VIDEO_POLL_INTERVAL_SECONDS: int | None = None
+    VIDEO_TIMEOUT_SECONDS: int | None = None
+    BEDROCK_VIDEO_OUTPUT_S3_URI: str | None = None
     AI_VOICE_ENGINE: str | None = None
     GOOGLE_GEMINI_API_KEY: str | None = None
     GOOGLE_AUTH_METHOD: str | None = None
