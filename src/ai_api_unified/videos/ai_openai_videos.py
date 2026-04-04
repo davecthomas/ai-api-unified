@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,7 +119,6 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
             base_url=self.base_url,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
             },
             timeout=httpx.Timeout(timeout=120.0, connect=30.0),
             follow_redirects=True,
@@ -193,17 +193,30 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
         path: str,
         *,
         json_payload: dict[str, Any] | None = None,
+        data_payload: dict[str, str] | None = None,
+        files_payload: dict[str, tuple[str, bytes, str]] | None = None,
         accept: str = "application/json",
     ) -> httpx.Response:
+        if json_payload is not None and (
+            data_payload is not None or files_payload is not None
+        ):
+            raise ValueError(
+                "OpenAI video requests must use either JSON or multipart form data, not both."
+            )
         max_attempts: int = len(self.backoff_delays)
         last_exception: Exception | None = None
         for attempt_index, delay_seconds in enumerate(self.backoff_delays, start=1):
             try:
+                request_headers: dict[str, str] = {"Accept": accept}
+                if json_payload is not None:
+                    request_headers["Content-Type"] = "application/json"
                 response: httpx.Response = self.http_client.request(
                     method=method,
                     url=path,
                     json=json_payload,
-                    headers={"Accept": accept},
+                    data=data_payload,
+                    files=files_payload,
+                    headers=request_headers,
                 )
                 if (
                     response.status_code in self.RETRYABLE_STATUS_CODES
@@ -251,6 +264,24 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
         raise RuntimeError(
             f"OpenAI video request failed for {method} {path}."
         ) from last_exception
+
+    def _build_reference_upload_file(
+        self,
+        media_reference: AIMediaReference,
+    ) -> tuple[str, bytes, str]:
+        if media_reference.remote_uri is not None:
+            raise ValueError(
+                "OpenAI video input_reference must be provided as local bytes or a local file path."
+            )
+
+        mime_type: str = media_reference.mime_type or "application/octet-stream"
+        media_bytes: bytes = media_reference.read_bytes()
+        if media_reference.file_path is not None:
+            file_name: str = media_reference.file_path.name
+        else:
+            guessed_extension: str = mimetypes.guess_extension(mime_type) or ".bin"
+            file_name = f"input_reference{guessed_extension}"
+        return file_name, media_bytes, mime_type
 
     def _parse_datetime(self, value: Any) -> datetime | None:
         if value is None:
@@ -358,13 +389,32 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
             "resolved_duration_seconds": openai_properties.duration_seconds,
             "resolved_resolution": openai_properties.resolution,
             "resolved_aspect_ratio": openai_properties.aspect_ratio,
+            "resolved_timeout_seconds": openai_properties.timeout_seconds,
+            "resolved_poll_interval_seconds": openai_properties.poll_interval_seconds,
         }
 
         def _execute_submit() -> AiApiObservedVideosResultModel[AIVideoGenerationJob]:
+            json_payload: dict[str, Any] | None = request_payload
+            data_payload: dict[str, str] | None = None
+            files_payload: dict[str, tuple[str, bytes, str]] | None = None
+            if openai_properties.reference_image is not None:
+                json_payload = None
+                data_payload = {
+                    "prompt": video_prompt,
+                    "model": self.video_model_name,
+                    "seconds": str(openai_properties.duration_seconds),
+                    "size": str(openai_properties.resolution),
+                }
+                file_name, file_bytes, mime_type = self._build_reference_upload_file(
+                    openai_properties.reference_image
+                )
+                files_payload = {"input_reference": (file_name, file_bytes, mime_type)}
             response: httpx.Response = self._request(
                 "POST",
                 "/videos",
-                json_payload=request_payload,
+                json_payload=json_payload,
+                data_payload=data_payload,
+                files_payload=files_payload,
             )
             payload: dict[str, Any] = response.json()
             job: AIVideoGenerationJob = self._normalize_job(

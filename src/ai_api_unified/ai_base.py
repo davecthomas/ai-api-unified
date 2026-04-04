@@ -1687,11 +1687,7 @@ class AIBaseVideos(AIBase):
             video_prompt,
             video_properties=video_properties,
         )
-        completed_job: AIVideoGenerationJob = self.wait_for_video_generation(
-            job,
-            timeout_seconds=video_properties.timeout_seconds,
-            poll_interval_seconds=video_properties.poll_interval_seconds,
-        )
+        completed_job: AIVideoGenerationJob = self.wait_for_video_generation(job)
         return self.download_video_result(completed_job)
 
     def wait_for_video_generation(
@@ -1707,11 +1703,33 @@ class AIBaseVideos(AIBase):
 
         started_at_monotonic: float = time.monotonic()
         current_job: AIVideoGenerationJob = self.get_video_generation_job(job)
+        provider_metadata: dict[str, str | int | float | bool | None] = dict(
+            current_job.provider_metadata
+        )
+
+        def _coerce_wait_setting(setting_key: str) -> int | None:
+            raw_value: str | int | float | bool | None = provider_metadata.get(
+                setting_key
+            )
+            if raw_value in (None, ""):
+                return None
+            if isinstance(raw_value, bool):
+                return int(raw_value)
+            if isinstance(raw_value, (int, float)):
+                return int(raw_value)
+            if isinstance(raw_value, str):
+                return int(raw_value)
+            return None
+
         effective_timeout_seconds: int = (
-            timeout_seconds if timeout_seconds is not None else 900
+            timeout_seconds
+            if timeout_seconds is not None
+            else _coerce_wait_setting("resolved_timeout_seconds") or 900
         )
         effective_poll_interval_seconds: int = (
-            poll_interval_seconds if poll_interval_seconds is not None else 10
+            poll_interval_seconds
+            if poll_interval_seconds is not None
+            else _coerce_wait_setting("resolved_poll_interval_seconds") or 10
         )
 
         while current_job.status not in self.TERMINAL_STATUSES:

@@ -54,6 +54,10 @@ class AINovaReelVideoProperties(AIBaseVideoProperties):
             raise ValueError("Nova Reel resolution must be 1280x720.")
         if self.fps is not None and self.fps != self._ALLOWED_FPS:
             raise ValueError("Nova Reel fps must be 24.")
+        if self.num_videos != 1:
+            raise ValueError(
+                "The current Nova Reel implementation supports exactly one generated video per request."
+            )
         if self.duration_seconds is not None:
             if self.duration_seconds < 6 or self.duration_seconds > 120:
                 raise ValueError(
@@ -371,6 +375,8 @@ class AINovaReelVideos(AIBedrockBase, AIBaseVideos):
             "resolved_duration_seconds": nova_properties.duration_seconds,
             "resolved_resolution": nova_properties.resolution,
             "resolved_fps": nova_properties.fps,
+            "resolved_timeout_seconds": nova_properties.timeout_seconds,
+            "resolved_poll_interval_seconds": nova_properties.poll_interval_seconds,
             "output_s3_uri": output_s3_uri,
         }
 

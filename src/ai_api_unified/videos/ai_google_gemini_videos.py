@@ -166,13 +166,14 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         )
 
     def _to_google_video(self, media_reference: AIMediaReference) -> types.Video:
-        if media_reference.remote_uri is not None:
-            return types.Video(uri=media_reference.remote_uri)
-        mime_type: str = media_reference.mime_type or "video/mp4"
-        return types.Video(
-            video_bytes=media_reference.read_bytes(),
-            mime_type=mime_type,
-        )
+        if media_reference.remote_uri is None:
+            raise ValueError(
+                "Google Gemini source_video must be provided as a GCS URI."
+            )
+        normalized_remote_uri: str = media_reference.remote_uri.strip()
+        if not normalized_remote_uri.startswith("gs://"):
+            raise ValueError("Google Gemini source_video must use a gs:// URI.")
+        return types.Video(uri=normalized_remote_uri)
 
     def _get_operation(
         self, job: str | AIVideoGenerationJob
@@ -208,6 +209,7 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         previous_provider_metadata: (
             dict[str, str | int | float | bool | None] | None
         ) = None,
+        previous_job: AIVideoGenerationJob | None = None,
     ) -> AIVideoGenerationJob:
         provider_metadata: dict[str, str | int | float | bool | None] = dict(
             previous_provider_metadata or {}
@@ -216,17 +218,23 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         error_message: str | None = None
         if operation.error is not None:
             error_message = str(operation.error)
+        submitted_at_utc: datetime = (
+            previous_job.submitted_at_utc
+            if previous_job is not None and previous_job.submitted_at_utc is not None
+            else datetime.now(timezone.utc)
+        )
+        completed_at_utc: datetime | None = (
+            previous_job.completed_at_utc if previous_job is not None else None
+        )
+        if operation.done and completed_at_utc is None:
+            completed_at_utc = datetime.now(timezone.utc)
         return AIVideoGenerationJob(
             job_id=f"google-gemini:{operation.name}",
             provider_job_id=operation.name,
             status=self._normalize_status(operation),
             progress_percent=None,
-            submitted_at_utc=datetime.now(timezone.utc),
-            completed_at_utc=(
-                datetime.now(timezone.utc)
-                if operation.done and operation.error is None
-                else None
-            ),
+            submitted_at_utc=submitted_at_utc,
+            completed_at_utc=completed_at_utc,
             error_message=error_message,
             provider_engine=self._resolve_observability_provider_engine(),
             provider_model_name=self.video_model_name,
@@ -269,21 +277,13 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
             "resolution": google_properties.resolution,
         }
         if google_properties.seed is not None:
-            _LOGGER.warning(
-                "Google Gemini video generation currently ignores seed because the Gemini API rejects that parameter."
-            )
+            config_kwargs["seed"] = google_properties.seed
         if google_properties.fps is not None:
-            _LOGGER.warning(
-                "Google Gemini video generation currently ignores fps because the Gemini API rejects that parameter."
-            )
+            config_kwargs["fps"] = google_properties.fps
         if google_properties.generate_audio is not None:
-            _LOGGER.warning(
-                "Google Gemini video generation currently ignores generate_audio because the Gemini API rejects that parameter."
-            )
+            config_kwargs["generate_audio"] = google_properties.generate_audio
         if google_properties.person_generation is not None:
-            config_kwargs["person_generation"] = (
-                google_properties.person_generation.upper()
-            )
+            config_kwargs["person_generation"] = google_properties.person_generation
         if google_properties.last_frame_image is not None:
             config_kwargs["last_frame"] = self._to_google_image(
                 google_properties.last_frame_image
@@ -305,6 +305,11 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         if google_properties.image is not None:
             request_kwargs["image"] = self._to_google_image(google_properties.image)
         if google_properties.source_video is not None:
+            auth_method: str = self._resolve_google_auth_method(EnvSettings())
+            if auth_method == self.GOOGLE_AUTH_METHOD_API_KEY:
+                raise NotImplementedError(
+                    "Google Gemini source_video generation requires Vertex AI and is not available when GOOGLE_AUTH_METHOD=api_key."
+                )
             request_kwargs["video"] = self._to_google_video(
                 google_properties.source_video
             )
@@ -317,6 +322,8 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
             "resolved_duration_seconds": google_properties.duration_seconds,
             "resolved_resolution": google_properties.resolution,
             "resolved_aspect_ratio": google_properties.aspect_ratio,
+            "resolved_timeout_seconds": google_properties.timeout_seconds,
+            "resolved_poll_interval_seconds": google_properties.poll_interval_seconds,
         }
 
         def _execute_submit() -> AiApiObservedVideosResultModel[AIVideoGenerationJob]:
@@ -372,12 +379,15 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         job: str | AIVideoGenerationJob,
     ) -> AIVideoGenerationJob:
         previous_provider_metadata: dict[str, str | int | float | bool | None] = {}
+        previous_job: AIVideoGenerationJob | None = None
         if isinstance(job, AIVideoGenerationJob):
+            previous_job = job
             previous_provider_metadata = dict(job.provider_metadata)
         operation: types.GenerateVideosOperation = self._get_operation(job)
         return self._normalize_job(
             operation,
             previous_provider_metadata=previous_provider_metadata,
+            previous_job=previous_job,
         )
 
     def _get_downloadable_operation(
@@ -417,6 +427,7 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         current_job = self._normalize_job(
             operation,
             previous_provider_metadata=previous_provider_metadata,
+            previous_job=current_job,
         )
         if current_job.status != AIVideoGenerationStatus.COMPLETED:
             raise ValueError(
