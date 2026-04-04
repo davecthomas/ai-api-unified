@@ -14,6 +14,8 @@ from ai_api_unified.middleware.middleware import (
     log_middleware_observability_events,
 )
 from ai_api_unified.middleware.middleware_config import (
+    CAPABILITY_IMAGES,
+    CAPABILITY_VIDEOS,
     DIRECTION_INPUT_OUTPUT,
     DIRECTION_OUTPUT_ONLY,
     INPUT_ONLY,
@@ -56,6 +58,7 @@ SET_STR_MEDIA_DETAIL_METADATA_KEYS: set[str] = {
     "media_mime_types",
 }
 SET_STR_IMAGE_BYTE_COUNT_METADATA_KEYS: set[str] = {"total_output_bytes"}
+SET_STR_VIDEO_BYTE_COUNT_METADATA_KEYS: set[str] = {"total_output_bytes"}
 SET_STR_AUDIO_BYTE_COUNT_METADATA_KEYS: set[str] = {"output_audio_byte_count"}
 SET_STR_PROVIDER_USAGE_EVENT_KEYS: set[str] = {
     "provider_prompt_tokens",
@@ -647,9 +650,20 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             for str_event_key in SET_STR_PROVIDER_USAGE_EVENT_KEYS:
                 dict_event_fields.pop(str_event_key, None)
 
-        if not self.observability_settings.include_image_byte_count:
+        if (
+            call_context.capability == CAPABILITY_IMAGES
+            and not self.observability_settings.include_image_byte_count
+        ):
             # Loop through image-byte keys and drop them when image byte counts are disabled.
             for str_event_key in SET_STR_IMAGE_BYTE_COUNT_METADATA_KEYS:
+                dict_event_fields.pop(str_event_key, None)
+
+        if (
+            call_context.capability == CAPABILITY_VIDEOS
+            and not self.observability_settings.include_video_byte_count
+        ):
+            # Loop through video-byte keys and drop them when video byte counts are disabled.
+            for str_event_key in SET_STR_VIDEO_BYTE_COUNT_METADATA_KEYS:
                 dict_event_fields.pop(str_event_key, None)
 
         if not self.observability_settings.include_audio_byte_count:

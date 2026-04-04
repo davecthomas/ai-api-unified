@@ -197,13 +197,16 @@ def mock_google_dependencies() -> None:
             if original_module is not None:
                 sys.modules[module_name] = original_module
 
+
 from ai_api_unified.ai_base import (  # noqa: E402
     AIStructuredPrompt,
 )
 
 
 def _import_google_gemini_embeddings_module():
-    return importlib.import_module("ai_api_unified.embeddings.ai_google_gemini_embeddings")
+    return importlib.import_module(
+        "ai_api_unified.embeddings.ai_google_gemini_embeddings"
+    )
 
 
 def _import_google_gemini_completions_module():

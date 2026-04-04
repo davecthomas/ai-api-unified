@@ -101,9 +101,7 @@ DETECTION_PROFILE_BALANCED: str = "balanced"
 DETECTION_PROFILE_LOW_MEMORY: str = "low_memory"
 INVALID_DETECTION_PROFILE_RAW: str = "invalid-profile-token"
 BOOLEAN_TRUTHINESS_TEST_VALUE: list[int] = [1, 2, 3]
-PRESIDIO_REDACTOR_LOGGER_NAME: str = (
-    "ai_api_unified.middleware.impl._presidio_redactor"
-)
+PRESIDIO_REDACTOR_LOGGER_NAME: str = "ai_api_unified.middleware.impl._presidio_redactor"
 MATRIX_PHONE: str = "1-800-555-1212"
 MATRIX_SSN: str = "585-39-6731"
 MATRIX_ENTITY_PHONE: str = "PHONE"

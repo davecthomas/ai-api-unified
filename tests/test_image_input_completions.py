@@ -45,7 +45,9 @@ def test_image_input_completions() -> None:
             model_name="gpt-4o-mini",
         )
     except AiProviderDependencyUnavailableError as exception:
-        pytest.skip(f"Skipping OpenAI image input test due to missing dependency: {exception}")
+        pytest.skip(
+            f"Skipping OpenAI image input test due to missing dependency: {exception}"
+        )
 
     image_bytes: bytes = INPUT_IMAGE_PATH.read_bytes()
     params: AICompletionsPromptParamsBase = AICompletionsPromptParamsBase(

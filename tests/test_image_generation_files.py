@@ -25,7 +25,10 @@ from ai_api_unified.ai_base import (  # noqa: E402
 def _skip_if_google_image_generation_unavailable(exception: Exception) -> None:
     """Skip live Google image tests when the current account lacks image-generation access."""
     message: str = str(exception)
-    if "paid plans" in message.lower() or "imagen 3 is only available" in message.lower():
+    if (
+        "paid plans" in message.lower()
+        or "imagen 3 is only available" in message.lower()
+    ):
         pytest.skip(
             "Skipping Google image generation test because the current Google account does not have paid image-generation access."
         )

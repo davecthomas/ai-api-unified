@@ -63,9 +63,7 @@ TEST_INPUT_PROMPT_CHAR_COUNT: int = 24
 TEST_OUTPUT_CHAR_COUNT: int = len(TEST_PROVIDER_RESULT)
 TEST_AUDIO_BYTE_COUNT: int = len(TEST_PROVIDER_AUDIO_BYTES)
 TEST_PROVIDER_ELAPSED_MS: float = 12.5
-TEST_CONTEXT_WARNING_LOGGER: str = (
-    "ai_api_unified.middleware.observability_runtime"
-)
+TEST_CONTEXT_WARNING_LOGGER: str = "ai_api_unified.middleware.observability_runtime"
 TEST_COLLIDING_CALL_ID: str = "shadow-call-id"
 TEST_COLLIDING_PROVIDER_ELAPSED_MS: float = 999.0
 
@@ -919,6 +917,7 @@ def test_logger_backed_observability_middleware_respects_optional_field_settings
                 include_provider_usage=False,
                 include_audio_byte_count=False,
                 include_image_byte_count=False,
+                include_video_byte_count=False,
                 token_count_mode="none",
             )
         )
@@ -983,4 +982,56 @@ def test_logger_backed_observability_middleware_respects_optional_field_settings
     assert "provider_completion_tokens" not in dict_output_fields
     assert "provider_total_tokens" not in dict_output_fields
     assert "output_audio_byte_count" not in dict_output_fields
+    assert dict_output_fields["total_output_bytes"] == 4321
+
+
+def test_logger_backed_observability_middleware_hides_video_byte_count_when_disabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Ensures video byte-count suppression applies only to video-capability events.
+
+    Args:
+        caplog: Pytest fixture used to capture emitted observability records.
+
+    Returns:
+        None for normal test completion.
+    """
+
+    caplog.set_level(logging.INFO, logger=OBSERVABILITY_LOGGER_NAME)
+    middleware: LoggerBackedObservabilityMiddleware = (
+        LoggerBackedObservabilityMiddleware(
+            ObservabilitySettingsModel(include_video_byte_count=False)
+        )
+    )
+    input_context: AiApiCallContextModel = AiApiCallContextModel(
+        call_id=TEST_CALL_ID,
+        event_time_utc=datetime.now(timezone.utc),
+        capability="videos",
+        operation="generate_video",
+        provider_vendor="google",
+        provider_engine="google-gemini",
+        model_name="veo-3.1-lite-generate-preview",
+        model_version=None,
+        direction=OBSERVABILITY_DIRECTION_INPUT,
+        dict_metadata={},
+    )
+    output_context: AiApiCallContextModel = input_context.with_direction(
+        OBSERVABILITY_DIRECTION_OUTPUT
+    )
+    result_summary: AiApiCallResultSummaryModel = AiApiCallResultSummaryModel(
+        provider_elapsed_ms=TEST_PROVIDER_ELAPSED_MS,
+        dict_metadata={"total_output_bytes": 4321},
+    )
+
+    middleware.before_call(input_context)
+    middleware.after_call(output_context, result_summary)
+
+    list_observability_records: list[logging.LogRecord] = [
+        log_record
+        for log_record in caplog.records
+        if log_record.name == OBSERVABILITY_LOGGER_NAME
+    ]
+    dict_output_fields: dict[str, object] = list_observability_records[1].args[1]
+
     assert "total_output_bytes" not in dict_output_fields

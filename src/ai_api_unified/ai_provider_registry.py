@@ -16,12 +16,14 @@ from .ai_provider_exceptions import AiProviderConfigurationError
 AI_PROVIDER_CAPABILITY_COMPLETIONS: str = "completions"
 AI_PROVIDER_CAPABILITY_EMBEDDINGS: str = "embeddings"
 AI_PROVIDER_CAPABILITY_IMAGES: str = "images"
+AI_PROVIDER_CAPABILITY_VIDEOS: str = "videos"
 AI_PROVIDER_CAPABILITY_VOICE: str = "voice"
 
 TypeAiProviderCapability = Literal[
     "completions",
     "embeddings",
     "images",
+    "videos",
     "voice",
 ]
 TypeAiProviderRegistryKey = tuple[TypeAiProviderCapability, str]
@@ -94,14 +96,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="google-gemini",
-        str_module_path=(
-            "ai_api_unified.completions.ai_google_gemini_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_google_gemini_completions"),
         str_class_name="GoogleGeminiCompletions",
         str_required_extra="google_gemini",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[google_gemini]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[google_gemini]'"),
         str_local_install_command='poetry install --extras "google_gemini"',
         set_str_dependency_roots={"google", "google.genai", "google.api_core"},
     ),
@@ -111,14 +109,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="llama",
-        str_module_path=(
-            "ai_api_unified.completions.ai_bedrock_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -128,14 +122,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="anthropic",
-        str_module_path=(
-            "ai_api_unified.completions.ai_bedrock_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -145,14 +135,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="mistral",
-        str_module_path=(
-            "ai_api_unified.completions.ai_bedrock_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -162,14 +148,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="nova",
-        str_module_path=(
-            "ai_api_unified.completions.ai_bedrock_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -179,14 +161,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="cohere",
-        str_module_path=(
-            "ai_api_unified.completions.ai_bedrock_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -196,14 +174,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="ai21",
-        str_module_path=(
-            "ai_api_unified.completions.ai_bedrock_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -213,14 +187,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="rerank",
-        str_module_path=(
-            "ai_api_unified.completions.ai_bedrock_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -230,14 +200,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="canvas",
-        str_module_path=(
-            "ai_api_unified.completions.ai_bedrock_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -263,9 +229,7 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_module_path=("ai_api_unified.embeddings.ai_titan_embeddings"),
         str_class_name="AiTitanEmbeddings",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -275,14 +239,10 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_EMBEDDINGS,
         str_engine="google-gemini",
-        str_module_path=(
-            "ai_api_unified.embeddings.ai_google_gemini_embeddings"
-        ),
+        str_module_path=("ai_api_unified.embeddings.ai_google_gemini_embeddings"),
         str_class_name="GoogleGeminiEmbeddings",
         str_required_extra="google_gemini",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[google_gemini]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[google_gemini]'"),
         str_local_install_command='poetry install --extras "google_gemini"',
         set_str_dependency_roots={"google", "google.genai", "google.api_core"},
     ),
@@ -308,9 +268,7 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_module_path="ai_api_unified.images.ai_bedrock_images",
         str_class_name="AINovaCanvasImages",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -323,9 +281,7 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_module_path="ai_api_unified.images.ai_google_gemini_images",
         str_class_name="AIGoogleGeminiImages",
         str_required_extra="google_gemini",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[google_gemini]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[google_gemini]'"),
         str_local_install_command='poetry install --extras "google_gemini"',
         set_str_dependency_roots={"google", "google.genai", "google.api_core"},
     ),
@@ -338,9 +294,7 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_module_path="ai_api_unified.images.ai_bedrock_images",
         str_class_name="AINovaCanvasImages",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -353,9 +307,72 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_module_path="ai_api_unified.images.ai_bedrock_images",
         str_class_name="AINovaCanvasImages",
         str_required_extra="bedrock",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[bedrock]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
+        str_local_install_command='poetry install --extras "bedrock"',
+        set_str_dependency_roots={"boto3", "botocore"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_VIDEOS,
+        "openai",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_VIDEOS,
+        str_engine="openai",
+        str_module_path="ai_api_unified.videos.ai_openai_videos",
+        str_class_name="AIOpenAIVideos",
+        str_required_extra="openai",
+        str_consumer_install_command=("poetry add 'ai-api-unified[openai]'"),
+        str_local_install_command='poetry install --extras "openai"',
+        set_str_dependency_roots={"openai", "httpx"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_VIDEOS,
+        "google-gemini",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_VIDEOS,
+        str_engine="google-gemini",
+        str_module_path="ai_api_unified.videos.ai_google_gemini_videos",
+        str_class_name="AIGoogleGeminiVideos",
+        str_required_extra="google_gemini",
+        str_consumer_install_command=("poetry add 'ai-api-unified[google_gemini]'"),
+        str_local_install_command='poetry install --extras "google_gemini"',
+        set_str_dependency_roots={"google", "google.genai", "google.api_core"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_VIDEOS,
+        "bedrock",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_VIDEOS,
+        str_engine="bedrock",
+        str_module_path="ai_api_unified.videos.ai_bedrock_videos",
+        str_class_name="AINovaReelVideos",
+        str_required_extra="bedrock",
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
+        str_local_install_command='poetry install --extras "bedrock"',
+        set_str_dependency_roots={"boto3", "botocore"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_VIDEOS,
+        "nova",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_VIDEOS,
+        str_engine="nova",
+        str_module_path="ai_api_unified.videos.ai_bedrock_videos",
+        str_class_name="AINovaReelVideos",
+        str_required_extra="bedrock",
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
+        str_local_install_command='poetry install --extras "bedrock"',
+        set_str_dependency_roots={"boto3", "botocore"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_VIDEOS,
+        "nova-reel",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_VIDEOS,
+        str_engine="nova-reel",
+        str_module_path="ai_api_unified.videos.ai_bedrock_videos",
+        str_class_name="AINovaReelVideos",
+        str_required_extra="bedrock",
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
@@ -381,9 +398,7 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_module_path="ai_api_unified.voice.ai_voice_google",
         str_class_name="AIVoiceGoogle",
         str_required_extra="google_gemini",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[google_gemini]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[google_gemini]'"),
         str_local_install_command='poetry install --extras "google_gemini"',
         set_str_dependency_roots={
             "google",
@@ -401,9 +416,7 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_module_path="ai_api_unified.voice.ai_voice_azure",
         str_class_name="AIVoiceAzure",
         str_required_extra="azure_tts",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[azure_tts]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[azure_tts]'"),
         str_local_install_command='poetry install --extras "azure_tts"',
         set_str_dependency_roots={"azure", "azure.cognitiveservices"},
     ),
@@ -416,9 +429,7 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_module_path="ai_api_unified.voice.ai_voice_elevenlabs",
         str_class_name="AIVoiceElevenLabs",
         str_required_extra="elevenlabs",
-        str_consumer_install_command=(
-            "poetry add 'ai-api-unified[elevenlabs]'"
-        ),
+        str_consumer_install_command=("poetry add 'ai-api-unified[elevenlabs]'"),
         str_local_install_command='poetry install --extras "elevenlabs"',
         set_str_dependency_roots={"elevenlabs"},
     ),

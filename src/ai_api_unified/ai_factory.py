@@ -11,7 +11,7 @@ import importlib.machinery
 import importlib.util
 import logging
 
-from .ai_base import AIBaseCompletions, AIBaseEmbeddings, AIBaseImages
+from .ai_base import AIBaseCompletions, AIBaseEmbeddings, AIBaseImages, AIBaseVideos
 from .ai_provider_exceptions import (
     AiProviderConfigurationError,
     AiProviderDependencyUnavailableError,
@@ -23,6 +23,7 @@ from .ai_provider_registry import (
     AI_PROVIDER_CAPABILITY_COMPLETIONS,
     AI_PROVIDER_CAPABILITY_EMBEDDINGS,
     AI_PROVIDER_CAPABILITY_IMAGES,
+    AI_PROVIDER_CAPABILITY_VIDEOS,
     TypeAiProviderCapability,
     get_ai_provider_spec,
 )
@@ -33,6 +34,7 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 DEFAULT_COMPLETIONS_ENGINE: str = ""
 DEFAULT_EMBEDDING_ENGINE: str = ""
 DEFAULT_IMAGE_ENGINE: str = ""
+DEFAULT_VIDEO_ENGINE: str = ""
 DEFAULT_EMBEDDING_DIMENSIONS: str = "0"
 COMPLETIONS_MODEL_NAME_KEY: str = "COMPLETIONS_MODEL_NAME"
 COMPLETIONS_ENGINE_KEY: str = "COMPLETIONS_ENGINE"
@@ -41,6 +43,8 @@ EMBEDDING_ENGINE_KEY: str = "EMBEDDING_ENGINE"
 EMBEDDING_DIMENSIONS_KEY: str = "EMBEDDING_DIMENSIONS"
 IMAGE_MODEL_NAME_KEY: str = "IMAGE_MODEL_NAME"
 IMAGE_ENGINE_KEY: str = "IMAGE_ENGINE"
+VIDEO_MODEL_NAME_KEY: str = "VIDEO_MODEL_NAME"
+VIDEO_ENGINE_KEY: str = "VIDEO_ENGINE"
 
 
 def _is_python_module_available(str_module_name: str) -> bool:
@@ -226,6 +230,9 @@ class AIFactory:
         if str_capability == AI_PROVIDER_CAPABILITY_IMAGES:
             # Normal return with legacy images unsupported-engine error.
             return ValueError(f"Unsupported IMAGE engine: {str_engine!r}")
+        if str_capability == AI_PROVIDER_CAPABILITY_VIDEOS:
+            # Normal return with legacy videos unsupported-engine error.
+            return ValueError(f"Unsupported VIDEO engine: {str_engine!r}")
         # Normal return with generic unsupported engine error.
         return ValueError(str(exception))
 
@@ -435,6 +442,63 @@ class AIFactory:
                 exception,
                 AI_PROVIDER_CAPABILITY_IMAGES,
                 str_image_engine,
+            ) from exception
+        except AiProviderDependencyUnavailableError as exception:
+            _LOGGER.warning(str(exception))
+            raise
+        except AiProviderRuntimeError:
+            raise
+
+    @staticmethod
+    def get_ai_video_client(
+        model_name: str | None = None,
+        video_engine: str | None = None,
+    ) -> AIBaseVideos:
+        """
+        Instantiates the configured video-generation client.
+
+        Args:
+            model_name: Optional model override; falls back to environment config.
+            video_engine: Optional engine override; falls back to environment config.
+
+        Returns:
+            Concrete AIBaseVideos implementation for the requested video engine.
+        """
+        env_settings: EnvSettings = EnvSettings()
+        str_video_engine: str = AIFactory._resolve_required_engine(
+            env_settings=env_settings,
+            str_engine_key=VIDEO_ENGINE_KEY,
+            str_engine_override=video_engine,
+        )
+
+        str_model_name: str | None
+        if model_name is None:
+            raw_model_name: str | None = env_settings.get_setting(
+                VIDEO_MODEL_NAME_KEY,
+                None,
+            )
+            if raw_model_name is None or raw_model_name.strip() == "":
+                str_model_name = None
+            else:
+                str_model_name = raw_model_name
+        else:
+            str_model_name = model_name
+
+        try:
+            ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+                AI_PROVIDER_CAPABILITY_VIDEOS,
+                str_video_engine,
+            )
+            class_ai_video_client: type[AIBaseVideos] = load_ai_provider_class(
+                ai_provider_spec,
+                AIBaseVideos,
+            )
+            return class_ai_video_client(model=str_model_name)
+        except AiProviderConfigurationError as exception:
+            raise AIFactory._translate_config_exception(
+                exception,
+                AI_PROVIDER_CAPABILITY_VIDEOS,
+                str_video_engine,
             ) from exception
         except AiProviderDependencyUnavailableError as exception:
             _LOGGER.warning(str(exception))

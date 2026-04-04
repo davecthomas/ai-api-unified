@@ -1,24 +1,37 @@
-# ai-api-unified
+# ai-api-unified 2.5.0
 
-`ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
+`ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
-This release adopts a registry-backed lazy-loading architecture:
+Author: Dave Thomas  
+Install name: `ai-api-unified`  
+Import path: `ai_api_unified`  
+Python: `>=3.11,<3.14`  
+License: MIT
+
+The current package architecture is registry-backed and lazy-loaded:
 
 - provider SDKs are optional extras, not base dependencies
 - providers are resolved only when a factory selects them
 - package `__init__` modules export stable interfaces only
 - missing provider selectors are configuration errors, not implicit fallbacks
 
-Install name: `ai-api-unified`  
-Import path: `ai_api_unified`
+## Overview
 
-## Breaking Changes in 2.x
+Use this library when you want one consistent interface across multiple AI providers without binding application code to a single SDK. The library currently covers:
 
-- Provider SDKs, including OpenAI, are no longer included in the base install.
-- `COMPLETIONS_ENGINE`, `EMBEDDING_ENGINE`, `IMAGE_ENGINE`, and `AI_VOICE_ENGINE` must be set explicitly when that capability is used.
-- Root and subpackage `__init__.py` modules no longer re-export optional concrete provider classes.
-- Provider dispatch now goes through the lazy provider registry and loader instead of eager import branching.
-- Google-backed providers now default to `GOOGLE_AUTH_METHOD=api_key`. Service-account auth is still available, but it is explicit.
+- text completions
+- embeddings
+- image generation
+- video generation
+- text-to-speech and selected speech-to-text flows
+
+The public entry points are the stable base interfaces and factories:
+
+- `AIFactory.get_ai_completions_client()`
+- `AIFactory.get_ai_embedding_client()`
+- `AIFactory.get_ai_images_client()`
+- `AIFactory.get_ai_video_client()`
+- `AIVoiceFactory.create()`
 
 ## Capabilities
 
@@ -27,6 +40,7 @@ Import path: `ai_api_unified`
 | Completions | `AIBaseCompletions` | `openai`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `google_gemini`, `bedrock`                 |
 | Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`                                                                                            | `openai`, `bedrock`, `google_gemini`                 |
 | Images      | `AIBaseImages`      | `openai`, `google-gemini`, `nova-canvas` and Bedrock image aliases                                                            | `openai`, `google_gemini`, `bedrock`                 |
+| Videos      | `AIBaseVideos`      | `openai`, `google-gemini`, `nova-reel` and Bedrock video aliases                                                              | `openai`, `google_gemini`, `bedrock`, `video_frames` |
 | Voice TTS   | `AIVoiceBase`       | `openai`, `google`, `azure`, `elevenlabs`                                                                                     | `openai`, `google_gemini`, `azure_tts`, `elevenlabs` |
 | Voice STT   | `AIVoiceBase`       | provider-specific support such as Google and ElevenLabs                                                                       | `google_gemini`, `elevenlabs`                        |
 
@@ -35,6 +49,7 @@ Default model guidance in the checked-in OSS env files:
 - Google completions: `gemini-2.5-flash`
 - Google embeddings: `gemini-embedding-001`
 - Google images: `imagen-4.0-generate-001`
+- Google videos: `veo-3.1-lite-generate-preview`
 - Google voice: `gemini-2.5-pro-tts`
 
 ## Installation
@@ -57,6 +72,8 @@ Install with one or more provider extras:
 poetry add 'ai-api-unified[google_gemini]'
 poetry add 'ai-api-unified[openai]'
 poetry add 'ai-api-unified[bedrock,google_gemini]'
+poetry add 'ai-api-unified[google_gemini,video_frames]'
+poetry add 'ai-api-unified[openai,video_frames]'
 ```
 
 ### Install in a Local Clone
@@ -73,6 +90,8 @@ Common local development installs:
 poetry install --with dev
 poetry install --extras "google_gemini"
 poetry install --extras "openai"
+poetry install --extras "google_gemini" --extras "video_frames" --with dev
+poetry install --extras "openai" --extras "video_frames" --with dev
 poetry install --all-extras --with dev
 ```
 
@@ -83,6 +102,7 @@ poetry install --all-extras --with dev
 | `openai`                         | OpenAI completions, embeddings, images, and voice                      |
 | `google_gemini`                  | Google Gemini completions, embeddings, images, and Google voice        |
 | `bedrock`                        | AWS Bedrock completions, Titan embeddings, and Bedrock image providers |
+| `video_frames`                   | Optional frame extraction helpers backed by ImageIO + Pillow           |
 | `azure_tts`                      | Azure Cognitive Services TTS                                           |
 | `elevenlabs`                     | ElevenLabs TTS and STT                                                 |
 | `middleware-pii-redaction`       | Presidio + `usaddress` without packaged spaCy model wheels             |
@@ -101,6 +121,7 @@ The OSS template now defaults to Google API-key auth:
 COMPLETIONS_ENGINE=google-gemini
 EMBEDDING_ENGINE=google-gemini
 IMAGE_ENGINE=google-gemini
+VIDEO_ENGINE=google-gemini
 AI_VOICE_ENGINE=google
 
 GOOGLE_GEMINI_API_KEY=...
@@ -109,6 +130,7 @@ GOOGLE_AUTH_METHOD=api_key
 COMPLETIONS_MODEL_NAME=gemini-2.5-flash
 EMBEDDING_MODEL_NAME=gemini-embedding-001
 IMAGE_MODEL_NAME=imagen-4.0-generate-001
+VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
 DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
 ```
 
@@ -160,6 +182,109 @@ with open("generated_image.png", "wb") as generated_file:
     generated_file.write(images[0])
 ```
 
+### Video Generation
+
+The blocking convenience path is:
+
+```python
+from pathlib import Path
+
+from ai_api_unified import AIFactory, AIBaseVideoProperties, AIBaseVideos
+
+client: AIBaseVideos = AIFactory.get_ai_video_client()
+result = client.generate_video(
+    "A cinematic tracking shot of a neon train crossing the desert at dusk.",
+    AIBaseVideoProperties(output_dir=Path("./generated_videos")),
+)
+
+video_bytes: bytes = result.artifacts[0].read_bytes()
+frames: list[bytes] = AIBaseVideos.extract_image_frames_from_video_buffer(
+    video_bytes,
+    time_offsets_seconds=[0.0, 1.0],
+)
+AIBaseVideos.save_image_buffers_as_files(
+    frames,
+    output_dir=Path("./generated_frames"),
+)
+```
+
+If you want explicit job control instead of the blocking wrapper:
+
+```python
+from ai_api_unified import AIFactory, AIBaseVideos
+
+client: AIBaseVideos = AIFactory.get_ai_video_client()
+job = client.submit_video_generation(
+    "A stop-motion paper city waking up at sunrise."
+)
+job = client.wait_for_video_generation(job)
+result = client.download_video_result(job)
+print(result.job.status, result.artifacts[0].file_path)
+```
+
+#### Kick Off Google Gemini Video Generation
+
+Environment:
+
+```dotenv
+VIDEO_ENGINE=google-gemini
+VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
+GOOGLE_GEMINI_API_KEY=...
+GOOGLE_AUTH_METHOD=api_key
+```
+
+Code:
+
+```python
+from pathlib import Path
+
+from ai_api_unified import AIFactory, AIBaseVideoProperties, AIBaseVideos
+
+client: AIBaseVideos = AIFactory.get_ai_video_client()
+result = client.generate_video(
+    "A cinematic dolly shot of a red vintage train moving through a desert at sunset.",
+    AIBaseVideoProperties(
+        output_dir=Path("./generated_videos/google"),
+        timeout_seconds=1200,
+        poll_interval_seconds=10,
+    ),
+)
+
+print(result.artifacts[0].file_path)
+```
+
+#### Kick Off OpenAI Video Generation
+
+Environment:
+
+```dotenv
+VIDEO_ENGINE=openai
+VIDEO_MODEL_NAME=sora-2
+OPENAI_API_KEY=...
+```
+
+Code:
+
+```python
+from pathlib import Path
+
+from ai_api_unified import AIFactory, AIBaseVideoProperties, AIBaseVideos
+
+client: AIBaseVideos = AIFactory.get_ai_video_client()
+result = client.generate_video(
+    "A wide cinematic shot of gentle ocean waves meeting a rocky coastline at golden hour.",
+    AIBaseVideoProperties(
+        output_dir=Path("./generated_videos/openai"),
+        timeout_seconds=1200,
+        poll_interval_seconds=10,
+    ),
+)
+
+print(result.artifacts[0].file_path)
+```
+
+Frame extraction requires the optional `video_frames` extra.
+
 ### Voice
 
 ```python
@@ -183,6 +308,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | `COMPLETIONS_ENGINE` | `openai`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
 | `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
 | `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
+| `VIDEO_ENGINE`       | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel`                                                                     |
 | `AI_VOICE_ENGINE`    | `openai`, `google`, `azure`, `elevenlabs`                                                                                     |
 
 ### Common Model Settings
@@ -192,6 +318,11 @@ There is no implicit default provider. Set the selector for each capability you 
 | `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override                                                          |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
+| `VIDEO_MODEL_NAME`          | Optional video model override                                                               |
+| `VIDEO_OUTPUT_DIR`          | Optional local output directory for materialized video artifacts                            |
+| `VIDEO_POLL_INTERVAL_SECONDS` | Optional default poll interval for video job waits                                        |
+| `VIDEO_TIMEOUT_SECONDS`     | Optional default timeout for blocking video generation                                      |
+| `BEDROCK_VIDEO_OUTPUT_S3_URI` | Required for Nova Reel unless provided per request                                        |
 | `DEFAULT_GEMINI_TTS_MODEL`  | Optional Google voice model override                                                        |
 | `EMBEDDING_DIMENSIONS`      | Optional embeddings dimension override. Leave unset for provider defaults.                  |
 | `AI_API_GEO_RESIDENCY`      | Optional geo hint. `US`, `USA`, or `United States` normalize to US routing where supported. |
@@ -211,6 +342,7 @@ Common optional settings:
 - `COMPLETIONS_MODEL_NAME`
 - `EMBEDDING_MODEL_NAME`
 - `IMAGE_MODEL_NAME`
+- `VIDEO_MODEL_NAME`
 - `EMBEDDING_DIMENSIONS`
 - `AI_API_GEO_RESIDENCY`
 
@@ -226,6 +358,8 @@ Common optional settings:
 - `COMPLETIONS_MODEL_NAME`
 - `EMBEDDING_MODEL_NAME`
 - `IMAGE_MODEL_NAME`
+- `VIDEO_MODEL_NAME`
+- `BEDROCK_VIDEO_OUTPUT_S3_URI`
 - `EMBEDDING_DIMENSIONS`
 - `AI_API_GEO_RESIDENCY`
 
@@ -251,7 +385,7 @@ Optional service-account mode:
 - `GOOGLE_PROJECT_ID=<gcp-project-id>`
 - `GOOGLE_LOCATION=us-central1`
 
-This auth policy applies across Google completions, embeddings, images, and voice.
+This auth policy applies across Google completions, embeddings, images, videos, and voice.
 
 #### Azure TTS
 
@@ -282,6 +416,7 @@ from ai_api_unified import (
     AIBaseCompletions,
     AIBaseEmbeddings,
     AIBaseImages,
+    AIBaseVideos,
     AIVoiceBase,
 )
 ```
@@ -291,6 +426,7 @@ Factory entry points:
 - `AIFactory.get_ai_completions_client()`
 - `AIFactory.get_ai_embedding_client()`
 - `AIFactory.get_ai_images_client()`
+- `AIFactory.get_ai_video_client()`
 - `AIVoiceFactory.create()`
 
 Concrete providers are no longer re-exported from package `__init__.py` modules. If you need a concrete class directly, import it from its implementation module, for example:
@@ -319,7 +455,7 @@ Features:
 
 - metadata-only input, output, and error events
 - request-scoped correlation via `set_observability_context(...)`
-- coverage for completions, embeddings, images, and text-to-speech
+- coverage for completions, embeddings, images, videos, and text-to-speech
 
 Minimal config:
 

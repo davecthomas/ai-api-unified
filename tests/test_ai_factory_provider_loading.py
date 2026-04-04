@@ -173,7 +173,9 @@ class TestAiFactoryProviderLoading:
         )
         mock_load_ai_provider_class.assert_called_once()
 
-    def test_get_ai_images_client_loads_google_gemini_provider_when_selected(self) -> None:
+    def test_get_ai_images_client_loads_google_gemini_provider_when_selected(
+        self,
+    ) -> None:
         """Gemini images should route through the centralized lazy-loading image factory."""
         mock_env_settings: Mock = self._build_env_settings_mock(
             image_engine="google-gemini"

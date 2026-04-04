@@ -143,9 +143,7 @@ class AIGoogleGeminiImages(AIGoogleBase, AIBaseImages):
             )
 
         output_format: str = gemini_props.format.lower()
-        output_mime_type: str = (
-            "image/jpeg" if output_format == "jpeg" else "image/png"
-        )
+        output_mime_type: str = "image/jpeg" if output_format == "jpeg" else "image/png"
         dict_input_metadata: dict[str, str | int | float | bool | None] = (
             self._build_images_observability_input_metadata(
                 image_prompt=image_prompt,
@@ -184,7 +182,9 @@ class AIGoogleGeminiImages(AIGoogleBase, AIBaseImages):
                         "error_type": exception.__class__.__name__,
                     },
                 )
-                raise RuntimeError("Google Gemini image generation failed.") from exception
+                raise RuntimeError(
+                    "Google Gemini image generation failed."
+                ) from exception
 
             generated_images: Any = getattr(response, "generated_images", None)
             if not generated_images:
@@ -209,7 +209,9 @@ class AIGoogleGeminiImages(AIGoogleBase, AIBaseImages):
             return AiApiObservedImagesResultModel(
                 return_value=image_bytes_results,
                 generated_image_count=len(image_bytes_results),
-                total_output_bytes=sum(len(image_bytes) for image_bytes in image_bytes_results),
+                total_output_bytes=sum(
+                    len(image_bytes) for image_bytes in image_bytes_results
+                ),
                 provider_input_tokens=None,
                 provider_total_tokens=None,
                 dict_metadata={

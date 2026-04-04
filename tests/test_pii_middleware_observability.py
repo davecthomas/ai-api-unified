@@ -22,9 +22,7 @@ from ai_api_unified.middleware.pii_redactor import (
 
 AUDIT_LOGGER_NAME: str = "ai_api_unified.middleware.audit"
 METRICS_LOGGER_NAME: str = "ai_api_unified.middleware.metrics"
-PRESIDIO_REDACTOR_LOGGER_NAME: str = (
-    "ai_api_unified.middleware.impl._presidio_redactor"
-)
+PRESIDIO_REDACTOR_LOGGER_NAME: str = "ai_api_unified.middleware.impl._presidio_redactor"
 PRESIDIO_ANALYZER_LOGGER_NAME: str = "presidio-analyzer"
 INPUT_DIRECTION: str = "input_only"
 OUTPUT_DIRECTION: str = "output_only"

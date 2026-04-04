@@ -44,7 +44,9 @@ class AIVoiceFactory:
             provider exceptions for dependency/runtime loading failures.
         """
         env_settings: EnvSettings = EnvSettings()
-        object_engine_value: object = env_settings.get_setting(AI_VOICE_ENGINE_ENV_KEY, "")
+        object_engine_value: object = env_settings.get_setting(
+            AI_VOICE_ENGINE_ENV_KEY, ""
+        )
         str_engine: str = (
             str(object_engine_value).strip().lower()
             if object_engine_value is not None
