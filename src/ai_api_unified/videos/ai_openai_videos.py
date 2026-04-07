@@ -115,7 +115,7 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
         AIOpenAIBase.__init__(self, **kwargs)
         AIBaseVideos.__init__(self, model=resolved_model)
         self.video_model_name: str = resolved_model
-        self.http_client: httpx.Client = httpx.Client(
+        self.http_client: httpx.Client | None = httpx.Client(
             base_url=self.base_url,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -129,6 +129,21 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
 
     def list_model_names(self) -> list[str]:
         return list(self.SUPPORTED_VIDEO_MODELS)
+
+    def close(self) -> None:
+        """Close the owned HTTP client."""
+
+        http_client: httpx.Client | None = getattr(self, "http_client", None)
+        if http_client is None:
+            return
+        http_client.close()
+        self.http_client = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _coerce_properties(
         self,
@@ -202,6 +217,10 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
         ):
             raise ValueError(
                 "OpenAI video requests must use either JSON or multipart form data, not both."
+            )
+        if self.http_client is None:
+            raise RuntimeError(
+                "AIOpenAIVideos http_client is closed and can no longer make requests."
             )
         max_attempts: int = len(self.backoff_delays)
         last_exception: Exception | None = None
@@ -371,10 +390,12 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
                 "provider_default_model": self.DEFAULT_VIDEO_MODEL,
             }
         )
+        assert openai_properties.duration_seconds is not None
+        assert openai_properties.resolution is not None
         request_payload: dict[str, Any] = {
             "prompt": video_prompt,
             "model": self.video_model_name,
-            "seconds": str(openai_properties.duration_seconds),
+            "seconds": openai_properties.duration_seconds,
             "size": openai_properties.resolution,
         }
         if openai_properties.reference_image is not None:

@@ -171,9 +171,14 @@ class AINovaReelVideos(AIBedrockBase, AIBaseVideos):
             "jpeg" if "jpeg" in mime_type or "jpg" in mime_type else "png"
         )
         if media_reference.remote_uri is not None:
+            normalized_remote_uri: str = media_reference.remote_uri.strip()
+            if not normalized_remote_uri.startswith("s3://"):
+                raise ValueError(
+                    "Nova Reel image inputs with remote_uri must use an s3:// URI."
+                )
             return {
                 "format": image_format,
-                "source": {"s3Location": {"uri": media_reference.remote_uri}},
+                "source": {"s3Location": {"uri": normalized_remote_uri}},
             }
         image_bytes: bytes = media_reference.read_bytes()
         return {

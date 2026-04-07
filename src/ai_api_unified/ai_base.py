@@ -1688,6 +1688,19 @@ class AIBaseVideos(AIBase):
             video_properties=video_properties,
         )
         completed_job: AIVideoGenerationJob = self.wait_for_video_generation(job)
+        if completed_job.status != AIVideoGenerationStatus.COMPLETED:
+            error_message_fragment: str = (
+                f" error_message={completed_job.error_message}"
+                if completed_job.error_message is not None
+                and completed_job.error_message.strip() != ""
+                else ""
+            )
+            raise RuntimeError(
+                "Video generation did not complete successfully. "
+                f"provider_job_id={completed_job.provider_job_id} "
+                f"status={completed_job.status.value}"
+                f"{error_message_fragment}"
+            )
         return self.download_video_result(completed_job)
 
     def wait_for_video_generation(

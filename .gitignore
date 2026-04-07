@@ -19,6 +19,7 @@ dist/
 data/
 test_data/
 training_data/
+generated_videos/
 
 # Virtual environments
 .venv/
@@ -38,3 +39,13 @@ settings.json
 
 # Archives
 *.zip
+
+# agentmemory-managed local repo wiring and state
+# Added by the shared repo-memory SessionStart/bootstrap flow.
+# Do not edit this block manually; rerun agentmemory/install.sh and reopen an agent session if needed.
+.githooks/
+.codex/local/
+.claude/local/
+.claude/settings.local.json
+.agents/memory/pending/
+.agents/memory/logs/

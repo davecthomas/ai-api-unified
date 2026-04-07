@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+import socket
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -17,6 +18,16 @@ module_bedrock_images: ModuleType = pytest.importorskip(
 AINovaCanvasImageProperties: type[Any] = (
     module_bedrock_images.AINovaCanvasImageProperties
 )
+BEDROCK_RUNTIME_HOSTNAME: str = "bedrock-runtime.us-east-1.amazonaws.com"
+
+
+def _skip_if_dns_unavailable(hostname: str) -> None:
+    """Skip live tests quickly when the current environment cannot resolve provider DNS."""
+
+    try:
+        socket.getaddrinfo(hostname, 443)
+    except OSError as exception:
+        pytest.skip(f"Skipping: DNS unavailable for {hostname}: {exception}")
 
 
 @pytest.mark.parametrize(
@@ -42,7 +53,7 @@ def test_nova_canvas_image_properties_num_images_limit() -> None:
 
 
 @pytest.mark.nonmock
-def test_nova_canvas_generate_images() -> None:
+def test_nova_canvas_generate_images(monkeypatch: pytest.MonkeyPatch) -> None:
     """Integration-lite test that generates a single Nova Canvas image when AWS credentials are present."""
 
     required_env_vars: list[str] = ["AWS_REGION"]
@@ -51,6 +62,8 @@ def test_nova_canvas_generate_images() -> None:
             "Bedrock credentials not configured; set AWS_REGION to run this test."
         )
 
+    _skip_if_dns_unavailable(BEDROCK_RUNTIME_HOSTNAME)
+    monkeypatch.setenv("IMAGE_ENGINE", "nova-canvas")
     image_client: AIBaseImages = AIFactory.get_ai_images_client(
         image_model="amazon.nova-canvas-v1:0"
     )

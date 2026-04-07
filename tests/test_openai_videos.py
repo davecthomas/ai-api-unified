@@ -97,6 +97,25 @@ def test_openai_video_submit_uses_multipart_upload_for_reference_images() -> Non
     assert mime_type == "image/png"
 
 
+def test_openai_video_submit_uses_numeric_seconds_in_json_payload() -> None:
+    """OpenAI JSON video submits should keep duration values numeric."""
+
+    provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+    properties: AIOpenAIVideoProperties = AIOpenAIVideoProperties(
+        output_dir=Path("/tmp/openai-videos"),
+    )
+
+    provider.submit_video_generation("A bright city skyline at dusk.", properties)
+
+    assert provider.captured_request is not None
+    assert provider.captured_request["json_payload"] == {
+        "prompt": "A bright city skyline at dusk.",
+        "model": "sora-2",
+        "seconds": 8,
+        "size": "1280x720",
+    }
+
+
 def test_openai_video_submit_rejects_remote_reference_images() -> None:
     """OpenAI input_reference currently requires uploadable local media."""
 
@@ -111,3 +130,17 @@ def test_openai_video_submit_rejects_remote_reference_images() -> None:
         match="input_reference must be provided as local bytes or a local file path",
     ):
         provider.submit_video_generation("A bright city skyline at dusk.", properties)
+
+
+def test_openai_video_close_closes_owned_http_client() -> None:
+    """Providers should expose an explicit cleanup path for the owned HTTP client."""
+
+    provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+    http_client: httpx.Client = httpx.Client()
+    provider.http_client = http_client
+
+    provider.close()
+    provider.close()
+
+    assert http_client.is_closed is True
+    assert provider.http_client is None

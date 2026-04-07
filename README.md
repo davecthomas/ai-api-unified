@@ -40,7 +40,7 @@ The public entry points are the stable base interfaces and factories:
 | Completions | `AIBaseCompletions` | `openai`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `google_gemini`, `bedrock`                 |
 | Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`                                                                                            | `openai`, `bedrock`, `google_gemini`                 |
 | Images      | `AIBaseImages`      | `openai`, `google-gemini`, `nova-canvas` and Bedrock image aliases                                                            | `openai`, `google_gemini`, `bedrock`                 |
-| Videos      | `AIBaseVideos`      | `openai`, `google-gemini`, `nova-reel` and Bedrock video aliases                                                              | `openai`, `google_gemini`, `bedrock`, `video_frames` |
+| Videos      | `AIBaseVideos`      | `openai`, `google-gemini`, `nova-reel` and Bedrock video aliases                                                              | `openai`, `google_gemini`, `bedrock`                 |
 | Voice TTS   | `AIVoiceBase`       | `openai`, `google`, `azure`, `elevenlabs`                                                                                     | `openai`, `google_gemini`, `azure_tts`, `elevenlabs` |
 | Voice STT   | `AIVoiceBase`       | provider-specific support such as Google and ElevenLabs                                                                       | `google_gemini`, `elevenlabs`                        |
 
@@ -101,7 +101,7 @@ poetry install --all-extras --with dev
 | -------------------------------- | ---------------------------------------------------------------------- |
 | `openai`                         | OpenAI completions, embeddings, images, and voice                      |
 | `google_gemini`                  | Google Gemini completions, embeddings, images, and Google voice        |
-| `bedrock`                        | AWS Bedrock completions, Titan embeddings, and Bedrock image providers |
+| `bedrock`                        | AWS Bedrock completions, Titan embeddings, Bedrock image providers, and Bedrock video providers |
 | `video_frames`                   | Optional frame extraction helpers backed by ImageIO + Pillow           |
 | `azure_tts`                      | Azure Cognitive Services TTS                                           |
 | `elevenlabs`                     | ElevenLabs TTS and STT                                                 |

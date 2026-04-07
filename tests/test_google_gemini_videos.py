@@ -241,6 +241,28 @@ def test_google_video_submit_rejects_non_gcs_source_video_uris(
         provider.submit_video_generation("Extend this video.", properties)
 
 
+def test_google_video_submit_rejects_non_gcs_reference_image_uris() -> None:
+    """Remote Gemini image inputs should fail fast unless they are backed by GCS."""
+
+    operation: SimpleNamespace = SimpleNamespace(
+        done=False,
+        error=None,
+        name="models/veo-3.1-lite-generate-preview/operations/test-op",
+        response=None,
+    )
+    provider: _InspectableGoogleGeminiVideos = _InspectableGoogleGeminiVideos(operation)
+    properties: AIGoogleGeminiVideoProperties = AIGoogleGeminiVideoProperties(
+        image=AIMediaReference(remote_uri="https://example.com/image.png"),
+        output_dir=Path("/tmp/google-videos"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="remote_uri must use a gs:// URI",
+    ):
+        provider.submit_video_generation("Animate this image.", properties)
+
+
 def test_google_video_job_timestamps_remain_stable_across_polls() -> None:
     """Gemini job timestamps should not be re-stamped on every status refresh."""
 
@@ -278,3 +300,60 @@ def test_google_video_job_timestamps_remain_stable_across_polls() -> None:
     assert running_job.submitted_at_utc is not None
     assert completed_job.submitted_at_utc == running_job.submitted_at_utc
     assert completed_job.completed_at_utc is not None
+
+
+def test_google_video_job_timestamps_remain_stable_across_string_lookups() -> None:
+    """Gemini job timestamps should remain stable even when callers only reuse the job id."""
+
+    operation_name: str = "models/veo-3.1-lite-generate-preview/operations/test-op"
+    first_pending_operation: SimpleNamespace = SimpleNamespace(
+        done=False,
+        error=None,
+        name=operation_name,
+        response=None,
+    )
+    second_pending_operation: SimpleNamespace = SimpleNamespace(
+        done=False,
+        error=None,
+        name=operation_name,
+        response=None,
+    )
+    first_completed_operation: SimpleNamespace = SimpleNamespace(
+        done=True,
+        error=None,
+        name=operation_name,
+        response=SimpleNamespace(generated_videos=[]),
+    )
+    second_completed_operation: SimpleNamespace = SimpleNamespace(
+        done=True,
+        error=None,
+        name=operation_name,
+        response=SimpleNamespace(generated_videos=[]),
+    )
+    provider: _TestableGoogleGeminiVideos = _TestableGoogleGeminiVideos(
+        [
+            first_pending_operation,
+            second_pending_operation,
+            first_completed_operation,
+            second_completed_operation,
+        ]
+    )
+
+    first_pending_job: AIVideoGenerationJob = provider.get_video_generation_job(
+        operation_name
+    )
+    second_pending_job: AIVideoGenerationJob = provider.get_video_generation_job(
+        operation_name
+    )
+    first_completed_job: AIVideoGenerationJob = provider.get_video_generation_job(
+        operation_name
+    )
+    second_completed_job: AIVideoGenerationJob = provider.get_video_generation_job(
+        operation_name
+    )
+
+    assert first_pending_job.submitted_at_utc is not None
+    assert second_pending_job.submitted_at_utc == first_pending_job.submitted_at_utc
+    assert first_completed_job.submitted_at_utc == first_pending_job.submitted_at_utc
+    assert first_completed_job.completed_at_utc is not None
+    assert second_completed_job.completed_at_utc == first_completed_job.completed_at_utc

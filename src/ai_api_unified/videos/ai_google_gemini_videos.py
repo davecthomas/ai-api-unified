@@ -97,6 +97,8 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         "veo-2.0-generate-001",
     ]
     STATUS_RUNNING: ClassVar[AIVideoGenerationStatus] = AIVideoGenerationStatus.RUNNING
+    PROVIDER_METADATA_SUBMITTED_AT_UTC_KEY: ClassVar[str] = "job_submitted_at_utc"
+    PROVIDER_METADATA_COMPLETED_AT_UTC_KEY: ClassVar[str] = "job_completed_at_utc"
 
     def __init__(self, model: str | None = None, **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
@@ -115,6 +117,94 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
 
     def list_model_names(self) -> list[str]:
         return list(self.SUPPORTED_VIDEO_MODELS)
+
+    def _get_job_timestamp_cache(self) -> dict[str, dict[str, str]]:
+        cache: dict[str, dict[str, str]] | None = getattr(
+            self,
+            "_job_timestamp_cache",
+            None,
+        )
+        if cache is None:
+            cache = {}
+            self._job_timestamp_cache = cache
+        return cache
+
+    def _parse_provider_timestamp(
+        self,
+        value: str | int | float | bool | None,
+    ) -> datetime | None:
+        if value in (None, "") or isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        return None
+
+    def _cache_job_timestamps(
+        self,
+        operation_name: str,
+        submitted_at_utc: datetime,
+        completed_at_utc: datetime | None,
+    ) -> None:
+        timestamp_cache: dict[str, dict[str, str]] = self._get_job_timestamp_cache()
+        cached_values: dict[str, str] = {
+            self.PROVIDER_METADATA_SUBMITTED_AT_UTC_KEY: submitted_at_utc.isoformat()
+        }
+        if completed_at_utc is not None:
+            cached_values[self.PROVIDER_METADATA_COMPLETED_AT_UTC_KEY] = (
+                completed_at_utc.isoformat()
+            )
+        timestamp_cache[operation_name] = cached_values
+
+    def _resolve_stable_job_timestamps(
+        self,
+        operation_name: str,
+        *,
+        operation_done: bool,
+        previous_provider_metadata: (
+            dict[str, str | int | float | bool | None] | None
+        ) = None,
+        previous_job: AIVideoGenerationJob | None = None,
+    ) -> tuple[datetime, datetime | None]:
+        timestamp_cache: dict[str, dict[str, str]] = self._get_job_timestamp_cache()
+        cached_values: dict[str, str] = timestamp_cache.get(operation_name, {})
+        submitted_at_utc: datetime = (
+            previous_job.submitted_at_utc
+            if previous_job is not None and previous_job.submitted_at_utc is not None
+            else self._parse_provider_timestamp(
+                (previous_provider_metadata or {}).get(
+                    self.PROVIDER_METADATA_SUBMITTED_AT_UTC_KEY
+                )
+            )
+            or self._parse_provider_timestamp(
+                cached_values.get(self.PROVIDER_METADATA_SUBMITTED_AT_UTC_KEY)
+            )
+            or datetime.now(timezone.utc)
+        )
+        completed_at_utc: datetime | None = (
+            previous_job.completed_at_utc
+            if previous_job is not None and previous_job.completed_at_utc is not None
+            else self._parse_provider_timestamp(
+                (previous_provider_metadata or {}).get(
+                    self.PROVIDER_METADATA_COMPLETED_AT_UTC_KEY
+                )
+            )
+            or self._parse_provider_timestamp(
+                cached_values.get(self.PROVIDER_METADATA_COMPLETED_AT_UTC_KEY)
+            )
+        )
+        if operation_done and completed_at_utc is None:
+            completed_at_utc = datetime.now(timezone.utc)
+        self._cache_job_timestamps(
+            operation_name=operation_name,
+            submitted_at_utc=submitted_at_utc,
+            completed_at_utc=completed_at_utc,
+        )
+        return submitted_at_utc, completed_at_utc
 
     def _coerce_properties(
         self,
@@ -158,6 +248,11 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
 
     def _to_google_image(self, media_reference: AIMediaReference) -> types.Image:
         if media_reference.remote_uri is not None:
+            normalized_remote_uri: str = media_reference.remote_uri.strip()
+            if not normalized_remote_uri.startswith("gs://"):
+                raise ValueError(
+                    "Google Gemini image inputs with remote_uri must use a gs:// URI."
+                )
             return types.Image(gcs_uri=media_reference.remote_uri)
         mime_type: str = media_reference.mime_type or "image/png"
         return types.Image(
@@ -218,16 +313,20 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         error_message: str | None = None
         if operation.error is not None:
             error_message = str(operation.error)
-        submitted_at_utc: datetime = (
-            previous_job.submitted_at_utc
-            if previous_job is not None and previous_job.submitted_at_utc is not None
-            else datetime.now(timezone.utc)
+        submitted_at_utc: datetime
+        completed_at_utc: datetime | None
+        submitted_at_utc, completed_at_utc = self._resolve_stable_job_timestamps(
+            operation_name=operation.name,
+            operation_done=operation.done,
+            previous_provider_metadata=previous_provider_metadata,
+            previous_job=previous_job,
         )
-        completed_at_utc: datetime | None = (
-            previous_job.completed_at_utc if previous_job is not None else None
+        provider_metadata[self.PROVIDER_METADATA_SUBMITTED_AT_UTC_KEY] = (
+            submitted_at_utc.isoformat()
         )
-        if operation.done and completed_at_utc is None:
-            completed_at_utc = datetime.now(timezone.utc)
+        provider_metadata[self.PROVIDER_METADATA_COMPLETED_AT_UTC_KEY] = (
+            completed_at_utc.isoformat() if completed_at_utc is not None else None
+        )
         return AIVideoGenerationJob(
             job_id=f"google-gemini:{operation.name}",
             provider_job_id=operation.name,

@@ -11,6 +11,16 @@ FRAME_EXTRA_INSTALL_MESSAGE: str = (
     'Install them with `poetry install --extras "video_frames" --with dev` for local development '
     "or `poetry add 'ai-api-unified[video_frames]'` in downstream projects."
 )
+_PILLOW_IMAGE_FORMAT_BY_ALIAS: dict[str, str] = {
+    "bmp": "BMP",
+    "gif": "GIF",
+    "jpeg": "JPEG",
+    "jpg": "JPEG",
+    "png": "PNG",
+    "tif": "TIFF",
+    "tiff": "TIFF",
+    "webp": "WEBP",
+}
 
 
 def _load_frame_dependencies() -> tuple[Any, Any]:
@@ -22,6 +32,21 @@ def _load_frame_dependencies() -> tuple[Any, Any]:
     except ImportError as exception:
         raise RuntimeError(FRAME_EXTRA_INSTALL_MESSAGE) from exception
     return imageio, pil_image
+
+
+def _normalize_pillow_image_format(image_format: str) -> str:
+    """Normalize common image-format aliases into Pillow save() format names."""
+
+    normalized_image_format: str = image_format.strip().lower()
+    if normalized_image_format == "":
+        raise ValueError("image_format must be a non-empty string.")
+    pillow_image_format: str | None = _PILLOW_IMAGE_FORMAT_BY_ALIAS.get(
+        normalized_image_format
+    )
+    if pillow_image_format is None:
+        supported_formats: str = ", ".join(sorted(_PILLOW_IMAGE_FORMAT_BY_ALIAS))
+        raise ValueError(f"image_format must be one of: {supported_formats}.")
+    return pillow_image_format
 
 
 def extract_image_frames_from_video_buffer(
@@ -45,14 +70,12 @@ def extract_image_frames_from_video_buffer(
         )
 
     imageio, pil_image = _load_frame_dependencies()
-    normalized_image_format: str = image_format.strip().lower()
-    if normalized_image_format == "":
-        raise ValueError("image_format must be a non-empty string.")
+    resolved_pillow_image_format: str = _normalize_pillow_image_format(image_format)
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4") as temp_video_file:
-        temp_video_file.write(video_buffer)
-        temp_video_file.flush()
-        reader = imageio.get_reader(temp_video_file.name, format="ffmpeg")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_video_path: Path = Path(temp_dir) / "video.mp4"
+        temp_video_path.write_bytes(video_buffer)
+        reader = imageio.get_reader(str(temp_video_path), format="ffmpeg")
         try:
             metadata: dict[str, Any] = reader.get_meta_data()
             resolved_frame_indices: list[int]
@@ -97,7 +120,7 @@ def extract_image_frames_from_video_buffer(
                     ) from exception
                 pil_frame = pil_image.fromarray(frame_array)
                 buffer_stream: io.BytesIO = io.BytesIO()
-                pil_frame.save(buffer_stream, format=normalized_image_format.upper())
+                pil_frame.save(buffer_stream, format=resolved_pillow_image_format)
                 frame_bytes: bytes = buffer_stream.getvalue()
                 frame_cache[frame_index] = frame_bytes
                 image_buffers.append(frame_bytes)

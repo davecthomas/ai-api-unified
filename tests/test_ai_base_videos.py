@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_api_unified.ai_base import (
     AIBaseVideoProperties,
     AIBaseVideos,
@@ -79,6 +81,27 @@ class _GenerateVideoDummyProvider(AIBaseVideos):
         )
 
 
+class _FailingGenerateVideoDummyProvider(_GenerateVideoDummyProvider):
+    """Small AIBaseVideos test double that returns a failed terminal job."""
+
+    def wait_for_video_generation(
+        self,
+        job: str | AIVideoGenerationJob,
+        *,
+        timeout_seconds: int | None = None,
+        poll_interval_seconds: int | None = None,
+    ) -> AIVideoGenerationJob:
+        self.wait_timeout_seconds = timeout_seconds
+        self.wait_poll_interval_seconds = poll_interval_seconds
+        assert isinstance(job, AIVideoGenerationJob)
+        return job.model_copy(
+            update={
+                "status": AIVideoGenerationStatus.FAILED,
+                "error_message": "provider-side failure",
+            }
+        )
+
+
 def test_generate_video_defers_wait_settings_to_submitted_job_metadata() -> None:
     """generate_video() should not force the portable default wait settings onto providers."""
 
@@ -88,3 +111,18 @@ def test_generate_video_defers_wait_settings_to_submitted_job_metadata() -> None
 
     assert provider.wait_timeout_seconds is None
     assert provider.wait_poll_interval_seconds is None
+
+
+def test_generate_video_raises_provider_failure_instead_of_download_error() -> None:
+    """generate_video() should surface terminal provider failures before download."""
+
+    provider: _FailingGenerateVideoDummyProvider = _FailingGenerateVideoDummyProvider()
+
+    with pytest.raises(
+        RuntimeError,
+        match="Video generation did not complete successfully",
+    ) as exception_info:
+        provider.generate_video("Render a lighthouse at sunset.")
+
+    assert "status=failed" in str(exception_info.value)
+    assert "provider-side failure" in str(exception_info.value)
