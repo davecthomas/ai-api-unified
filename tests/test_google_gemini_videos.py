@@ -10,6 +10,7 @@ pytest.importorskip("google.genai")
 
 from ai_api_unified.ai_base import (
     AIMediaReference,
+    AIBaseVideoProperties,
     AIVideoGenerationJob,
     AIVideoGenerationStatus,
     AiApiObservedVideosResultModel,
@@ -357,3 +358,49 @@ def test_google_video_job_timestamps_remain_stable_across_string_lookups() -> No
     assert first_completed_job.submitted_at_utc == first_pending_job.submitted_at_utc
     assert first_completed_job.completed_at_utc is not None
     assert second_completed_job.completed_at_utc == first_completed_job.completed_at_utc
+
+
+def test_google_video_coerce_properties_preserves_provider_duration_default() -> None:
+    """Gemini should leave duration unset so the provider model default applies."""
+
+    operation: SimpleNamespace = SimpleNamespace(
+        done=False,
+        error=None,
+        name="models/veo-3.1-lite-generate-preview/operations/test-op",
+        response=None,
+    )
+    provider: _InspectableGoogleGeminiVideos = _InspectableGoogleGeminiVideos(operation)
+
+    coerced_properties: AIGoogleGeminiVideoProperties = provider._coerce_properties(
+        AIBaseVideoProperties()
+    )
+
+    assert coerced_properties.duration_seconds is None
+    assert coerced_properties.aspect_ratio == "16:9"
+    assert coerced_properties.resolution == "720p"
+
+
+def test_google_video_submit_omits_duration_when_caller_does_not_set_it() -> None:
+    """Gemini request config should not force a duration when the caller omitted it."""
+
+    operation: SimpleNamespace = SimpleNamespace(
+        done=False,
+        error=None,
+        name="models/veo-3.1-lite-generate-preview/operations/test-op",
+        response=None,
+    )
+    provider: _InspectableGoogleGeminiVideos = _InspectableGoogleGeminiVideos(operation)
+    properties: AIBaseVideoProperties = AIBaseVideoProperties(
+        output_dir=Path("/tmp/google-videos")
+    )
+
+    provider.submit_video_generation("A lighthouse in a storm.", properties)
+
+    captured_call: dict[str, Any] = provider.client.models.calls[0]
+    config_payload: dict[str, Any] = captured_call["config"].model_dump(
+        exclude_none=True
+    )
+
+    assert "duration_seconds" not in config_payload
+    assert config_payload["aspect_ratio"] == "16:9"
+    assert config_payload["resolution"] == "720p"

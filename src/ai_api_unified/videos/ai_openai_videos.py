@@ -157,19 +157,10 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
                 normalized_properties.model_copy(deep=True)
             )
         else:
-            openai_properties = AIOpenAIVideoProperties(
-                duration_seconds=normalized_properties.duration_seconds,
-                aspect_ratio=normalized_properties.aspect_ratio,
-                resolution=normalized_properties.resolution,
-                fps=normalized_properties.fps,
-                num_videos=normalized_properties.num_videos,
-                seed=normalized_properties.seed,
-                output_format=normalized_properties.output_format,
-                poll_interval_seconds=normalized_properties.poll_interval_seconds,
-                timeout_seconds=normalized_properties.timeout_seconds,
-                output_dir=normalized_properties.output_dir,
-                download_outputs=normalized_properties.download_outputs,
+            openai_property_payload: dict[str, Any] = normalized_properties.model_dump(
+                exclude_unset=True
             )
+            openai_properties = AIOpenAIVideoProperties(**openai_property_payload)
         explicit_fields: set[str] = set(openai_properties.model_fields_set)
         if (
             "duration_seconds" not in explicit_fields

@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("openai")
 
-from ai_api_unified.ai_base import AIMediaReference
+from ai_api_unified.ai_base import AIMediaReference, AIBaseVideoProperties
 from ai_api_unified.videos.ai_openai_videos import (
     AIOpenAIVideoProperties,
     AIOpenAIVideos,
@@ -144,3 +144,19 @@ def test_openai_video_close_closes_owned_http_client() -> None:
 
     assert http_client.is_closed is True
     assert provider.http_client is None
+
+
+def test_openai_video_coerce_properties_applies_provider_defaults_for_base_inputs() -> (
+    None
+):
+    """Base video properties should not suppress OpenAI provider defaults."""
+
+    provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+
+    coerced_properties: AIOpenAIVideoProperties = provider._coerce_properties(
+        AIBaseVideoProperties()
+    )
+
+    assert coerced_properties.duration_seconds == 8
+    assert coerced_properties.resolution == "1280x720"
+    assert coerced_properties.aspect_ratio == "16:9"

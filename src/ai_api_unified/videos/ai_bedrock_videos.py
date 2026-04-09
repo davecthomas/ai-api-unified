@@ -121,19 +121,10 @@ class AINovaReelVideos(AIBedrockBase, AIBaseVideos):
                 normalized_properties.model_copy(deep=True)
             )
         else:
-            nova_properties = AINovaReelVideoProperties(
-                duration_seconds=normalized_properties.duration_seconds,
-                aspect_ratio=normalized_properties.aspect_ratio,
-                resolution=normalized_properties.resolution,
-                fps=normalized_properties.fps,
-                num_videos=normalized_properties.num_videos,
-                seed=normalized_properties.seed,
-                output_format=normalized_properties.output_format,
-                poll_interval_seconds=normalized_properties.poll_interval_seconds,
-                timeout_seconds=normalized_properties.timeout_seconds,
-                output_dir=normalized_properties.output_dir,
-                download_outputs=normalized_properties.download_outputs,
+            nova_property_payload: dict[str, Any] = normalized_properties.model_dump(
+                exclude_unset=True
             )
+            nova_properties = AINovaReelVideoProperties(**nova_property_payload)
         explicit_fields: set[str] = set(nova_properties.model_fields_set)
         if (
             "duration_seconds" not in explicit_fields
@@ -319,23 +310,31 @@ class AINovaReelVideos(AIBedrockBase, AIBaseVideos):
         provider_job_id: str,
     ) -> str:
         bucket_name, base_prefix = self._parse_s3_uri(output_s3_uri)
-        prefixes_to_check: list[str] = [
-            self._resolve_invocation_prefix(base_prefix, provider_job_id),
+        invocation_prefix: str = self._resolve_invocation_prefix(
             base_prefix,
-        ]
+            provider_job_id,
+        )
+        prefixes_to_check: list[str] = [invocation_prefix]
+        normalized_base_prefix: str = base_prefix.rstrip("/")
+        if (
+            normalized_base_prefix != ""
+            and normalized_base_prefix != invocation_prefix.rstrip("/")
+        ):
+            prefixes_to_check.append(base_prefix)
+        paginator: Any = self.s3_client.get_paginator("list_objects_v2")
         for prefix in prefixes_to_check:
-            response: dict[str, Any] = self.s3_client.list_objects_v2(
+            for page in paginator.paginate(
                 Bucket=bucket_name,
                 Prefix=prefix,
-            )
-            contents: list[dict[str, Any]] = list(response.get("Contents", []))
-            mp4_keys: list[str] = sorted(
-                item["Key"]
-                for item in contents
-                if str(item.get("Key", "")).lower().endswith(".mp4")
-            )
-            if mp4_keys:
-                return f"s3://{bucket_name}/{mp4_keys[0]}"
+            ):
+                contents: list[dict[str, Any]] = list(page.get("Contents", []))
+                mp4_keys: list[str] = sorted(
+                    item["Key"]
+                    for item in contents
+                    if str(item.get("Key", "")).lower().endswith(".mp4")
+                )
+                if mp4_keys:
+                    return f"s3://{bucket_name}/{mp4_keys[0]}"
         raise RuntimeError(
             "Nova Reel output completed but no MP4 artifact was found in the configured S3 output location."
         )

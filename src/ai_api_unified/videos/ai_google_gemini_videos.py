@@ -81,7 +81,6 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
     """
 
     DEFAULT_VIDEO_MODEL: ClassVar[str] = "veo-3.1-lite-generate-preview"
-    DEFAULT_DURATION_SECONDS: ClassVar[int] = 8
     DEFAULT_ASPECT_RATIO: ClassVar[str] = "16:9"
     DEFAULT_RESOLUTION: ClassVar[str] = "720p"
     DEFAULT_TIMEOUT_SECONDS: ClassVar[int] = 900
@@ -218,25 +217,11 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
                 normalized_properties.model_copy(deep=True)
             )
         else:
-            google_properties = AIGoogleGeminiVideoProperties(
-                duration_seconds=normalized_properties.duration_seconds,
-                aspect_ratio=normalized_properties.aspect_ratio,
-                resolution=normalized_properties.resolution,
-                fps=normalized_properties.fps,
-                num_videos=normalized_properties.num_videos,
-                seed=normalized_properties.seed,
-                output_format=normalized_properties.output_format,
-                poll_interval_seconds=normalized_properties.poll_interval_seconds,
-                timeout_seconds=normalized_properties.timeout_seconds,
-                output_dir=normalized_properties.output_dir,
-                download_outputs=normalized_properties.download_outputs,
+            google_property_payload: dict[str, Any] = normalized_properties.model_dump(
+                exclude_unset=True
             )
+            google_properties = AIGoogleGeminiVideoProperties(**google_property_payload)
         explicit_fields: set[str] = set(google_properties.model_fields_set)
-        if (
-            "duration_seconds" not in explicit_fields
-            and google_properties.duration_seconds is None
-        ):
-            google_properties.duration_seconds = self.DEFAULT_DURATION_SECONDS
         if (
             "aspect_ratio" not in explicit_fields
             and google_properties.aspect_ratio is None
@@ -371,10 +356,11 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
 
         config_kwargs: dict[str, Any] = {
             "number_of_videos": google_properties.num_videos,
-            "duration_seconds": google_properties.duration_seconds,
             "aspect_ratio": google_properties.aspect_ratio,
             "resolution": google_properties.resolution,
         }
+        if google_properties.duration_seconds is not None:
+            config_kwargs["duration_seconds"] = google_properties.duration_seconds
         if google_properties.seed is not None:
             config_kwargs["seed"] = google_properties.seed
         if google_properties.fps is not None:
