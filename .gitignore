@@ -49,3 +49,4 @@ settings.json
 .claude/settings.local.json
 .agents/memory/pending/
 .agents/memory/logs/
+# Do not edit this block manually; rerun ./install.sh and reopen an agent session if needed.
