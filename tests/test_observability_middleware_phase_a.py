@@ -29,13 +29,11 @@ from ai_api_unified.middleware.observability import (
     get_observability_middleware,
 )
 
-TEST_LOGGER_MIDDLEWARE_CONFIG: str = (
-    "ai_api_unified.middleware.middleware_config"
-)
+TEST_LOGGER_MIDDLEWARE_CONFIG: str = "ai_api_unified.middleware.middleware_config"
 TEST_DIRECTION_INPUT_OUTPUT_RAW: str = "INPUT_OUTPUT"
 TEST_CAPABILITY_COMPLETIONS_RAW: str = "COMPLETIONS"
 TEST_CAPABILITY_TTS_RAW: str = "tts"
-TEST_INVALID_CAPABILITY_RAW: str = "videos"
+TEST_INVALID_CAPABILITY_RAW: str = "video"
 TEST_LOG_LEVEL_DEBUG_RAW: str = "debug"
 TEST_TOKEN_COUNT_MODE_PROVIDER_ONLY_RAW: str = "PROVIDER_ONLY"
 TEST_TIMED_RESULT_VALUE: str = "timed-result"

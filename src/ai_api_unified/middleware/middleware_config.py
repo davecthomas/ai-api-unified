@@ -57,10 +57,12 @@ INCLUDE_MEDIA_DETAILS_KEY: str = "include_media_details"
 INCLUDE_PROVIDER_USAGE_KEY: str = "include_provider_usage"
 INCLUDE_AUDIO_BYTE_COUNT_KEY: str = "include_audio_byte_count"
 INCLUDE_IMAGE_BYTE_COUNT_KEY: str = "include_image_byte_count"
+INCLUDE_VIDEO_BYTE_COUNT_KEY: str = "include_video_byte_count"
 EMIT_ERROR_EVENTS_KEY: str = "emit_error_events"
 CAPABILITY_COMPLETIONS: str = "completions"
 CAPABILITY_EMBEDDINGS: str = "embeddings"
 CAPABILITY_IMAGES: str = "images"
+CAPABILITY_VIDEOS: str = "videos"
 CAPABILITY_TTS: str = "tts"
 LOG_LEVEL_DEBUG: str = "DEBUG"
 LOG_LEVEL_INFO: str = "INFO"
@@ -137,6 +139,7 @@ SET_STR_OBSERVABILITY_CAPABILITY_VALUES: set[str] = {
     CAPABILITY_COMPLETIONS,
     CAPABILITY_EMBEDDINGS,
     CAPABILITY_IMAGES,
+    CAPABILITY_VIDEOS,
     CAPABILITY_TTS,
 }
 SET_STR_OBSERVABILITY_LOG_LEVEL_VALUES: set[str] = {
@@ -1074,6 +1077,7 @@ class ObservabilitySettingsModel(BaseModel):
     include_provider_usage: bool = True
     include_audio_byte_count: bool = True
     include_image_byte_count: bool = True
+    include_video_byte_count: bool = True
     emit_error_events: bool = True
 
     @field_validator(DIRECTION_KEY, mode="before")

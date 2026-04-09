@@ -9,6 +9,7 @@ import pytest
 from ai_api_unified.ai_provider_exceptions import (
     AiProviderDependencyUnavailableError,
 )
+
 # Import interfaces for type hints
 from ai_api_unified.voice import (
     AIVoiceBase,
@@ -71,9 +72,7 @@ def test_voice_nonmock(
     if voice_engine == "openai" and not os.environ.get("OPENAI_API_KEY"):
         pytest.skip("Skipping voice test because OPENAI_API_KEY is not set.")
     if voice_engine == "google" and not os.environ.get("GOOGLE_GEMINI_API_KEY"):
-        pytest.skip(
-            "Skipping voice test because GOOGLE_GEMINI_API_KEY is not set."
-        )
+        pytest.skip("Skipping voice test because GOOGLE_GEMINI_API_KEY is not set.")
     if voice_engine == "google":
         _skip_if_dns_unavailable(GOOGLE_TTS_HOSTNAME)
         monkeypatch.setenv("GOOGLE_AUTH_METHOD", "api_key")

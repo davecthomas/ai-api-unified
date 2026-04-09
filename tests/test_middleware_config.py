@@ -120,9 +120,7 @@ TEST_OBSERVABILITY_CAPABILITY_TTS_RAW: str = "tts"
 TEST_OBSERVABILITY_INVALID_CAPABILITY_RAW: str = "video"
 TEST_OBSERVABILITY_LOG_LEVEL_ERROR_RAW: str = "error"
 TEST_OBSERVABILITY_TOKEN_COUNT_MODE_NONE_RAW: str = "NONE"
-TEST_LOGGER_MIDDLEWARE_CONFIG: str = (
-    "ai_api_unified.middleware.middleware_config"
-)
+TEST_LOGGER_MIDDLEWARE_CONFIG: str = "ai_api_unified.middleware.middleware_config"
 
 
 def _set_configuration(

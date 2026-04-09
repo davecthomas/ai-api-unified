@@ -14,6 +14,7 @@ from ai_api_unified.ai_provider_exceptions import (
 from ai_api_unified.ai_provider_registry import (
     AI_PROVIDER_CAPABILITY_COMPLETIONS,
     AI_PROVIDER_CAPABILITY_IMAGES,
+    AI_PROVIDER_CAPABILITY_VIDEOS,
 )
 
 
@@ -39,6 +40,13 @@ class FakeEmbeddingsClient:
         self.dimensions: int = dimensions
 
 
+class FakeVideosClient:
+    """Minimal fake video client constructor target for factory tests."""
+
+    def __init__(self, model: str | None) -> None:
+        self.model: str | None = model
+
+
 class TestAiFactoryProviderLoading:
     """Validate AIFactory selection + lazy-loader integration behavior."""
 
@@ -48,9 +56,11 @@ class TestAiFactoryProviderLoading:
         completions_engine: str = "openai",
         embedding_engine: str = "openai",
         image_engine: str = "openai",
+        video_engine: str = "openai",
         completions_model_name: str = "gpt-4o-mini",
         embedding_model_name: str = "text-embedding-3-small",
         image_model_name: str = "gpt-image-1",
+        video_model_name: str = "sora-2",
         embedding_dimensions: str = "1536",
     ) -> Mock:
         """Creates a deterministic EnvSettings mock for factory tests."""
@@ -65,6 +75,8 @@ class TestAiFactoryProviderLoading:
                 "EMBEDDING_MODEL_NAME": embedding_model_name,
                 "IMAGE_ENGINE": image_engine,
                 "IMAGE_MODEL_NAME": image_model_name,
+                "VIDEO_ENGINE": video_engine,
+                "VIDEO_MODEL_NAME": video_model_name,
                 "EMBEDDING_DIMENSIONS": embedding_dimensions,
             }
             return dict_settings.get(str_key, str_default)
@@ -173,7 +185,9 @@ class TestAiFactoryProviderLoading:
         )
         mock_load_ai_provider_class.assert_called_once()
 
-    def test_get_ai_images_client_loads_google_gemini_provider_when_selected(self) -> None:
+    def test_get_ai_images_client_loads_google_gemini_provider_when_selected(
+        self,
+    ) -> None:
         """Gemini images should route through the centralized lazy-loading image factory."""
         mock_env_settings: Mock = self._build_env_settings_mock(
             image_engine="google-gemini"
@@ -300,3 +314,95 @@ class TestAiFactoryProviderLoading:
                 match="IMAGE_ENGINE must be configured explicitly",
             ):
                 AIFactory.get_ai_images_client()
+
+    def test_get_ai_video_client_loads_selected_ai_provider(self) -> None:
+        """Videos factory path should resolve registry spec and instantiate loaded class."""
+
+        mock_env_settings: Mock = self._build_env_settings_mock()
+        mock_ai_provider_spec: Mock = Mock()
+
+        with patch(
+            "ai_api_unified.ai_factory.EnvSettings",
+            return_value=mock_env_settings,
+        ):
+            with patch(
+                "ai_api_unified.ai_factory.get_ai_provider_spec",
+                return_value=mock_ai_provider_spec,
+            ) as mock_get_ai_provider_spec:
+                with patch(
+                    "ai_api_unified.ai_factory.load_ai_provider_class",
+                    return_value=FakeVideosClient,
+                ) as mock_load_ai_provider_class:
+                    videos_client: FakeVideosClient = AIFactory.get_ai_video_client()
+
+        assert isinstance(videos_client, FakeVideosClient)
+        assert videos_client.model == "sora-2"
+        mock_get_ai_provider_spec.assert_called_once_with(
+            AI_PROVIDER_CAPABILITY_VIDEOS,
+            "openai",
+        )
+        mock_load_ai_provider_class.assert_called_once()
+
+    def test_get_ai_video_client_preserves_provider_default_model_when_config_is_unset(
+        self,
+    ) -> None:
+        """Videos factory should pass None so providers can apply their own default model."""
+
+        mock_env_settings: Mock = self._build_env_settings_mock(
+            video_engine="google-gemini",
+            video_model_name="",
+        )
+        mock_ai_provider_spec: Mock = Mock()
+
+        with patch(
+            "ai_api_unified.ai_factory.EnvSettings",
+            return_value=mock_env_settings,
+        ):
+            with patch(
+                "ai_api_unified.ai_factory.get_ai_provider_spec",
+                return_value=mock_ai_provider_spec,
+            ):
+                with patch(
+                    "ai_api_unified.ai_factory.load_ai_provider_class",
+                    return_value=FakeVideosClient,
+                ):
+                    videos_client: FakeVideosClient = AIFactory.get_ai_video_client()
+
+        assert isinstance(videos_client, FakeVideosClient)
+        assert videos_client.model is None
+
+    def test_get_ai_video_client_translates_unknown_engine_to_value_error(
+        self,
+    ) -> None:
+        """Unsupported video engines should preserve legacy ValueError contract."""
+
+        mock_env_settings: Mock = self._build_env_settings_mock()
+
+        with patch(
+            "ai_api_unified.ai_factory.EnvSettings",
+            return_value=mock_env_settings,
+        ):
+            with patch(
+                "ai_api_unified.ai_factory.get_ai_provider_spec",
+                side_effect=AiProviderConfigurationError("unknown engine"),
+            ):
+                with pytest.raises(
+                    ValueError,
+                    match="Unsupported VIDEO engine",
+                ):
+                    AIFactory.get_ai_video_client(video_engine="unknown")
+
+    def test_get_ai_video_client_raises_when_engine_is_missing(self) -> None:
+        """Videos factory should require explicit engine configuration."""
+
+        mock_env_settings: Mock = self._build_env_settings_mock(video_engine="")
+
+        with patch(
+            "ai_api_unified.ai_factory.EnvSettings",
+            return_value=mock_env_settings,
+        ):
+            with pytest.raises(
+                ValueError,
+                match="VIDEO_ENGINE must be configured explicitly",
+            ):
+                AIFactory.get_ai_video_client()
