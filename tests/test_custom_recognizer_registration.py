@@ -8,6 +8,9 @@ pytest.importorskip("presidio_analyzer")
 
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
 
+from ai_api_unified.middleware.middleware_config import (
+    LIST_STR_DEFAULT_CC_LAST4_NEGATIVE_CONTEXT_TERMS,
+)
 from ai_api_unified.middleware.impl._presidio_redactor import (
     PROFILE_SMALL,
     PiiRedactor,
@@ -972,8 +975,8 @@ def test_pii_redactor_applies_default_recognizer_settings_for_missing_block() ->
         redactor.dict_redaction_recognizers_settings[RECOGNIZER_RULE_KEY_DOB]
     )
     assert "cc" in dict_cc_rule_settings["context_terms"]
-    assert dict_cc_rule_settings["negative_context_terms"] == list(
-        TUPLE_STR_CC_NEGATIVE_CONTEXT_TERMS
+    assert dict_cc_rule_settings["negative_context_terms"] == (
+        LIST_STR_DEFAULT_CC_LAST4_NEGATIVE_CONTEXT_TERMS
     )
     assert "dob" in dict_dob_rule_settings["context_terms"]
     assert dict_dob_rule_settings["negative_context_terms"] == list(
