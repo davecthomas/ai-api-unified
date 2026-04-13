@@ -321,7 +321,7 @@ middleware:
           enabled: true
           confidence_threshold: 0.80
           context_terms: ['cc', 'card', 'credit card', 'debit', 'visa', 'mastercard', 'master card', 'amex', 'american express', 'discover', 'last 4', 'ending in']
-          negative_context_terms: ['ssn', 'social security', 'expires', 'expiration', 'expiry', 'exp']
+          negative_context_terms: ['ssn', 'social security']
 
         dob:
           enabled: true
