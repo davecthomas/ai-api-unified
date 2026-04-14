@@ -50,3 +50,7 @@ settings.json
 .agents/memory/pending/
 .agents/memory/logs/
 # Do not edit this block manually; rerun ./install.sh and reopen an agent session if needed.
+
+# Do not edit this block manually; rerun the installer from your agentmemory checkout and reopen an agent session if needed.
+.agents/memory/state/
+.agents/memory/.auto_bootstrap_running
