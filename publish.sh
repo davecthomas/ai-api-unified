@@ -8,7 +8,8 @@
 # 1. The git working directory is clean.
 # 2. The user is reminded of the current version and prompts for confirmation.
 # 3. Old build artifacts are removed.
-# 4. The package is built and published securely using Poetry.
+# 4. The package is built locally and validated for publish-safe metadata.
+# 5. The prevalidated package is published securely using Poetry.
 # ==============================================================================
 
 # Exit immediately if a command exits with a non-zero status
@@ -45,10 +46,16 @@ echo ""
 echo "🧹 Cleaning up previous builds..."
 rm -rf dist/ build/ *.egg-info/
 
-echo "🚀 Building and publishing the package via Poetry..."
+echo "🚀 Building the package via Poetry..."
+poetry build
+
+echo "🔎 Validating built package metadata..."
+PYTHONPATH=src poetry run python -m ai_api_unified.util.package_metadata_validation dist
+
+echo "🚀 Publishing the validated package via Poetry..."
 # This requires the PyPI token to be configured beforehand:
 # poetry config pypi-token.pypi <your-pypi-token>
-poetry publish --build
+poetry publish
 
 echo "✅ Successfully published version ${CURRENT_VERSION}!"
 echo ""

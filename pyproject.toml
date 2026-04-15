@@ -35,7 +35,7 @@
 [project]
 name = "ai_api_unified"
 
-version = "2.5.0" # keep in sync with src/ai_api_unified/__version__.py
+version = "2.5.1" # keep in sync with src/ai_api_unified/__version__.py
 description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
@@ -92,19 +92,21 @@ google_gemini = [
 middleware-pii-redaction = [
   "presidio-analyzer>=2.2.35",
   "presidio-anonymizer>=2.2.35",
+  "spacy>=3.4.4,!=3.7.0,<4.0.0",
   "usaddress>=0.5.16,<0.6.0",
 ]
+# Compatibility aliases retained so existing install commands keep working.
 middleware-pii-redaction-small = [
   "presidio-analyzer>=2.2.35",
   "presidio-anonymizer>=2.2.35",
+  "spacy>=3.4.4,!=3.7.0,<4.0.0",
   "usaddress>=0.5.16,<0.6.0",
-  "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 middleware-pii-redaction-large = [
   "presidio-analyzer>=2.2.35",
   "presidio-anonymizer>=2.2.35",
+  "spacy>=3.4.4,!=3.7.0,<4.0.0",
   "usaddress>=0.5.16,<0.6.0",
-  "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
 ]
 similarity_score = ["numpy==2.2.6"]
 video_frames = [

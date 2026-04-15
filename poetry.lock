@@ -967,38 +967,6 @@ websockets = ">=11.0"
 pyaudio = ["pyaudio (>=0.2.14)"]
 
 [[package]]
-name = "en_core_web_lg"
-version = "3.8.0"
-description = "English pipeline optimized for CPU. Components: tok2vec, tagger, parser, senter, ner, attribute_ruler, lemmatizer."
-optional = true
-python-versions = "*"
-groups = ["main"]
-markers = "extra == \"middleware-pii-redaction-large\""
-files = [
-    {file = "en_core_web_lg-3.8.0-py3-none-any.whl", hash = "sha256:293e9547a655b25499198ab15a525b05b9407a75f10255e405e8c3854329ab63"},
-]
-
-[package.source]
-type = "url"
-url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl"
-
-[[package]]
-name = "en_core_web_sm"
-version = "3.8.0"
-description = "English pipeline optimized for CPU. Components: tok2vec, tagger, parser, senter, ner, attribute_ruler, lemmatizer."
-optional = true
-python-versions = "*"
-groups = ["main"]
-markers = "extra == \"middleware-pii-redaction-small\""
-files = [
-    {file = "en_core_web_sm-3.8.0-py3-none-any.whl", hash = "sha256:1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85"},
-]
-
-[package.source]
-type = "url"
-url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
-
-[[package]]
 name = "filelock"
 version = "3.25.2"
 description = "A platform independent file lock."
@@ -4199,9 +4167,9 @@ bedrock = ["boto3"]
 dev = ["black", "pytest", "ruff"]
 elevenlabs = ["elevenlabs"]
 google-gemini = ["google-cloud-speech", "google-cloud-texttospeech", "google-genai", "googleapis-common-protos", "protobuf"]
-middleware-pii-redaction = ["presidio-analyzer", "presidio-anonymizer", "usaddress"]
-middleware-pii-redaction-large = ["en_core_web_lg", "presidio-analyzer", "presidio-anonymizer", "usaddress"]
-middleware-pii-redaction-small = ["en_core_web_sm", "presidio-analyzer", "presidio-anonymizer", "usaddress"]
+middleware-pii-redaction = ["presidio-analyzer", "presidio-anonymizer", "spacy", "usaddress"]
+middleware-pii-redaction-large = ["presidio-analyzer", "presidio-anonymizer", "spacy", "usaddress"]
+middleware-pii-redaction-small = ["presidio-analyzer", "presidio-anonymizer", "spacy", "usaddress"]
 openai = ["openai"]
 similarity-score = ["numpy"]
 video-frames = ["Pillow", "imageio", "imageio-ffmpeg"]
@@ -4209,4 +4177,4 @@ video-frames = ["Pillow", "imageio", "imageio-ffmpeg"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "cf9ad6c41e6a3c599921a324e3306b245fa8faad7f8cff4b349ff01bbe01a8f8"
+content-hash = "1be11c7697c9fb9f1d1f7d71530b66fbfcdb1aa92668393b129a24d6373d8216"
