@@ -368,8 +368,6 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
             config_kwargs["duration_seconds"] = google_properties.duration_seconds
         if google_properties.seed is not None:
             config_kwargs["seed"] = google_properties.seed
-        # fps is intentionally NOT forwarded — Veo rejects it.
-        # Validation in AIGoogleGeminiVideoProperties catches this upfront.
         if google_properties.generate_audio is not None:
             config_kwargs["generate_audio"] = google_properties.generate_audio
         if google_properties.person_generation is not None:
