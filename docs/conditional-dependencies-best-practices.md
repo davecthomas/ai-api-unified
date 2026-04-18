@@ -195,10 +195,11 @@ To meet the requirement that each provider must be explicitly enabled:
   - `google_gemini`
   - `azure_tts`
   - `elevenlabs`
-- Keep middleware extras independent:
+- Keep middleware extras user-facing and clearly documented:
   - `middleware-pii-redaction`
   - `middleware-pii-redaction-small`
   - `middleware-pii-redaction-large`
+- Alias variants are acceptable when packaging constraints require separate runtime asset installation, as long as the install behavior is documented explicitly.
 - Optionally add a convenience umbrella extra for local integration testing, while keeping provider-specific extras as the main path.
 
 ## Required `README.md` Changes

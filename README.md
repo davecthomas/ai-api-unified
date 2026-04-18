@@ -105,9 +105,9 @@ poetry install --all-extras --with dev
 | `video_frames`                   | Optional frame extraction helpers backed by ImageIO + Pillow           |
 | `azure_tts`                      | Azure Cognitive Services TTS                                           |
 | `elevenlabs`                     | ElevenLabs TTS and STT                                                 |
-| `middleware-pii-redaction`       | Presidio + `usaddress` without packaged spaCy model wheels             |
-| `middleware-pii-redaction-small` | Presidio + `usaddress` + packaged `en_core_web_sm`                     |
-| `middleware-pii-redaction-large` | Presidio + `usaddress` + packaged `en_core_web_lg`                     |
+| `middleware-pii-redaction`       | Presidio + spaCy + `usaddress`; install the required spaCy model separately |
+| `middleware-pii-redaction-small` | Compatibility alias for PII redaction deps; pair with separate `en_core_web_sm` install |
+| `middleware-pii-redaction-large` | Compatibility alias for PII redaction deps; pair with separate `en_core_web_lg` install |
 | `similarity_score`               | NumPy-based similarity helpers                                         |
 | `dev`                            | Optional dev dependencies from `[project.optional-dependencies]`       |
 
@@ -489,6 +489,9 @@ Notes:
 
 - `strict_mode: true` enables fail-closed behavior
 - `balanced`, `high_accuracy`, and `low_memory` detection profiles are supported
+- install a matching spaCy model separately, for example `poetry run python -m spacy download en_core_web_sm` for `balanced` or `poetry run python -m spacy download en_core_web_lg` for `high_accuracy`
+- `middleware-pii-redaction-small` and `middleware-pii-redaction-large` are compatibility aliases for the same Python dependency set; the spaCy model is still installed as a separate build/runtime asset
+- for no-egress images and Lambda-style deployments, install the spaCy model wheel into the build artifact instead of relying on runtime downloads
 - recognizer customization is configured in YAML, not hard-coded in provider implementations
 
 See [`docs/pii_redaction_design.md`](docs/pii_redaction_design.md) for the fuller contract and deployment tradeoffs.
@@ -590,7 +593,9 @@ The script:
 - checks for uncommitted changes
 - confirms the version
 - removes old build artifacts
-- runs `poetry publish --build`
+- builds the wheel and sdist locally
+- fails before upload if built metadata contains direct URL requirements that PyPI rejects
+- runs `poetry publish` only after metadata validation passes
 
 After publishing, tag and push the release:
 

@@ -459,14 +459,17 @@ flowchart LR
         ExtraSmall["Install: [middleware-pii-redaction-small]"]
         ExtraLarge["Install: [middleware-pii-redaction-large]"]
         ExtraStandard["Install: [middleware-pii-redaction]"]
-        SmallWheel["en_core_web_sm wheel is resolved at install and packaged in artifact"]
-        LargeWheel["en_core_web_lg wheel is resolved at install and packaged in artifact"]
-        ManualLarge["Optional custom build step: package en_core_web_lg into artifact"]
+        BaseDeps["Presidio + spaCy + usaddress Python deps installed"]
+        SmallWheel["Separate build step: install en_core_web_sm into artifact"]
+        LargeWheel["Separate build step: install en_core_web_lg into artifact"]
 
-        ExtraSmall --> SmallWheel
-        ExtraLarge --> LargeWheel
+        ExtraSmall --> BaseDeps
+        ExtraLarge --> BaseDeps
+        ExtraStandard --> BaseDeps
+        BaseDeps --> SmallWheel
+        BaseDeps --> LargeWheel
         LargeWheel --> ModelLg
-        ManualLarge --> ModelLg
+        SmallWheel --> ModelSm
     end
 
     subgraph Runtime["Runtime Startup"]
@@ -569,23 +572,21 @@ Address redaction uses a hybrid strategy designed for US address formats.
   Inside `_presidio_redactor.py`, `detection_profile` is mapped to an internal runtime profile before Presidio engine construction. If `low_memory` is selected, an empty NLP configuration is used, forcing the regex-only execution path.
 
   **Install-time packaging behavior (critical for restricted networking):**
-  - `middleware-pii-redaction-small` includes a direct wheel reference for `en_core_web_sm` in `pyproject.toml`.
-  - Installing `middleware-pii-redaction-small` during image/build creation packages the small spaCy model into the deployment artifact.
-  - `middleware-pii-redaction-large` includes a direct wheel reference for `en_core_web_lg` in `pyproject.toml`.
-  - Installing `middleware-pii-redaction-large` during image/build creation packages the large spaCy model into the deployment artifact.
-  - `middleware-pii-redaction` installs Presidio and `usaddress` but does not package spaCy model wheels.
-  - If `high_accuracy` is selected and `en_core_web_lg` is not prepackaged, teams typically add a runtime download/bootstrap step, which requires outbound network access and can fail in no-egress environments.
-  - For no-egress Lambda and similarly restricted environments, the stable path is `middleware-pii-redaction-small` with `detection_profile: balanced` or `low_memory`; `middleware-pii-redaction-large` is available when large-model accuracy is required and deployment size constraints permit it.
+  - `middleware-pii-redaction` installs the Python dependencies required for Presidio-backed redaction, including spaCy itself.
+  - `middleware-pii-redaction-small` and `middleware-pii-redaction-large` are compatibility aliases to that same Python dependency set so existing install commands continue to work.
+  - Published PyPI metadata cannot contain direct URL requirements for the spaCy model wheels, so `en_core_web_sm` and `en_core_web_lg` must be installed as separate build or bootstrap steps.
+  - For connected developer environments, the common path is `python -m spacy download en_core_web_sm` for `balanced` or `python -m spacy download en_core_web_lg` for `high_accuracy`.
+  - For no-egress Lambda and similarly restricted environments, install the matching spaCy wheel into the image or deployment artifact during the build.
+  - If a non-`low_memory` profile is selected and the corresponding model is missing, redaction will require a separate runtime/bootstrap step and may fail in no-egress environments.
 
   **No-egress deployment matrix:**
 
-  | Install extra                    | Selected `detection_profile` | Runtime internet needed for model                      | Result in no-egress environment                 |
-  | -------------------------------- | ---------------------- | ------------------------------------------------------ | ----------------------------------------------- |
-  | `middleware-pii-redaction-small` | `balanced`     | No                                                     | Works with packaged small model                 |
-  | `middleware-pii-redaction-large` | `high_accuracy`    | No                                                     | Works with packaged large model                 |
-  | `middleware-pii-redaction`       | `balanced`     | Yes, unless `en_core_web_sm` is prepackaged separately | Fails if model is missing and cannot be fetched |
-  | `middleware-pii-redaction`       | `high_accuracy`    | Yes, unless `en_core_web_lg` is prepackaged separately | Fails if model is missing and cannot be fetched |
-  | either extra                     | `low_memory`          | No                                                     | Works without spaCy model                       |
+  | Install extra                                          | Selected `detection_profile` | Runtime internet needed for model                   | Result in no-egress environment                 |
+  | ------------------------------------------------------ | ---------------------------- | --------------------------------------------------- | ----------------------------------------------- |
+  | `middleware-pii-redaction` or `-small`, plus `en_core_web_sm` installed separately | `balanced`                    | No                                                  | Works with preinstalled small model             |
+  | `middleware-pii-redaction` or `-large`, plus `en_core_web_lg` installed separately | `high_accuracy`               | No                                                  | Works with preinstalled large model             |
+  | any PII extra without the required spaCy model         | `balanced` or `high_accuracy` | Yes, unless the matching model is prepackaged       | Fails if model is missing and cannot be fetched |
+  | any PII extra                                          | `low_memory`                 | No                                                  | Works without spaCy model                       |
 
 - **Caching & Performance (`@functools.cache`):**
   - Loading the Presidio `AnalyzerEngine` and underlying NLP models (e.g., spaCy `en_core_web_lg`) is an incredibly expensive operation, taking approximately **2 to 5 seconds** and consuming **500MB+ of RAM**.
