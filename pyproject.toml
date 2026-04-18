@@ -26,7 +26,8 @@
 # Packaging
 #   poetry build                 # Build the package (wheel + sdist)
 # Publishing 
-#   poetry publish --build 
+#   ./publish.sh                 # Clean, build, validate metadata, and publish
+#   poetry publish               # Publish prebuilt artifacts after validation
 # Environment
 #   poetry shell                 # Spawn a shell within the virtualenv
 #   poetry run <cmd>             # Run any command inside the Poetry virtualenv
