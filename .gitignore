@@ -54,3 +54,5 @@ settings.json
 # Do not edit this block manually; rerun the installer from your agentmemory checkout and reopen an agent session if needed.
 .agents/memory/state/
 .agents/memory/.auto_bootstrap_running
+
+# Added by the agentmemory SessionStart/bootstrap flow.
