@@ -176,7 +176,6 @@ def test_google_video_submit_forwards_supported_generate_videos_config_fields() 
     provider: _InspectableGoogleGeminiVideos = _InspectableGoogleGeminiVideos(operation)
     properties: AIGoogleGeminiVideoProperties = AIGoogleGeminiVideoProperties(
         seed=123,
-        fps=24,
         generate_audio=True,
         person_generation="allow_adult",
         output_dir=Path("/tmp/google-videos"),
@@ -187,9 +186,18 @@ def test_google_video_submit_forwards_supported_generate_videos_config_fields() 
     captured_call: dict[str, Any] = provider.client.models.calls[0]
     config: Any = captured_call["config"]
     assert config.seed == 123
-    assert config.fps == 24
     assert config.generate_audio is True
     assert config.person_generation == "allow_adult"
+
+
+def test_google_video_properties_reject_fps() -> None:
+    """Gemini (Veo) does not support fps — it should be rejected at validation time."""
+
+    with pytest.raises(ValueError, match="does not support the 'fps' parameter"):
+        AIGoogleGeminiVideoProperties(
+            fps=24,
+            output_dir=Path("/tmp/google-videos"),
+        )
 
 
 def test_google_video_submit_rejects_source_video_when_api_key_auth_is_selected(

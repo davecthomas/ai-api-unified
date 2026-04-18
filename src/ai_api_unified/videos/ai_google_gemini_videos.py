@@ -51,6 +51,11 @@ class AIGoogleGeminiVideoProperties(AIBaseVideoProperties):
 
     @model_validator(mode="after")
     def _validate_google_video_properties(self) -> "AIGoogleGeminiVideoProperties":
+        if self.fps is not None:
+            raise ValueError(
+                "Google Gemini (Veo) does not support the 'fps' parameter. "
+                "Remove fps from your video properties for this provider."
+            )
         if (
             self.aspect_ratio is not None
             and self.aspect_ratio not in self._ALLOWED_ASPECT_RATIOS
@@ -363,8 +368,8 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
             config_kwargs["duration_seconds"] = google_properties.duration_seconds
         if google_properties.seed is not None:
             config_kwargs["seed"] = google_properties.seed
-        if google_properties.fps is not None:
-            config_kwargs["fps"] = google_properties.fps
+        # fps is intentionally NOT forwarded — Veo rejects it.
+        # Validation in AIGoogleGeminiVideoProperties catches this upfront.
         if google_properties.generate_audio is not None:
             config_kwargs["generate_audio"] = google_properties.generate_audio
         if google_properties.person_generation is not None:
