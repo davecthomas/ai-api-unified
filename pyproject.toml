@@ -36,7 +36,7 @@
 [project]
 name = "ai_api_unified"
 
-version = "2.5.1" # keep in sync with src/ai_api_unified/__version__.py
+version = "2.5.2" # keep in sync with src/ai_api_unified/__version__.py
 description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
