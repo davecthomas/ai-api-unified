@@ -265,8 +265,7 @@ def test_google_video_submit_forwards_optional_config_fields() -> None:
     assert config.negative_prompt == "no text overlays"
     assert config.enhance_prompt is True
     assert config.output_gcs_uri == "gs://my-bucket/out/"
-    assert config.compression_quality is not None
-    assert str(config.compression_quality).upper().endswith("OPTIMIZED")
+    assert config.compression_quality == "OPTIMIZED"
 
 
 def test_google_video_submit_rejects_source_video_when_api_key_auth_is_selected(
