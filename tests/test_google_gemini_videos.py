@@ -200,6 +200,75 @@ def test_google_video_properties_reject_fps() -> None:
         )
 
 
+def test_google_video_properties_reject_4k_resolution() -> None:
+    """Veo does not support 4k — only 720p and 1080p are valid."""
+
+    with pytest.raises(ValueError, match="must be one of 720p or 1080p"):
+        AIGoogleGeminiVideoProperties(
+            resolution="4k",
+            output_dir=Path("/tmp/google-videos"),
+        )
+
+
+def test_google_video_properties_reject_allow_all_person_generation() -> None:
+    """Veo only accepts dont_allow or allow_adult for person_generation."""
+
+    with pytest.raises(ValueError, match="must be one of dont_allow or allow_adult"):
+        AIGoogleGeminiVideoProperties(
+            person_generation="allow_all",
+            output_dir=Path("/tmp/google-videos"),
+        )
+
+
+def test_google_video_properties_reject_invalid_compression_quality() -> None:
+    """compression_quality must be one of the SDK enum values."""
+
+    with pytest.raises(ValueError, match="'OPTIMIZED' or 'LOSSLESS'"):
+        AIGoogleGeminiVideoProperties(
+            compression_quality="ultra",
+            output_dir=Path("/tmp/google-videos"),
+        )
+
+
+def test_google_video_properties_reject_non_gs_output_gcs_uri() -> None:
+    """output_gcs_uri must be a gs:// URI."""
+
+    with pytest.raises(ValueError, match="must be a gs:// URI"):
+        AIGoogleGeminiVideoProperties(
+            output_gcs_uri="https://example.com/out/",
+            output_dir=Path("/tmp/google-videos"),
+        )
+
+
+def test_google_video_submit_forwards_optional_config_fields() -> None:
+    """Newly exposed optional fields should forward into GenerateVideosConfig when set."""
+
+    operation: SimpleNamespace = SimpleNamespace(
+        done=False,
+        error=None,
+        name="models/veo-3.1-lite-generate-preview/operations/test-op",
+        response=None,
+    )
+    provider: _InspectableGoogleGeminiVideos = _InspectableGoogleGeminiVideos(operation)
+    properties: AIGoogleGeminiVideoProperties = AIGoogleGeminiVideoProperties(
+        negative_prompt="no text overlays",
+        enhance_prompt=True,
+        output_gcs_uri="gs://my-bucket/out/",
+        compression_quality="optimized",
+        output_dir=Path("/tmp/google-videos"),
+    )
+
+    provider.submit_video_generation("A lighthouse in a storm.", properties)
+
+    captured_call: dict[str, Any] = provider.client.models.calls[0]
+    config: Any = captured_call["config"]
+    assert config.negative_prompt == "no text overlays"
+    assert config.enhance_prompt is True
+    assert config.output_gcs_uri == "gs://my-bucket/out/"
+    assert config.compression_quality is not None
+    assert str(config.compression_quality).upper().endswith("OPTIMIZED")
+
+
 def test_google_video_submit_rejects_source_video_when_api_key_auth_is_selected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
