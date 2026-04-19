@@ -203,9 +203,19 @@ def test_google_video_properties_reject_fps() -> None:
 def test_google_video_properties_reject_4k_resolution() -> None:
     """Veo does not support 4k — only 720p and 1080p are valid."""
 
-    with pytest.raises(ValueError, match="must be one of 720p or 1080p"):
+    with pytest.raises(ValueError, match=r"[Mm]ust be one of 720p or 1080p"):
         AIGoogleGeminiVideoProperties(
             resolution="4k",
+            output_dir=Path("/tmp/google-videos"),
+        )
+
+
+def test_google_video_properties_rejection_message_includes_offending_value() -> None:
+    """Error messages must name the offending value so callers can debug without guessing."""
+
+    with pytest.raises(ValueError, match=r"resolution='8k'"):
+        AIGoogleGeminiVideoProperties(
+            resolution="8k",
             output_dir=Path("/tmp/google-videos"),
         )
 
@@ -213,7 +223,7 @@ def test_google_video_properties_reject_4k_resolution() -> None:
 def test_google_video_properties_reject_allow_all_person_generation() -> None:
     """Veo only accepts dont_allow or allow_adult for person_generation."""
 
-    with pytest.raises(ValueError, match="must be one of dont_allow or allow_adult"):
+    with pytest.raises(ValueError, match=r"[Mm]ust be one of dont_allow or allow_adult"):
         AIGoogleGeminiVideoProperties(
             person_generation="allow_all",
             output_dir=Path("/tmp/google-videos"),
@@ -233,7 +243,7 @@ def test_google_video_properties_reject_invalid_compression_quality() -> None:
 def test_google_video_properties_reject_non_gs_output_gcs_uri() -> None:
     """output_gcs_uri must be a gs:// URI."""
 
-    with pytest.raises(ValueError, match="must be a gs:// URI"):
+    with pytest.raises(ValueError, match=r"[Mm]ust be a gs:// URI"):
         AIGoogleGeminiVideoProperties(
             output_gcs_uri="https://example.com/out/",
             output_dir=Path("/tmp/google-videos"),

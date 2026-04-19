@@ -57,42 +57,49 @@ class AIGoogleGeminiVideoProperties(AIBaseVideoProperties):
     def _validate_google_video_properties(self) -> "AIGoogleGeminiVideoProperties":
         if self.fps is not None:
             raise ValueError(
-                "Google Gemini (Veo) does not support the 'fps' parameter. "
-                "Remove fps from your video properties for this provider."
+                f"Google Gemini (Veo) does not support the 'fps' parameter "
+                f"(received fps={self.fps!r}). Remove fps from your video "
+                f"properties for this provider."
             )
         if (
             self.aspect_ratio is not None
             and self.aspect_ratio not in self._ALLOWED_ASPECT_RATIOS
         ):
             raise ValueError(
-                "Google Gemini video aspect_ratio must be '16:9' or '9:16'."
+                f"Google Gemini video aspect_ratio={self.aspect_ratio!r} is "
+                f"not supported. Must be one of '16:9' or '9:16'."
             )
         if (
             self.resolution is not None
             and self.resolution not in self._ALLOWED_RESOLUTIONS
         ):
             raise ValueError(
-                "Google Gemini video resolution must be one of 720p or 1080p."
+                f"Google Gemini video resolution={self.resolution!r} is not "
+                f"supported. Must be one of 720p or 1080p."
             )
         if (
             self.person_generation is not None
             and self.person_generation not in self._ALLOWED_PERSON_GENERATION
         ):
             raise ValueError(
-                "Google Gemini person_generation must be one of dont_allow or allow_adult."
+                f"Google Gemini person_generation={self.person_generation!r} "
+                f"is not supported. Must be one of dont_allow or allow_adult."
             )
         if self.compression_quality is not None:
             normalized: str = self.compression_quality.upper()
             if normalized not in self._ALLOWED_COMPRESSION_QUALITY:
                 raise ValueError(
-                    "Google Gemini compression_quality must be 'OPTIMIZED' or 'LOSSLESS'."
+                    f"Google Gemini compression_quality="
+                    f"{self.compression_quality!r} is not supported. "
+                    f"Must be 'OPTIMIZED' or 'LOSSLESS'."
                 )
             self.compression_quality = normalized
         if self.output_gcs_uri is not None and not self.output_gcs_uri.startswith(
             "gs://"
         ):
             raise ValueError(
-                "Google Gemini output_gcs_uri must be a gs:// URI."
+                f"Google Gemini output_gcs_uri={self.output_gcs_uri!r} is "
+                f"not supported. Must be a gs:// URI."
             )
         return self
 
