@@ -40,14 +40,18 @@ class AIGoogleGeminiVideoProperties(AIBaseVideoProperties):
     last_frame_image: AIMediaReference | None = None
     person_generation: str | None = None
     generate_audio: bool | None = None
+    negative_prompt: str | None = None
+    enhance_prompt: bool | None = None
+    output_gcs_uri: str | None = None
+    compression_quality: str | None = None
 
     _ALLOWED_ASPECT_RATIOS: ClassVar[set[str]] = {"16:9", "9:16"}
-    _ALLOWED_RESOLUTIONS: ClassVar[set[str]] = {"720p", "1080p", "4k"}
+    _ALLOWED_RESOLUTIONS: ClassVar[set[str]] = {"720p", "1080p"}
     _ALLOWED_PERSON_GENERATION: ClassVar[set[str]] = {
         "dont_allow",
         "allow_adult",
-        "allow_all",
     }
+    _ALLOWED_COMPRESSION_QUALITY: ClassVar[set[str]] = {"OPTIMIZED", "LOSSLESS"}
 
     @model_validator(mode="after")
     def _validate_google_video_properties(self) -> "AIGoogleGeminiVideoProperties":
@@ -68,14 +72,27 @@ class AIGoogleGeminiVideoProperties(AIBaseVideoProperties):
             and self.resolution not in self._ALLOWED_RESOLUTIONS
         ):
             raise ValueError(
-                "Google Gemini video resolution must be one of 720p, 1080p, or 4k."
+                "Google Gemini video resolution must be one of 720p or 1080p."
             )
         if (
             self.person_generation is not None
             and self.person_generation not in self._ALLOWED_PERSON_GENERATION
         ):
             raise ValueError(
-                "Google Gemini person_generation must be one of dont_allow, allow_adult, or allow_all."
+                "Google Gemini person_generation must be one of dont_allow or allow_adult."
+            )
+        if self.compression_quality is not None:
+            normalized: str = self.compression_quality.upper()
+            if normalized not in self._ALLOWED_COMPRESSION_QUALITY:
+                raise ValueError(
+                    "Google Gemini compression_quality must be 'OPTIMIZED' or 'LOSSLESS'."
+                )
+            self.compression_quality = normalized
+        if self.output_gcs_uri is not None and not self.output_gcs_uri.startswith(
+            "gs://"
+        ):
+            raise ValueError(
+                "Google Gemini output_gcs_uri must be a gs:// URI."
             )
         return self
 
@@ -372,6 +389,16 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
             config_kwargs["generate_audio"] = google_properties.generate_audio
         if google_properties.person_generation is not None:
             config_kwargs["person_generation"] = google_properties.person_generation
+        if google_properties.negative_prompt is not None:
+            config_kwargs["negative_prompt"] = google_properties.negative_prompt
+        if google_properties.enhance_prompt is not None:
+            config_kwargs["enhance_prompt"] = google_properties.enhance_prompt
+        if google_properties.output_gcs_uri is not None:
+            config_kwargs["output_gcs_uri"] = google_properties.output_gcs_uri
+        if google_properties.compression_quality is not None:
+            config_kwargs["compression_quality"] = types.VideoCompressionQuality(
+                google_properties.compression_quality
+            )
         if google_properties.last_frame_image is not None:
             config_kwargs["last_frame"] = self._to_google_image(
                 google_properties.last_frame_image
