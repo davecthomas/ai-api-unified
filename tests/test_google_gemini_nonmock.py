@@ -4,7 +4,9 @@
 from copy import deepcopy
 import os
 import socket
+import struct
 import textwrap
+import zlib
 from typing import Any
 from pydantic import model_validator
 import pytest
@@ -15,8 +17,10 @@ from ai_api_unified.ai_factory import AIFactory
 from ai_api_unified.ai_base import (
     AIBase,
     AIBaseEmbeddings,
+    AIEmbeddingsMultimodalParams,
     AIStructuredPrompt,
     AIBaseCompletions,
+    SupportedDataType,
 )
 from ai_api_unified.embeddings.ai_google_gemini_embeddings import (
     GoogleGeminiEmbeddings,
@@ -26,6 +30,41 @@ from ai_api_unified.util.utils import similarity_score
 GOOGLE_GEMINI_HOSTNAME: str = "generativelanguage.googleapis.com"
 TEST_GEMINI_COMPLETIONS_MODEL: str = "gemini-2.5-flash"
 TEST_GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
+TEST_GEMINI_MULTIMODAL_EMBEDDING_MODEL: str = "gemini-embedding-2"
+
+
+def _build_tiny_png() -> bytes:
+    """Build a valid 1x1 red RGB PNG deterministically for multimodal input tests."""
+
+    def _chunk(bytes_tag: bytes, bytes_data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(bytes_data))
+            + bytes_tag
+            + bytes_data
+            + struct.pack(">I", zlib.crc32(bytes_tag + bytes_data) & 0xFFFFFFFF)
+        )
+
+    bytes_ihdr: bytes = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    bytes_idat: bytes = zlib.compress(b"\x00\xff\x00\x00")
+    # Normal return with a complete minimal PNG byte stream.
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", bytes_ihdr)
+        + _chunk(b"IDAT", bytes_idat)
+        + _chunk(b"IEND", b"")
+    )
+
+
+def _skip_if_model_unavailable(exception: Exception, model_name: str) -> None:
+    """Skip live tests when the credential cannot access the requested model."""
+    str_message: str = str(exception).lower()
+    if any(
+        marker in str_message
+        for marker in ("not found", "not supported", "permission", "invalid model")
+    ):
+        pytest.skip(
+            f"Skipping: model '{model_name}' unavailable for this credential: {exception}"
+        )
 
 
 def _skip_if_dns_unavailable(hostname: str) -> None:
@@ -257,6 +296,44 @@ class TestNonMockedGoogleGeminiModules:
         assert (
             len(result["embedding"]) == override_dim
         ), f"Expected vector length {override_dim}, got {len(result['embedding'])}"
+
+    def test_gemini_embeddings_multimodal_image_and_text(self) -> None:
+        """gemini-embedding-2 embeds interleaved text + image into one vector."""
+        try:
+            multimodal_client = GoogleGeminiEmbeddings(
+                model=TEST_GEMINI_MULTIMODAL_EMBEDDING_MODEL
+            )
+        except Exception as exception:
+            _skip_if_google_quota_exhausted(exception)
+            _skip_if_model_unavailable(
+                exception, TEST_GEMINI_MULTIMODAL_EMBEDDING_MODEL
+            )
+            raise
+
+        assert (
+            SupportedDataType.IMAGE
+            in multimodal_client.capabilities.supported_data_types
+        )
+
+        params = AIEmbeddingsMultimodalParams(
+            text="a single red pixel",
+            included_types=[SupportedDataType.IMAGE],
+            included_data=[_build_tiny_png()],
+            included_mime_types=["image/png"],
+        )
+        try:
+            result = multimodal_client.generate_embeddings_multimodal(params)
+        except Exception as exception:
+            _skip_if_google_quota_exhausted(exception)
+            _skip_if_model_unavailable(
+                exception, TEST_GEMINI_MULTIMODAL_EMBEDDING_MODEL
+            )
+            raise
+
+        assert isinstance(result["embedding"], list)
+        assert result["dimensions"] == len(result["embedding"])
+        assert result["included_media_count"] == 1
+        assert result["model"] == TEST_GEMINI_MULTIMODAL_EMBEDDING_MODEL
 
     def test_similarity_score_for_semantically_similar_phrases(
         self, gemini_embeddings_client: AIBaseEmbeddings

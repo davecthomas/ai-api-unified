@@ -32,3 +32,10 @@ class AiProviderRuntimeError(AiProviderError):
     Raised when provider loading fails due to runtime issues unrelated to
     missing dependency extras.
     """
+
+
+class AiProviderCapabilityUnsupportedError(AiProviderError):
+    """
+    Raised when a caller requests an operation or input modality that the
+    configured provider model does not support, per its capabilities descriptor.
+    """

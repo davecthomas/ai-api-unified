@@ -11,10 +11,50 @@ from openai.types import CreateEmbeddingResponse, EmbeddingCreateParams
 
 from ai_api_unified.ai_openai_base import AIOpenAIBase
 
-from ..ai_base import AIBaseEmbeddings, AiApiObservedEmbeddingsResultModel
+from ..ai_base import (
+    AIBaseEmbeddings,
+    AIEmbeddingsCapabilitiesBase,
+    AiApiObservedEmbeddingsResultModel,
+)
 from ..util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+
+class AIEmbeddingsCapabilitiesOpenAI(AIEmbeddingsCapabilitiesBase):
+    """
+    OpenAI-specific embeddings capabilities. Text-only models.
+
+    Based on https://platform.openai.com/docs/guides/embeddings
+    """
+
+    @classmethod
+    def for_model(cls, model_name: str) -> "AIEmbeddingsCapabilitiesOpenAI":
+        """Create capabilities instance for a specific OpenAI embedding model."""
+        if model_name == "text-embedding-3-large":
+            return cls(
+                default_dimensions=3072,
+                min_dimensions=1,
+                max_dimensions=3072,
+                recommended_dimensions=[256, 1024, 3072],
+                max_input_tokens=8191,
+                max_batch_size=2048,
+            )
+        if model_name == "text-embedding-3-small":
+            return cls(
+                default_dimensions=1536,
+                min_dimensions=1,
+                max_dimensions=1536,
+                recommended_dimensions=[512, 1536],
+                max_input_tokens=8191,
+                max_batch_size=2048,
+            )
+        # text-embedding-ada-002 and unknown models: fixed 1536 dimensions.
+        return cls(
+            default_dimensions=1536,
+            max_input_tokens=8191,
+            max_batch_size=2048,
+        )
 
 
 class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
@@ -61,6 +101,11 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
         Returns the OpenAI embeddings model identifier this client is using.
         """
         return self.embedding_model
+
+    @property
+    def capabilities(self) -> AIEmbeddingsCapabilitiesOpenAI:
+        """Return capabilities for the configured OpenAI embedding model."""
+        return AIEmbeddingsCapabilitiesOpenAI.for_model(self.embedding_model)
 
     def calculate_cost(self, num_tokens: int) -> float:
         """

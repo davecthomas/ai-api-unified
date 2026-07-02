@@ -87,7 +87,7 @@ google_gemini = [
   "google-cloud-speech>=2.25.0,<3.0.0",
   "protobuf>=3.20.2,<5.0.0dev",
   "googleapis-common-protos>=1.63.0,<2.0.0",
-  "google-genai (>=1.41.0,<2.0.0)",
+  "google-genai (>=2.10.0,<3.0.0)",
   "google-cloud-texttospeech (>=2.29.0)",
 ]
 middleware-pii-redaction = [

@@ -25,6 +25,9 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from ai_api_unified.ai_completions_exceptions import (
     StructuredResponseTokenLimitError,
 )
+from ai_api_unified.ai_provider_exceptions import (
+    AiProviderCapabilityUnsupportedError,
+)
 from ai_api_unified.middleware.observability import (
     AiApiObservabilityMiddleware,
     get_observability_middleware,
@@ -142,6 +145,135 @@ class AICompletionsPromptParamsBase(BaseModel, ABC):
             self.included_data = list_data
             self.included_mime_types = list_mime_types
             self.included_types = list_types
+        return self
+
+    def iter_included_media(
+        self,
+    ) -> Iterator[tuple[int, SupportedDataType, bytes, str]]:
+        """
+        Yield the index, type, raw bytes, and MIME type for every attached media item.
+        """
+
+        list_types: list[SupportedDataType] = list(self.included_types or [])
+        list_data: list[bytes] = list(self.included_data or [])
+        list_mime_types: list[str] = list(self.included_mime_types or [])
+
+        for index, (media_type, media_bytes, mime_type) in enumerate(
+            zip(list_types, list_data, list_mime_types)
+        ):
+            yield index, media_type, media_bytes, mime_type
+
+    @property
+    def has_included_media(self) -> bool:
+        """Return True when any media attachments are present."""
+
+        return bool(self.included_types)
+
+
+class AIEmbeddingsCapabilitiesBase(BaseModel):
+    """
+    Base class for capturing important attributes of embeddings models.
+    """
+
+    supported_data_types: list[SupportedDataType] = [SupportedDataType.TEXT]
+    default_dimensions: int
+    min_dimensions: int | None = None
+    max_dimensions: int | None = None
+    recommended_dimensions: list[int] = []
+    max_input_tokens: int | None = None
+    max_batch_size: int | None = None
+    max_images_per_request: int | None = None
+    max_video_seconds: int | None = None
+    max_audio_seconds: int | None = None
+
+
+# Maps each embeddable media type to the MIME prefixes accepted for it.
+DICT_EMBEDDINGS_MEDIA_MIME_PREFIXES: dict[SupportedDataType, tuple[str, ...]] = {
+    SupportedDataType.IMAGE: ("image/",),
+    SupportedDataType.VIDEO: ("video/",),
+    SupportedDataType.AUDIO: ("audio/",),
+    SupportedDataType.PDF: ("application/pdf",),
+}
+
+
+class AIEmbeddingsMultimodalParams(BaseModel):
+    """
+    Input parameters for one multimodal embedding request.
+
+    Mirrors the completions media-attachment pattern: aligned lists of types,
+    raw bytes, and MIME types, plus optional text. All supplied inputs are
+    embedded jointly as one interleaved input producing one embedding vector.
+    """
+
+    MAX_MEDIA_BYTES: ClassVar[int] = 20_000_000
+
+    text: str | None = None
+    included_types: list[SupportedDataType] | None = None
+    included_data: list[bytes] | None = None
+    included_mime_types: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _validate_and_normalize_included_media(
+        self,
+    ) -> "AIEmbeddingsMultimodalParams":
+        """Ensure media attachment lists are aligned and metadata validated."""
+
+        list_types: list[SupportedDataType] = list(self.included_types or [])
+        list_data: list[bytes] = list(self.included_data or [])
+        list_mime_types: list[str] = list(self.included_mime_types or [])
+
+        lengths: tuple[int, int, int] = (
+            len(list_types),
+            len(list_data),
+            len(list_mime_types),
+        )
+        if len({length for length in lengths}) > 1:
+            raise ValueError(
+                "included_types, included_data, and included_mime_types must be the same length."
+            )
+
+        if not list_types:
+            if self.text is None or not self.text.strip():
+                raise ValueError(
+                    "Multimodal embeddings input requires text, media attachments, or both."
+                )
+            self.included_data = None
+            self.included_mime_types = None
+            self.included_types = None
+            return self
+
+        # Loop through attachments so every media item is validated against its declared type.
+        for index, media_type in enumerate(list_types):
+            if media_type is SupportedDataType.TEXT:
+                raise ValueError(
+                    "Text belongs in the 'text' field, not in media attachments."
+                )
+            tuple_mime_prefixes: tuple[str, ...] | None = (
+                DICT_EMBEDDINGS_MEDIA_MIME_PREFIXES.get(media_type)
+            )
+            if tuple_mime_prefixes is None:
+                raise ValueError(
+                    f"SupportedDataType.{media_type.name} attachments are not accepted."
+                )
+            mime_type: str = (list_mime_types[index] or "").lower()
+            if not mime_type:
+                raise ValueError("Each included media item must specify a MIME type.")
+            if not mime_type.startswith(tuple_mime_prefixes):
+                raise ValueError(
+                    f"MIME type {mime_type!r} does not match declared type "
+                    f"SupportedDataType.{media_type.name}."
+                )
+            media_bytes: bytes = list_data[index]
+            if not media_bytes:
+                raise ValueError("Media attachment bytes cannot be empty.")
+            if len(media_bytes) > self.MAX_MEDIA_BYTES:
+                raise ValueError(
+                    f"Media attachment at index {index} exceeds {self.MAX_MEDIA_BYTES} bytes."
+                )
+
+        self.included_data = list_data
+        self.included_mime_types = list_mime_types
+        self.included_types = list_types
         return self
 
     def iter_included_media(
@@ -847,6 +979,92 @@ class AIBaseEmbeddings(AIBase):
         # Normal return with embeddings output summary metadata derived from the provider result.
         return call_result_summary
 
+    @property
+    def capabilities(self) -> AIEmbeddingsCapabilitiesBase:
+        """
+        Returns the capabilities descriptor for the configured embeddings model.
+
+        Providers override this with model-specific capabilities. The base
+        default describes a text-only embeddings model at the configured
+        dimensions.
+        """
+        # Normal return with text-only default capabilities.
+        return AIEmbeddingsCapabilitiesBase(default_dimensions=self.dimensions)
+
+    def _ensure_multimodal_params_supported(
+        self,
+        params: AIEmbeddingsMultimodalParams,
+    ) -> None:
+        """
+        Validates one multimodal input against the model's capabilities descriptor.
+
+        Args:
+            params: Multimodal embeddings input to validate.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When an attached media type is
+                unsupported or a per-modality limit is exceeded.
+        """
+        embeddings_capabilities: AIEmbeddingsCapabilitiesBase = self.capabilities
+        int_image_count: int = 0
+        # Loop through attachments so every declared media type is capability-checked.
+        for _, media_type, _, _ in params.iter_included_media():
+            if media_type not in embeddings_capabilities.supported_data_types:
+                raise AiProviderCapabilityUnsupportedError(
+                    f"{type(self).__name__} model '{self.model_name}' does not support "
+                    f"{media_type.value} input for embeddings. Supported input types: "
+                    f"{[t.value for t in embeddings_capabilities.supported_data_types]}. "
+                    "Configure an embedding model that supports the requested input types."
+                )
+            if media_type is SupportedDataType.IMAGE:
+                int_image_count += 1
+        if (
+            embeddings_capabilities.max_images_per_request is not None
+            and int_image_count > embeddings_capabilities.max_images_per_request
+        ):
+            raise AiProviderCapabilityUnsupportedError(
+                f"{type(self).__name__} model '{self.model_name}' accepts at most "
+                f"{embeddings_capabilities.max_images_per_request} images per request "
+                f"but received {int_image_count}."
+            )
+        # Normal return when every attachment is supported by the model capabilities.
+        return None
+
+    def _build_multimodal_embeddings_observability_input_metadata(
+        self,
+        *,
+        params: AIEmbeddingsMultimodalParams,
+        requested_dimensions: int | None,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only input fields for one multimodal embeddings provider call.
+
+        Args:
+            params: Multimodal embeddings input being embedded by the provider.
+            requested_dimensions: Requested output dimensions when the provider exposes that input.
+
+        Returns:
+            Dictionary of metadata-only input fields safe for observability logging.
+        """
+        dict_modality_counts: dict[str, int] = {}
+        int_total_media_bytes: int = 0
+        # Loop through attachments so metadata reflects per-modality counts without content.
+        for _, media_type, media_bytes, _ in params.iter_included_media():
+            str_count_key: str = f"input_{media_type.value}_count"
+            dict_modality_counts[str_count_key] = (
+                dict_modality_counts.get(str_count_key, 0) + 1
+            )
+            int_total_media_bytes += len(media_bytes)
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = {
+            "input_text_chars": len(params.text) if params.text else 0,
+            "input_media_count": len(params.included_types or []),
+            "input_media_total_bytes": int_total_media_bytes,
+            "requested_dimensions": requested_dimensions,
+            **dict_modality_counts,
+        }
+        # Normal return with multimodal embeddings input metadata only.
+        return dict_input_metadata
+
     @abstractmethod
     def generate_embeddings(self, text: str) -> dict[str, Any]:
         """
@@ -858,6 +1076,30 @@ class AIBaseEmbeddings(AIBase):
         """
         Generates embeddings for multiple pieces of text in a single API call.
         """
+
+    def generate_embeddings_multimodal(
+        self,
+        params: AIEmbeddingsMultimodalParams,
+    ) -> dict[str, Any]:
+        """
+        Generates one embedding for interleaved multimodal input.
+
+        Providers whose capabilities include non-text data types override this
+        method. The base implementation raises because the provider only
+        supports text embeddings.
+
+        Args:
+            params: Multimodal embeddings input (text and/or media attachments).
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: Always, for text-only providers.
+        """
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not support "
+            "multimodal embeddings. Supported input types: "
+            f"{[t.value for t in self.capabilities.supported_data_types]}. "
+            "Configure an embedding model that supports multimodal input."
+        )
 
 
 class AIStructuredPrompt(BaseModel):

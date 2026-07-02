@@ -24,14 +24,21 @@ Environment Variables:
 
 Model naming and capability notes:
     - This implementation is pinned to Gemini embedding model family naming.
-    - Default model is 'gemini-embedding-001'.
+    - Default model is 'gemini-embedding-001' (text-only).
+    - 'gemini-embedding-2' is natively multimodal: text, images, video, audio,
+      and PDF inputs share one embedding space. Select it via
+      EMBEDDING_MODEL_NAME=gemini-embedding-2 to enable
+      generate_embeddings_multimodal; capabilities flip automatically.
     - The code supports passing output dimensionality via EmbedContentConfig.
-    - Documented supported output dimensions are flexible in the 768-3072 range.
+    - Documented supported output dimensions are 768-3072 for
+      gemini-embedding-001 and 128-3072 for gemini-embedding-2.
     - Google-recommended output dimensions are 768, 1536, and 3072.
       This class default is 3072 when no override is provided.
 
 Features:
     - Batch embedding support
+    - Multimodal (interleaved text + media) embedding support on
+      gemini-embedding-2, capability-gated per model
     - Exponential backoff retry for rate limits and transient errors
     - Comprehensive error handling for authentication and API failures
     - Consistent with other provider patterns in this library
@@ -51,17 +58,65 @@ from typing import Any
 from google import genai
 from google.api_core.exceptions import ClientError
 from google.genai import errors as gerr
-from google.genai.types import EmbedContentConfig
+from google.genai.types import Content, EmbedContentConfig, Part
 import ai_api_unified.ai_google_base as ai_google_base_module
 from ai_api_unified.ai_google_base import AIGoogleBase
 
-from ..ai_base import AIBaseEmbeddings, AiApiObservedEmbeddingsResultModel
+from ..ai_base import (
+    AIBaseEmbeddings,
+    AIEmbeddingsCapabilitiesBase,
+    AIEmbeddingsMultimodalParams,
+    AiApiObservedEmbeddingsResultModel,
+    SupportedDataType,
+)
 from ..util.env_settings import EnvSettings
 
 GOOGLE_GENAI_ERRORS: object = gerr
 GOOGLE_GENAI_MODULE: object = genai
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+
+class AIEmbeddingsCapabilitiesGoogle(AIEmbeddingsCapabilitiesBase):
+    """
+    Google Gemini-specific embeddings capabilities.
+
+    Based on https://ai.google.dev/gemini-api/docs/embeddings
+    """
+
+    @classmethod
+    def for_model(cls, model_name: str) -> "AIEmbeddingsCapabilitiesGoogle":
+        """Create capabilities instance for a specific Gemini embedding model."""
+        if "gemini-embedding-2" in model_name:
+            # Natively multimodal: text, images, video, audio, and PDF inputs
+            # share one embedding space (stable since April 2026).
+            return cls(
+                supported_data_types=[
+                    SupportedDataType.TEXT,
+                    SupportedDataType.IMAGE,
+                    SupportedDataType.VIDEO,
+                    SupportedDataType.AUDIO,
+                    SupportedDataType.PDF,
+                ],
+                default_dimensions=3072,
+                min_dimensions=128,
+                max_dimensions=3072,
+                recommended_dimensions=[768, 1536, 3072],
+                max_input_tokens=8192,
+                max_batch_size=100,
+                max_images_per_request=6,
+                max_video_seconds=120,
+                max_audio_seconds=180,
+            )
+        # gemini-embedding-001 and unknown models: text-only defaults.
+        return cls(
+            default_dimensions=3072,
+            min_dimensions=768,
+            max_dimensions=3072,
+            recommended_dimensions=[768, 1536, 3072],
+            max_input_tokens=2048,
+            max_batch_size=100,
+        )
 
 
 class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
@@ -116,11 +171,11 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
                 "EMBEDDING_DIMENSIONS", str(self.DEFAULT_EMBEDDING_DIMENSIONS)
             )
         )
-        if self.dimensions not in self.RECOMMENDED_EMBEDDING_DIMENSIONS:
+        if self.dimensions not in self.capabilities.recommended_dimensions:
             _LOGGER.info(
                 "Requested non-recommended Gemini embedding dimensions: %s. Recommended values are %s.",
                 self.dimensions,
-                self.RECOMMENDED_EMBEDDING_DIMENSIONS,
+                self.capabilities.recommended_dimensions,
             )
 
         # Initialize the client
@@ -155,7 +210,13 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
         """
         return [
             "gemini-embedding-001",
+            "gemini-embedding-2",
         ]
+
+    @property
+    def capabilities(self) -> AIEmbeddingsCapabilitiesGoogle:
+        """Return capabilities for the configured Gemini embedding model."""
+        return AIEmbeddingsCapabilitiesGoogle.for_model(self.embedding_model)
 
     def generate_embeddings(self, text: str) -> dict[str, Any]:
         """
@@ -386,6 +447,114 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
             )
         )
         # Normal return with the caller-facing batch embeddings payload.
+        return observed_result.return_value
+
+    def generate_embeddings_multimodal(
+        self,
+        params: AIEmbeddingsMultimodalParams,
+    ) -> dict[str, Any]:
+        """
+        Generate one embedding for interleaved multimodal input.
+
+        Requires a model whose capabilities include the attached media types
+        (set EMBEDDING_MODEL_NAME=gemini-embedding-2 for image/video/audio/PDF
+        support). All supplied text and media are embedded jointly into a
+        single vector.
+
+        Args:
+            params: Multimodal embeddings input (text and/or media attachments).
+
+        Returns:
+            Dictionary containing the embedding vector and metadata.
+        """
+        self._ensure_multimodal_params_supported(params)
+
+        dict_input_metadata: dict[str, str | int | float | bool | None] = (
+            self._build_multimodal_embeddings_observability_input_metadata(
+                params=params,
+                requested_dimensions=self.dimensions,
+            )
+        )
+
+        def _embed_multimodal() -> AiApiObservedEmbeddingsResultModel[dict[str, Any]]:
+            try:
+                list_parts: list[Part] = []
+                if params.text and params.text.strip():
+                    list_parts.append(Part.from_text(text=params.text))
+                # Loop through attachments so every media item becomes one inline part.
+                for _, _, media_bytes, mime_type in params.iter_included_media():
+                    list_parts.append(
+                        Part.from_bytes(data=media_bytes, mime_type=mime_type)
+                    )
+                # One Content wrapping all parts makes the interleaved-input intent
+                # explicit: the provider returns one embedding for the whole request.
+                embed_kwargs: dict[str, Any] = {
+                    "model": self.embedding_model,
+                    "contents": Content(parts=list_parts),
+                }
+                if self.dimensions != self.DEFAULT_EMBEDDING_DIMENSIONS:
+                    embed_kwargs["config"] = EmbedContentConfig(
+                        output_dimensionality=self.dimensions
+                    )
+                result = self.client.models.embed_content(
+                    **embed_kwargs,
+                )
+                if not result.embeddings:
+                    raise RuntimeError(
+                        "Gemini embeddings response did not contain any embeddings."
+                    )
+                embedding_values: list[float] = result.embeddings[0].values
+
+                observed_result: AiApiObservedEmbeddingsResultModel[dict[str, Any]] = (
+                    AiApiObservedEmbeddingsResultModel(
+                        return_value={
+                            "embedding": embedding_values,
+                            "model": self.embedding_model,
+                            "dimensions": len(embedding_values),
+                            "text": params.text,
+                            "included_media_count": len(params.included_types or []),
+                        },
+                        embedding_count=1,
+                        returned_dimensions=len(embedding_values),
+                        provider_input_tokens=self._extract_gemini_prompt_tokens(
+                            result
+                        ),
+                        provider_total_tokens=self._extract_gemini_total_tokens(result),
+                    )
+                )
+                # Normal return with the multimodal embedding payload and metadata-only summary inputs.
+                return observed_result
+
+            except ClientError as client_error:
+                _LOGGER.error(
+                    "Google API client error while generating multimodal embedding: %s",
+                    client_error,
+                )
+                raise RuntimeError(
+                    f"Multimodal embedding call failed with client error: {client_error}"
+                ) from client_error
+
+            except Exception as embed_error:
+                _LOGGER.error(
+                    "Failed to generate multimodal embedding: %s", embed_error
+                )
+                raise
+
+        observed_result: AiApiObservedEmbeddingsResultModel[dict[str, Any]] = (
+            self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_EMBEDDING,
+                operation="generate_embeddings_multimodal",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=lambda: self._retry_with_exponential_backoff(
+                    _embed_multimodal
+                ),
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_embeddings_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
+        )
+        # Normal return with the caller-facing multimodal embedding payload.
         return observed_result.return_value
 
     @staticmethod

@@ -60,6 +60,19 @@ def _build_mock_google_module_tree() -> dict[str, types.ModuleType]:
     )
     mock_genai_types.GenerateImagesResponse = type("GenerateImagesResponse", (), {})
     mock_genai_types.Model = type("Model", (), {})
+    mock_genai_types.Content = type(
+        "Content",
+        (),
+        {"__init__": lambda self, **kwargs: None},
+    )
+    mock_genai_types.Part = type(
+        "Part",
+        (),
+        {
+            "from_text": staticmethod(lambda **kwargs: Mock()),
+            "from_bytes": staticmethod(lambda **kwargs: Mock()),
+        },
+    )
 
     google_module = types.ModuleType("google")
     google_module.genai = mock_genai
