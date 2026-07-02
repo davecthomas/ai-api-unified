@@ -47,7 +47,7 @@ The public entry points are the stable base interfaces and factories:
 Default model guidance in the checked-in OSS env files:
 
 - Google completions: `gemini-2.5-flash`
-- Google embeddings: `gemini-embedding-001`
+- Google embeddings: `gemini-embedding-001` (text-only) or `gemini-embedding-2` (multimodal)
 - Google images: `imagen-4.0-generate-001`
 - Google videos: `veo-3.1-lite-generate-preview`
 - Google voice: `gemini-2.5-pro-tts`
@@ -165,6 +165,35 @@ client: AIBaseEmbeddings = AIFactory.get_ai_embedding_client()
 result: dict[str, object] = client.generate_embeddings("hello world")
 embedding = result.get("embedding")
 print(len(embedding) if embedding else None)
+```
+
+### Multimodal Embeddings
+
+Every embeddings client exposes a `capabilities` descriptor stating which input
+types the configured model supports. Text-only models raise
+`AiProviderCapabilityUnsupportedError` from `generate_embeddings_multimodal`.
+Google `gemini-embedding-2` embeds interleaved text, images, video, audio, and
+PDFs into one vector space (set `EMBEDDING_MODEL_NAME=gemini-embedding-2`):
+
+```python
+from ai_api_unified import (
+    AIEmbeddingsMultimodalParams,
+    AIFactory,
+    SupportedDataType,
+)
+
+client = AIFactory.get_ai_embedding_client()  # EMBEDDING_MODEL_NAME=gemini-embedding-2
+
+if SupportedDataType.IMAGE in client.capabilities.supported_data_types:
+    with open("bicycle.png", "rb") as file_image:
+        params = AIEmbeddingsMultimodalParams(
+            text="a red bicycle",
+            included_types=[SupportedDataType.IMAGE],
+            included_data=[file_image.read()],
+            included_mime_types=["image/png"],
+        )
+    result = client.generate_embeddings_multimodal(params)
+    print(result["dimensions"])
 ```
 
 ### Image Generation
@@ -316,7 +345,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | Environment variable        | Notes                                                                                       |
 | --------------------------- | ------------------------------------------------------------------------------------------- |
 | `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
-| `EMBEDDING_MODEL_NAME`      | Optional embeddings model override                                                          |
+| `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
 | `VIDEO_MODEL_NAME`          | Optional video model override                                                               |
 | `VIDEO_OUTPUT_DIR`          | Optional local output directory for materialized video artifacts                            |

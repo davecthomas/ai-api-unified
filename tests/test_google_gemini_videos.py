@@ -223,7 +223,9 @@ def test_google_video_properties_rejection_message_includes_offending_value() ->
 def test_google_video_properties_reject_allow_all_person_generation() -> None:
     """Veo only accepts dont_allow or allow_adult for person_generation."""
 
-    with pytest.raises(ValueError, match=r"[Mm]ust be one of dont_allow or allow_adult"):
+    with pytest.raises(
+        ValueError, match=r"[Mm]ust be one of dont_allow or allow_adult"
+    ):
         AIGoogleGeminiVideoProperties(
             person_generation="allow_all",
             output_dir=Path("/tmp/google-videos"),

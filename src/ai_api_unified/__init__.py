@@ -27,6 +27,8 @@ from .ai_base import (
     AIBaseVideos,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
+    AIEmbeddingsCapabilitiesBase,
+    AIEmbeddingsMultimodalParams,
     AIMediaReference,
     AIVideoArtifact,
     AIVideoGenerationJob,
@@ -36,6 +38,7 @@ from .ai_base import (
     SupportedDataType,
 )
 from .ai_completions_exceptions import StructuredResponseTokenLimitError
+from .ai_provider_exceptions import AiProviderCapabilityUnsupportedError
 from .ai_factory import AIFactory
 from .voice.ai_voice_base import AIVoiceBase, AIVoiceCapabilities, AIVoiceSelectionBase
 from .voice.ai_voice_factory import AIVoiceFactory
@@ -59,6 +62,9 @@ __all__: list[str] = [
     "AIStructuredPrompt",
     "AICompletionsCapabilitiesBase",
     "AICompletionsPromptParamsBase",
+    "AIEmbeddingsCapabilitiesBase",
+    "AIEmbeddingsMultimodalParams",
+    "AiProviderCapabilityUnsupportedError",
     "StructuredResponseTokenLimitError",
     "SupportedDataType",
     "AIVoiceSelectionBase",

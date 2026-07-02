@@ -10,10 +10,39 @@ import boto3  # AWS SDK for Python to call Bedrock runtime service
 import botocore
 from botocore.config import Config
 
-from ..ai_base import AIBaseEmbeddings, AiApiObservedEmbeddingsResultModel
+from ..ai_base import (
+    AIBaseEmbeddings,
+    AIEmbeddingsCapabilitiesBase,
+    AiApiObservedEmbeddingsResultModel,
+)
 from ..util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+
+class AIEmbeddingsCapabilitiesTitan(AIEmbeddingsCapabilitiesBase):
+    """
+    Amazon Titan-specific embeddings capabilities. Text-only models.
+
+    Based on https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html
+    """
+
+    @classmethod
+    def for_model(cls, model_name: str) -> "AIEmbeddingsCapabilitiesTitan":
+        """Create capabilities instance for a specific Titan embedding model."""
+        if "titan-embed-text-v2" in model_name:
+            return cls(
+                default_dimensions=1024,
+                min_dimensions=256,
+                max_dimensions=1024,
+                recommended_dimensions=[256, 512, 1024],
+                max_input_tokens=8192,
+            )
+        # titan-embed-text-v1 and unknown models: fixed 1536 dimensions.
+        return cls(
+            default_dimensions=1536,
+            max_input_tokens=8192,
+        )
 
 
 class AiTitanEmbeddings(AIBaseEmbeddings):
@@ -65,6 +94,11 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
         Returns the Titan embeddings model identifier this client is using.
         """
         return self.embedding_model
+
+    @property
+    def capabilities(self) -> AIEmbeddingsCapabilitiesTitan:
+        """Return capabilities for the configured Titan embedding model."""
+        return AIEmbeddingsCapabilitiesTitan.for_model(self.embedding_model)
 
     @property
     def list_model_names(self) -> list[str]:
