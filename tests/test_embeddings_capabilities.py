@@ -100,6 +100,15 @@ class TestMultimodalParamsValidation:
         params = AIEmbeddingsMultimodalParams(text="just text")
         assert params.has_included_media is False
 
+    def test_rejects_oversized_combined_media(self) -> None:
+        bytes_eleven_mb: bytes = b"x" * 11_000_000
+        with pytest.raises(ValueError, match="Combined media attachments"):
+            AIEmbeddingsMultimodalParams(
+                included_types=[SupportedDataType.IMAGE, SupportedDataType.IMAGE],
+                included_data=[bytes_eleven_mb, bytes_eleven_mb],
+                included_mime_types=["image/png", "image/png"],
+            )
+
 
 class TestBaseEmbeddingsCapabilities:
     """Base-class capability defaults and multimodal gating."""
@@ -133,6 +142,10 @@ class TestGoogleEmbeddingsCapabilities:
             GoogleGeminiEmbeddings,
         )
 
+        if isinstance(mock_client.vertexai, Mock):
+            # Bare Mock attributes are truthy; default to API-key mode unless
+            # a test explicitly opts into Vertex mode.
+            mock_client.vertexai = False
         with patch.object(
             GoogleGeminiEmbeddings,
             "_initialize_client",
@@ -175,8 +188,31 @@ class TestGoogleEmbeddingsCapabilities:
             included_mime_types=["image/png"],
         )
         with pytest.raises(
-            AiProviderCapabilityUnsupportedError, match="does not support image input"
+            AiProviderCapabilityUnsupportedError,
+            match="does not support multimodal embeddings",
         ):
+            client.generate_embeddings_multimodal(params)
+
+    def test_text_only_model_rejects_text_only_multimodal_call(self) -> None:
+        client = self._build_client("gemini-embedding-001", 768, Mock())
+        params = AIEmbeddingsMultimodalParams(text="plain text")
+        with pytest.raises(
+            AiProviderCapabilityUnsupportedError,
+            match="does not support multimodal embeddings",
+        ):
+            client.generate_embeddings_multimodal(params)
+
+    def test_vertex_mode_rejects_media_attachments(self) -> None:
+        mock_client = Mock()
+        mock_client.vertexai = True
+        client = self._build_client("gemini-embedding-2", 3072, mock_client)
+        params = AIEmbeddingsMultimodalParams(
+            text="a red bicycle",
+            included_types=[SupportedDataType.IMAGE],
+            included_data=[FAKE_PNG_BYTES],
+            included_mime_types=["image/png"],
+        )
+        with pytest.raises(NotImplementedError, match="GOOGLE_AUTH_METHOD=api_key"):
             client.generate_embeddings_multimodal(params)
 
     def test_multimodal_model_rejects_too_many_images(self) -> None:

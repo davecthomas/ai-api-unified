@@ -56,11 +56,17 @@ def _build_tiny_png() -> bytes:
 
 
 def _skip_if_model_unavailable(exception: Exception, model_name: str) -> None:
-    """Skip live tests when the credential cannot access the requested model."""
+    """
+    Skip live tests when the credential cannot access the requested model.
+
+    Markers are deliberately narrow (model-access errors only): a broad match
+    such as 'not supported' would convert real feature breakage — e.g. the API
+    rejecting the multimodal request shape — into a silent skip.
+    """
     str_message: str = str(exception).lower()
     if any(
         marker in str_message
-        for marker in ("not found", "not supported", "permission", "invalid model")
+        for marker in ("not_found", "not found", "permission_denied", "invalid model")
     ):
         pytest.skip(
             f"Skipping: model '{model_name}' unavailable for this credential: {exception}"

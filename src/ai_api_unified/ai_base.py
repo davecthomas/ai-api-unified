@@ -173,6 +173,12 @@ class AICompletionsPromptParamsBase(BaseModel, ABC):
 class AIEmbeddingsCapabilitiesBase(BaseModel):
     """
     Base class for capturing important attributes of embeddings models.
+
+    supported_data_types and max_images_per_request are enforced client-side
+    before provider calls. The remaining limit fields (max_input_tokens,
+    max_batch_size, max_video_seconds, max_audio_seconds) are advisory
+    descriptors of provider-documented limits; exceeding them surfaces as a
+    provider-side error.
     """
 
     supported_data_types: list[SupportedDataType] = [SupportedDataType.TEXT]
@@ -270,6 +276,15 @@ class AIEmbeddingsMultimodalParams(BaseModel):
                 raise ValueError(
                     f"Media attachment at index {index} exceeds {self.MAX_MEDIA_BYTES} bytes."
                 )
+
+        # Providers accept inline media per request, not per attachment, so the
+        # combined payload is bounded by the same limit.
+        int_total_media_bytes: int = sum(len(item) for item in list_data)
+        if int_total_media_bytes > self.MAX_MEDIA_BYTES:
+            raise ValueError(
+                f"Combined media attachments total {int_total_media_bytes} bytes, "
+                f"exceeding the {self.MAX_MEDIA_BYTES}-byte request limit."
+            )
 
         self.included_data = list_data
         self.included_mime_types = list_mime_types
@@ -991,6 +1006,23 @@ class AIBaseEmbeddings(AIBase):
         # Normal return with text-only default capabilities.
         return AIEmbeddingsCapabilitiesBase(default_dimensions=self.dimensions)
 
+    def _raise_capability_unsupported(self, str_requested_input: str) -> NoReturn:
+        """
+        Raises the canonical capability error for one unsupported embeddings input.
+
+        Args:
+            str_requested_input: Human-readable description of the unsupported input.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: Always.
+        """
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not support "
+            f"{str_requested_input}. Supported input types: "
+            f"{[t.value for t in self.capabilities.supported_data_types]}. "
+            "Configure an embedding model that supports the requested input types."
+        )
+
     def _ensure_multimodal_params_supported(
         self,
         params: AIEmbeddingsMultimodalParams,
@@ -1002,19 +1034,25 @@ class AIBaseEmbeddings(AIBase):
             params: Multimodal embeddings input to validate.
 
         Raises:
-            AiProviderCapabilityUnsupportedError: When an attached media type is
-                unsupported or a per-modality limit is exceeded.
+            AiProviderCapabilityUnsupportedError: When the model supports no
+                non-text input at all, an attached media type is unsupported,
+                or a per-modality limit is exceeded.
         """
         embeddings_capabilities: AIEmbeddingsCapabilitiesBase = self.capabilities
+        bool_supports_any_media: bool = any(
+            data_type is not SupportedDataType.TEXT
+            for data_type in embeddings_capabilities.supported_data_types
+        )
+        if not bool_supports_any_media:
+            # Text-only models reject multimodal calls outright, even for
+            # text-only params — generate_embeddings is the text path.
+            self._raise_capability_unsupported("multimodal embeddings")
         int_image_count: int = 0
         # Loop through attachments so every declared media type is capability-checked.
         for _, media_type, _, _ in params.iter_included_media():
             if media_type not in embeddings_capabilities.supported_data_types:
-                raise AiProviderCapabilityUnsupportedError(
-                    f"{type(self).__name__} model '{self.model_name}' does not support "
-                    f"{media_type.value} input for embeddings. Supported input types: "
-                    f"{[t.value for t in embeddings_capabilities.supported_data_types]}. "
-                    "Configure an embedding model that supports the requested input types."
+                self._raise_capability_unsupported(
+                    f"{media_type.value} input for embeddings"
                 )
             if media_type is SupportedDataType.IMAGE:
                 int_image_count += 1
@@ -1084,22 +1122,38 @@ class AIBaseEmbeddings(AIBase):
         """
         Generates one embedding for interleaved multimodal input.
 
-        Providers whose capabilities include non-text data types override this
-        method. The base implementation raises because the provider only
-        supports text embeddings.
+        Template method: capability gating happens here so providers cannot
+        skip it. Providers whose capabilities include non-text data types
+        implement _generate_embeddings_multimodal_provider.
 
         Args:
             params: Multimodal embeddings input (text and/or media attachments).
 
         Raises:
-            AiProviderCapabilityUnsupportedError: Always, for text-only providers.
+            AiProviderCapabilityUnsupportedError: When the configured model does
+                not support multimodal input or an attachment is unsupported.
         """
-        raise AiProviderCapabilityUnsupportedError(
-            f"{type(self).__name__} model '{self.model_name}' does not support "
-            "multimodal embeddings. Supported input types: "
-            f"{[t.value for t in self.capabilities.supported_data_types]}. "
-            "Configure an embedding model that supports multimodal input."
-        )
+        self._ensure_multimodal_params_supported(params)
+        # Normal return with the provider-implemented multimodal embedding payload.
+        return self._generate_embeddings_multimodal_provider(params)
+
+    def _generate_embeddings_multimodal_provider(
+        self,
+        params: AIEmbeddingsMultimodalParams,
+    ) -> dict[str, Any]:
+        """
+        Provider hook for multimodal embedding generation.
+
+        The base implementation raises: a provider whose capabilities declare
+        non-text support must implement this hook.
+
+        Args:
+            params: Capability-validated multimodal embeddings input.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: Always, in the base class.
+        """
+        self._raise_capability_unsupported("multimodal embeddings")
 
 
 class AIStructuredPrompt(BaseModel):

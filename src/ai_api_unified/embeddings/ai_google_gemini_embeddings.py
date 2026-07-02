@@ -134,14 +134,9 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
     # Constants
     # Default Gemini embedding model identifier used by this provider.
     DEFAULT_EMBEDDING_MODEL: str = "gemini-embedding-001"
-    # Default vector width returned when no output_dimensionality override is provided.
-    DEFAULT_EMBEDDING_DIMENSIONS: int = (
-        3072  # Default dimensions for gemini-embedding-001
-    )
-    # Documented output dimensionality support for gemini-embedding-001.
-    MIN_SUPPORTED_EMBEDDING_DIMENSIONS: int = 768
-    MAX_SUPPORTED_EMBEDDING_DIMENSIONS: int = 3072
-    RECOMMENDED_EMBEDDING_DIMENSIONS: tuple[int, int, int] = (768, 1536, 3072)
+    # Default vector width returned when no output_dimensionality override is
+    # provided. Per-model dimension limits live in AIEmbeddingsCapabilitiesGoogle.
+    DEFAULT_EMBEDDING_DIMENSIONS: int = 3072
     # Provider-side operational limits and retry/backoff tuning.
     MAX_BATCH_SIZE: int = 100
     MAX_RETRIES: int = 5
@@ -171,11 +166,12 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
                 "EMBEDDING_DIMENSIONS", str(self.DEFAULT_EMBEDDING_DIMENSIONS)
             )
         )
-        if self.dimensions not in self.capabilities.recommended_dimensions:
+        embeddings_capabilities: AIEmbeddingsCapabilitiesBase = self.capabilities
+        if self.dimensions not in embeddings_capabilities.recommended_dimensions:
             _LOGGER.info(
                 "Requested non-recommended Gemini embedding dimensions: %s. Recommended values are %s.",
                 self.dimensions,
-                self.capabilities.recommended_dimensions,
+                embeddings_capabilities.recommended_dimensions,
             )
 
         # Initialize the client
@@ -246,7 +242,9 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
                 }
                 # Only include output_dimensionality when caller requested a non-default
                 # vector width, preserving server-side default behavior otherwise.
-                if self.dimensions != self.DEFAULT_EMBEDDING_DIMENSIONS:
+                # Compare against the configured model's own default so a
+                # future model with a non-3072 default still gets the right config.
+                if self.dimensions != self.capabilities.default_dimensions:
                     embed_kwargs["config"] = EmbedContentConfig(
                         output_dimensionality=self.dimensions
                     )
@@ -256,6 +254,10 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
                 if not result.embeddings:
                     raise RuntimeError(
                         "Gemini embeddings response did not contain any embeddings."
+                    )
+                if result.embeddings[0].values is None:
+                    raise RuntimeError(
+                        "Gemini embeddings response entry did not contain embedding values."
                     )
                 embedding_values: list[float] = result.embeddings[0].values
 
@@ -375,6 +377,10 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
                         # Loop through provider vectors so the caller-facing batch payload preserves input order.
                         for index, embed_obj in enumerate(response.embeddings):
                             batch_text: str = batch_texts[index]
+                            if embed_obj.values is None:
+                                raise RuntimeError(
+                                    "Gemini embeddings response entry did not contain embedding values."
+                                )
                             embedding_values: list[float] = embed_obj.values
                             list_batch_results.append(
                                 {
@@ -449,7 +455,7 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
         # Normal return with the caller-facing batch embeddings payload.
         return observed_result.return_value
 
-    def generate_embeddings_multimodal(
+    def _generate_embeddings_multimodal_provider(
         self,
         params: AIEmbeddingsMultimodalParams,
     ) -> dict[str, Any]:
@@ -459,15 +465,23 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
         Requires a model whose capabilities include the attached media types
         (set EMBEDDING_MODEL_NAME=gemini-embedding-2 for image/video/audio/PDF
         support). All supplied text and media are embedded jointly into a
-        single vector.
+        single vector. Capability gating already ran in the base template
+        method.
 
         Args:
-            params: Multimodal embeddings input (text and/or media attachments).
+            params: Capability-validated multimodal embeddings input.
 
         Returns:
             Dictionary containing the embedding vector and metadata.
         """
-        self._ensure_multimodal_params_supported(params)
+        if params.has_included_media and getattr(self.client, "vertexai", False):
+            # google-genai's embed transformer keeps only text parts when the
+            # client runs in Vertex mode, which would silently drop the media.
+            raise NotImplementedError(
+                "Google Gemini multimodal embeddings with media attachments require "
+                "API-key auth: the google-genai SDK sends only text parts to the "
+                "Vertex embedContent endpoint. Set GOOGLE_AUTH_METHOD=api_key."
+            )
 
         dict_input_metadata: dict[str, str | int | float | bool | None] = (
             self._build_multimodal_embeddings_observability_input_metadata(
@@ -492,7 +506,9 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
                     "model": self.embedding_model,
                     "contents": Content(parts=list_parts),
                 }
-                if self.dimensions != self.DEFAULT_EMBEDDING_DIMENSIONS:
+                # Compare against the configured model's own default so a
+                # future model with a non-3072 default still gets the right config.
+                if self.dimensions != self.capabilities.default_dimensions:
                     embed_kwargs["config"] = EmbedContentConfig(
                         output_dimensionality=self.dimensions
                     )
@@ -502,6 +518,10 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
                 if not result.embeddings:
                     raise RuntimeError(
                         "Gemini embeddings response did not contain any embeddings."
+                    )
+                if result.embeddings[0].values is None:
+                    raise RuntimeError(
+                        "Gemini embeddings response entry did not contain embedding values."
                     )
                 embedding_values: list[float] = result.embeddings[0].values
 
