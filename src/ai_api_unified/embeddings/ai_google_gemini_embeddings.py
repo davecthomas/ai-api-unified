@@ -234,72 +234,17 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
             )
         )
 
-        def _embed_single() -> AiApiObservedEmbeddingsResultModel[dict[str, Any]]:
-            try:
-                embed_kwargs: dict[str, Any] = {
-                    "model": self.embedding_model,
-                    "contents": [text],
-                }
-                # Only include output_dimensionality when caller requested a non-default
-                # vector width, preserving server-side default behavior otherwise.
-                # Compare against the configured model's own default so a
-                # future model with a non-3072 default still gets the right config.
-                if self.dimensions != self.capabilities.default_dimensions:
-                    embed_kwargs["config"] = EmbedContentConfig(
-                        output_dimensionality=self.dimensions
-                    )
-                result = self.client.models.embed_content(
-                    **embed_kwargs,
-                )
-                if not result.embeddings:
-                    raise RuntimeError(
-                        "Gemini embeddings response did not contain any embeddings."
-                    )
-                if result.embeddings[0].values is None:
-                    raise RuntimeError(
-                        "Gemini embeddings response entry did not contain embedding values."
-                    )
-                embedding_values: list[float] = result.embeddings[0].values
-
-                observed_result: AiApiObservedEmbeddingsResultModel[dict[str, Any]] = (
-                    AiApiObservedEmbeddingsResultModel(
-                        return_value={
-                            "embedding": embedding_values,
-                            "model": self.embedding_model,
-                            "dimensions": len(embedding_values),
-                            "text": text,
-                        },
-                        embedding_count=1,
-                        returned_dimensions=len(embedding_values),
-                        provider_input_tokens=self._extract_gemini_prompt_tokens(
-                            result
-                        ),
-                        provider_total_tokens=self._extract_gemini_total_tokens(result),
-                    )
-                )
-                # Normal return with the single embedding payload and metadata-only summary inputs.
-                return observed_result
-
-            except ClientError as client_error:  # NEW
-                _LOGGER.error(
-                    "Google API client error while generating embedding: %s",
-                    client_error,
-                )
-                raise RuntimeError(
-                    f"Embedding call failed with client error: {client_error}"
-                ) from client_error
-
-            except Exception as embed_error:
-                _LOGGER.error("Failed to generate embedding: %s", embed_error)
-                raise
-
         observed_result: AiApiObservedEmbeddingsResultModel[dict[str, Any]] = (
             self._execute_provider_call_with_observability(
                 capability=self.CLIENT_TYPE_EMBEDDING,
                 operation="generate_embeddings",
                 dict_input_metadata=dict_input_metadata,
                 callable_execute=lambda: self._retry_with_exponential_backoff(
-                    _embed_single
+                    lambda: self._embed_one_content_observed(
+                        contents=[text],
+                        dict_payload_extra={"text": text},
+                        str_operation_context="embedding",
+                    )
                 ),
                 callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_embeddings_observability_result_summary(
                     observed_result=result,
@@ -490,75 +435,18 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
             )
         )
 
-        def _embed_multimodal() -> AiApiObservedEmbeddingsResultModel[dict[str, Any]]:
-            try:
-                list_parts: list[Part] = []
-                if params.text and params.text.strip():
-                    list_parts.append(Part.from_text(text=params.text))
-                # Loop through attachments so every media item becomes one inline part.
-                for _, _, media_bytes, mime_type in params.iter_included_media():
-                    list_parts.append(
-                        Part.from_bytes(data=media_bytes, mime_type=mime_type)
-                    )
-                # One Content wrapping all parts makes the interleaved-input intent
-                # explicit: the provider returns one embedding for the whole request.
-                embed_kwargs: dict[str, Any] = {
-                    "model": self.embedding_model,
-                    "contents": Content(parts=list_parts),
-                }
-                # Compare against the configured model's own default so a
-                # future model with a non-3072 default still gets the right config.
-                if self.dimensions != self.capabilities.default_dimensions:
-                    embed_kwargs["config"] = EmbedContentConfig(
-                        output_dimensionality=self.dimensions
-                    )
-                result = self.client.models.embed_content(
-                    **embed_kwargs,
+        def _build_multimodal_contents() -> Content:
+            list_parts: list[Part] = []
+            if params.text and params.text.strip():
+                list_parts.append(Part.from_text(text=params.text))
+            # Loop through attachments so every media item becomes one inline part.
+            for _, _, media_bytes, mime_type in params.iter_included_media():
+                list_parts.append(
+                    Part.from_bytes(data=media_bytes, mime_type=mime_type)
                 )
-                if not result.embeddings:
-                    raise RuntimeError(
-                        "Gemini embeddings response did not contain any embeddings."
-                    )
-                if result.embeddings[0].values is None:
-                    raise RuntimeError(
-                        "Gemini embeddings response entry did not contain embedding values."
-                    )
-                embedding_values: list[float] = result.embeddings[0].values
-
-                observed_result: AiApiObservedEmbeddingsResultModel[dict[str, Any]] = (
-                    AiApiObservedEmbeddingsResultModel(
-                        return_value={
-                            "embedding": embedding_values,
-                            "model": self.embedding_model,
-                            "dimensions": len(embedding_values),
-                            "text": params.text,
-                            "included_media_count": len(params.included_types or []),
-                        },
-                        embedding_count=1,
-                        returned_dimensions=len(embedding_values),
-                        provider_input_tokens=self._extract_gemini_prompt_tokens(
-                            result
-                        ),
-                        provider_total_tokens=self._extract_gemini_total_tokens(result),
-                    )
-                )
-                # Normal return with the multimodal embedding payload and metadata-only summary inputs.
-                return observed_result
-
-            except ClientError as client_error:
-                _LOGGER.error(
-                    "Google API client error while generating multimodal embedding: %s",
-                    client_error,
-                )
-                raise RuntimeError(
-                    f"Multimodal embedding call failed with client error: {client_error}"
-                ) from client_error
-
-            except Exception as embed_error:
-                _LOGGER.error(
-                    "Failed to generate multimodal embedding: %s", embed_error
-                )
-                raise
+            # One Content wrapping all parts makes the interleaved-input intent
+            # explicit: the provider returns one embedding for the whole request.
+            return Content(parts=list_parts)
 
         observed_result: AiApiObservedEmbeddingsResultModel[dict[str, Any]] = (
             self._execute_provider_call_with_observability(
@@ -566,7 +454,14 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
                 operation="generate_embeddings_multimodal",
                 dict_input_metadata=dict_input_metadata,
                 callable_execute=lambda: self._retry_with_exponential_backoff(
-                    _embed_multimodal
+                    lambda: self._embed_one_content_observed(
+                        contents=_build_multimodal_contents(),
+                        dict_payload_extra={
+                            "text": params.text,
+                            "included_media_count": len(params.included_types or []),
+                        },
+                        str_operation_context="multimodal embedding",
+                    )
                 ),
                 callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_embeddings_observability_result_summary(
                     observed_result=result,
@@ -576,6 +471,86 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
         )
         # Normal return with the caller-facing multimodal embedding payload.
         return observed_result.return_value
+
+    def _embed_one_content_observed(
+        self,
+        *,
+        contents: Any,
+        dict_payload_extra: dict[str, Any],
+        str_operation_context: str,
+    ) -> AiApiObservedEmbeddingsResultModel[dict[str, Any]]:
+        """
+        Executes one embed_content call that returns a single embedding.
+
+        Shared request/guard/error handling for the single-text and multimodal
+        paths; the batch path keeps its own loop over provider slices.
+
+        Args:
+            contents: SDK contents payload for one embedding (text list or Content).
+            dict_payload_extra: Caller-facing payload fields beyond the vector.
+            str_operation_context: Lowercase operation label used in error text.
+
+        Returns:
+            Observed result container with the caller-facing embedding payload.
+        """
+        try:
+            embed_kwargs: dict[str, Any] = {
+                "model": self.embedding_model,
+                "contents": contents,
+            }
+            # Only include output_dimensionality when the caller requested a
+            # non-default vector width for the configured model, preserving
+            # server-side default behavior otherwise.
+            if self.dimensions != self.capabilities.default_dimensions:
+                embed_kwargs["config"] = EmbedContentConfig(
+                    output_dimensionality=self.dimensions
+                )
+            result = self.client.models.embed_content(
+                **embed_kwargs,
+            )
+            if not result.embeddings:
+                raise RuntimeError(
+                    "Gemini embeddings response did not contain any embeddings."
+                )
+            if result.embeddings[0].values is None:
+                raise RuntimeError(
+                    "Gemini embeddings response entry did not contain embedding values."
+                )
+            embedding_values: list[float] = result.embeddings[0].values
+
+            observed_result: AiApiObservedEmbeddingsResultModel[dict[str, Any]] = (
+                AiApiObservedEmbeddingsResultModel(
+                    return_value={
+                        "embedding": embedding_values,
+                        "model": self.embedding_model,
+                        "dimensions": len(embedding_values),
+                        **dict_payload_extra,
+                    },
+                    embedding_count=1,
+                    returned_dimensions=len(embedding_values),
+                    provider_input_tokens=self._extract_gemini_prompt_tokens(result),
+                    provider_total_tokens=self._extract_gemini_total_tokens(result),
+                )
+            )
+            # Normal return with the single embedding payload and metadata-only summary inputs.
+            return observed_result
+
+        except ClientError as client_error:
+            _LOGGER.error(
+                "Google API client error while generating %s: %s",
+                str_operation_context,
+                client_error,
+            )
+            raise RuntimeError(
+                f"{str_operation_context.capitalize()} call failed with client error: "
+                f"{client_error}"
+            ) from client_error
+
+        except Exception as embed_error:
+            _LOGGER.error(
+                "Failed to generate %s: %s", str_operation_context, embed_error
+            )
+            raise
 
     @staticmethod
     def _extract_gemini_prompt_tokens(response: Any) -> int | None:
