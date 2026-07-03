@@ -196,6 +196,11 @@ if SupportedDataType.IMAGE in client.capabilities.supported_data_types:
     print(result["dimensions"])
 ```
 
+Media attachments are capped at 20MB per attachment and per request. They also
+require API-key auth (`GOOGLE_AUTH_METHOD=api_key`): the google-genai SDK sends
+only text parts to the Vertex embedding endpoint, so in service-account mode
+the client rejects media attachments up front.
+
 ### Image Generation
 
 ```python
@@ -447,6 +452,11 @@ from ai_api_unified import (
     AIBaseImages,
     AIBaseVideos,
     AIVoiceBase,
+    AIEmbeddingsCapabilitiesBase,
+    AIEmbeddingsMultimodalParams,
+    AIIncludedMediaParamsBase,
+    AiProviderCapabilityUnsupportedError,
+    SupportedDataType,
 )
 ```
 
@@ -471,6 +481,7 @@ Typical factory failure modes:
 - unsupported engine selector: `ValueError`
 - selected provider extra is not installed: `AiProviderDependencyUnavailableError`
 - provider load/runtime failure: `AiProviderRuntimeError`
+- input modality unsupported by the configured embedding model: `AiProviderCapabilityUnsupportedError`
 
 ## Middleware
 

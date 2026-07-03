@@ -75,21 +75,18 @@ class AICompletionsCapabilitiesBase(BaseModel):
     supports_data_residency_constraint: bool = False
 
 
-class AICompletionsPromptParamsBase(BaseModel, ABC):
+class AIIncludedMediaParamsBase(BaseModel):
     """
-    Base class for completion prompt parameters.
-    This allows passing media attachments (images, etc.) alongside text prompts as well as
-    specifying a system prompt to guide the model's behavior.
-    Typical prompting doesn't require any use of this class. All fields are optional.
+    Shared aligned-list media attachment fields and validation.
+
+    Subclasses declare which media types they accept via
+    DICT_ALLOWED_MIME_PREFIXES and an optional byte cap via MAX_MEDIA_BYTES
+    (applied per attachment and to the combined payload; None disables it).
     """
 
-    DEFAULT_SYSTEM_PROMPT: ClassVar[str] = "You are a helpful assistant."
-    DEFAULT_STRICT_SCHEMA_SYSTEM_PROMPT: ClassVar[str] = (
-        "Respond only with JSON following the provided schema."
-    )
-    MAX_IMAGE_BYTES: ClassVar[int] = 20_000_000
+    DICT_ALLOWED_MIME_PREFIXES: ClassVar[dict[SupportedDataType, tuple[str, ...]]] = {}
+    MAX_MEDIA_BYTES: ClassVar[int | None] = None
 
-    system_prompt: str | None = None
     included_types: list[SupportedDataType] | None = None
     included_data: list[bytes] | None = None
     included_mime_types: list[str] | None = None
@@ -97,20 +94,14 @@ class AICompletionsPromptParamsBase(BaseModel, ABC):
     @model_validator(mode="after")
     def _validate_and_normalize_included_media(
         self,
-    ) -> "AICompletionsPromptParamsBase":
+    ) -> "AIIncludedMediaParamsBase":
         """Ensure media attachment lists are aligned and metadata validated."""
 
         list_types: list[SupportedDataType] = list(self.included_types or [])
         list_data: list[bytes] = list(self.included_data or [])
         list_mime_types: list[str] = list(self.included_mime_types or [])
 
-        lengths: tuple[int, int, int] = (
-            len(list_types),
-            len(list_data),
-            len(list_mime_types),
-        )
-        unique_lengths: set[int] = {length for length in lengths}
-        if len(unique_lengths) > 1:
+        if len({len(list_types), len(list_data), len(list_mime_types)}) > 1:
             raise ValueError(
                 "included_types, included_data, and included_mime_types must be the same length."
             )
@@ -121,30 +112,51 @@ class AICompletionsPromptParamsBase(BaseModel, ABC):
             self.included_types = None
             return self
 
+        # Loop through attachments so every media item is validated against its declared type.
         for index, media_type in enumerate(list_types):
-            mime_type: str | None = None
-            if index < len(list_mime_types):
-                mime_type = list_mime_types[index]
-
+            if media_type is SupportedDataType.TEXT:
+                raise ValueError(
+                    "Text belongs in the 'text' field, not in media attachments."
+                )
+            tuple_mime_prefixes: tuple[str, ...] | None = (
+                self.DICT_ALLOWED_MIME_PREFIXES.get(media_type)
+            )
+            if tuple_mime_prefixes is None:
+                raise ValueError(
+                    f"SupportedDataType.{media_type.name} attachments are not accepted."
+                )
+            mime_type: str = (list_mime_types[index] or "").lower()
             if not mime_type:
                 raise ValueError("Each included media item must specify a MIME type.")
-
-            if not mime_type.lower().startswith("image/"):
+            if not mime_type.startswith(tuple_mime_prefixes):
                 raise ValueError(
-                    f"MIME type {mime_type!r} is not supported. Only image MIME types are allowed."
+                    f"MIME type {mime_type!r} does not match declared type "
+                    f"SupportedDataType.{media_type.name}."
                 )
-
-            if media_type is not SupportedDataType.IMAGE:
-                raise ValueError(
-                    "Only SupportedDataType.IMAGE attachments are currently accepted."
-                )
-
             media_bytes: bytes = list_data[index]
             if not media_bytes:
-                raise ValueError("Image attachment bytes cannot be empty.")
-            self.included_data = list_data
-            self.included_mime_types = list_mime_types
-            self.included_types = list_types
+                raise ValueError("Media attachment bytes cannot be empty.")
+            if (
+                self.MAX_MEDIA_BYTES is not None
+                and len(media_bytes) > self.MAX_MEDIA_BYTES
+            ):
+                raise ValueError(
+                    f"Media attachment at index {index} exceeds {self.MAX_MEDIA_BYTES} bytes."
+                )
+
+        if self.MAX_MEDIA_BYTES is not None:
+            # Providers accept inline media per request, not per attachment, so
+            # the combined payload is bounded by the same limit.
+            int_total_media_bytes: int = sum(len(item) for item in list_data)
+            if int_total_media_bytes > self.MAX_MEDIA_BYTES:
+                raise ValueError(
+                    f"Combined media attachments total {int_total_media_bytes} bytes, "
+                    f"exceeding the {self.MAX_MEDIA_BYTES}-byte request limit."
+                )
+
+        self.included_data = list_data
+        self.included_mime_types = list_mime_types
+        self.included_types = list_types
         return self
 
     def iter_included_media(
@@ -168,6 +180,31 @@ class AICompletionsPromptParamsBase(BaseModel, ABC):
         """Return True when any media attachments are present."""
 
         return bool(self.included_types)
+
+
+class AICompletionsPromptParamsBase(AIIncludedMediaParamsBase, ABC):
+    """
+    Base class for completion prompt parameters.
+    This allows passing media attachments (images, etc.) alongside text prompts as well as
+    specifying a system prompt to guide the model's behavior.
+    Typical prompting doesn't require any use of this class. All fields are optional.
+
+    Media validation (alignment, MIME/type agreement, size caps) comes from
+    AIIncludedMediaParamsBase; completions currently accept image attachments only.
+    """
+
+    DEFAULT_SYSTEM_PROMPT: ClassVar[str] = "You are a helpful assistant."
+    DEFAULT_STRICT_SCHEMA_SYSTEM_PROMPT: ClassVar[str] = (
+        "Respond only with JSON following the provided schema."
+    )
+    MAX_IMAGE_BYTES: ClassVar[int] = 20_000_000
+
+    DICT_ALLOWED_MIME_PREFIXES: ClassVar[dict[SupportedDataType, tuple[str, ...]]] = {
+        SupportedDataType.IMAGE: ("image/",),
+    }
+    MAX_MEDIA_BYTES: ClassVar[int | None] = MAX_IMAGE_BYTES
+
+    system_prompt: str | None = None
 
 
 class AIEmbeddingsCapabilitiesBase(BaseModel):
@@ -202,116 +239,31 @@ DICT_EMBEDDINGS_MEDIA_MIME_PREFIXES: dict[SupportedDataType, tuple[str, ...]] = 
 }
 
 
-class AIEmbeddingsMultimodalParams(BaseModel):
+class AIEmbeddingsMultimodalParams(AIIncludedMediaParamsBase):
     """
     Input parameters for one multimodal embedding request.
 
-    Mirrors the completions media-attachment pattern: aligned lists of types,
-    raw bytes, and MIME types, plus optional text. All supplied inputs are
-    embedded jointly as one interleaved input producing one embedding vector.
+    Media validation (alignment, MIME/type agreement, size caps) comes from
+    AIIncludedMediaParamsBase. All supplied inputs are embedded jointly as one
+    interleaved input producing one embedding vector.
     """
 
-    MAX_MEDIA_BYTES: ClassVar[int] = 20_000_000
+    DICT_ALLOWED_MIME_PREFIXES: ClassVar[dict[SupportedDataType, tuple[str, ...]]] = (
+        DICT_EMBEDDINGS_MEDIA_MIME_PREFIXES
+    )
+    MAX_MEDIA_BYTES: ClassVar[int | None] = 20_000_000
 
     text: str | None = None
-    included_types: list[SupportedDataType] | None = None
-    included_data: list[bytes] | None = None
-    included_mime_types: list[str] | None = None
 
     @model_validator(mode="after")
-    def _validate_and_normalize_included_media(
-        self,
-    ) -> "AIEmbeddingsMultimodalParams":
-        """Ensure media attachment lists are aligned and metadata validated."""
+    def _require_text_or_media(self) -> "AIEmbeddingsMultimodalParams":
+        """Reject requests that carry neither text nor media attachments."""
 
-        list_types: list[SupportedDataType] = list(self.included_types or [])
-        list_data: list[bytes] = list(self.included_data or [])
-        list_mime_types: list[str] = list(self.included_mime_types or [])
-
-        lengths: tuple[int, int, int] = (
-            len(list_types),
-            len(list_data),
-            len(list_mime_types),
-        )
-        if len({length for length in lengths}) > 1:
+        if not self.has_included_media and (self.text is None or not self.text.strip()):
             raise ValueError(
-                "included_types, included_data, and included_mime_types must be the same length."
+                "Multimodal embeddings input requires text, media attachments, or both."
             )
-
-        if not list_types:
-            if self.text is None or not self.text.strip():
-                raise ValueError(
-                    "Multimodal embeddings input requires text, media attachments, or both."
-                )
-            self.included_data = None
-            self.included_mime_types = None
-            self.included_types = None
-            return self
-
-        # Loop through attachments so every media item is validated against its declared type.
-        for index, media_type in enumerate(list_types):
-            if media_type is SupportedDataType.TEXT:
-                raise ValueError(
-                    "Text belongs in the 'text' field, not in media attachments."
-                )
-            tuple_mime_prefixes: tuple[str, ...] | None = (
-                DICT_EMBEDDINGS_MEDIA_MIME_PREFIXES.get(media_type)
-            )
-            if tuple_mime_prefixes is None:
-                raise ValueError(
-                    f"SupportedDataType.{media_type.name} attachments are not accepted."
-                )
-            mime_type: str = (list_mime_types[index] or "").lower()
-            if not mime_type:
-                raise ValueError("Each included media item must specify a MIME type.")
-            if not mime_type.startswith(tuple_mime_prefixes):
-                raise ValueError(
-                    f"MIME type {mime_type!r} does not match declared type "
-                    f"SupportedDataType.{media_type.name}."
-                )
-            media_bytes: bytes = list_data[index]
-            if not media_bytes:
-                raise ValueError("Media attachment bytes cannot be empty.")
-            if len(media_bytes) > self.MAX_MEDIA_BYTES:
-                raise ValueError(
-                    f"Media attachment at index {index} exceeds {self.MAX_MEDIA_BYTES} bytes."
-                )
-
-        # Providers accept inline media per request, not per attachment, so the
-        # combined payload is bounded by the same limit.
-        int_total_media_bytes: int = sum(len(item) for item in list_data)
-        if int_total_media_bytes > self.MAX_MEDIA_BYTES:
-            raise ValueError(
-                f"Combined media attachments total {int_total_media_bytes} bytes, "
-                f"exceeding the {self.MAX_MEDIA_BYTES}-byte request limit."
-            )
-
-        self.included_data = list_data
-        self.included_mime_types = list_mime_types
-        self.included_types = list_types
         return self
-
-    def iter_included_media(
-        self,
-    ) -> Iterator[tuple[int, SupportedDataType, bytes, str]]:
-        """
-        Yield the index, type, raw bytes, and MIME type for every attached media item.
-        """
-
-        list_types: list[SupportedDataType] = list(self.included_types or [])
-        list_data: list[bytes] = list(self.included_data or [])
-        list_mime_types: list[str] = list(self.included_mime_types or [])
-
-        for index, (media_type, media_bytes, mime_type) in enumerate(
-            zip(list_types, list_data, list_mime_types)
-        ):
-            yield index, media_type, media_bytes, mime_type
-
-    @property
-    def has_included_media(self) -> bool:
-        """Return True when any media attachments are present."""
-
-        return bool(self.included_types)
 
 
 class AIBase(ABC):
