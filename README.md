@@ -442,6 +442,32 @@ Optional service-account mode:
 
 This auth policy applies across Google completions, embeddings, images, videos, and voice.
 
+##### Google auth modes per capability
+
+The two `GOOGLE_AUTH_METHOD` values select different google-genai clients:
+`api_key` creates the Gemini Developer client
+(`genai.Client(api_key=...)`, generativelanguage endpoint) and
+`service_account` creates the Vertex client
+(`genai.Client(vertexai=True, project=..., location=...)`). Some capabilities
+work in only one client:
+
+| Google capability | `api_key` (Developer) | `service_account` (Vertex) | Notes |
+| --- | :---: | :---: | --- |
+| Completions (incl. streaming) | ✅ | ✅ | |
+| Text embeddings | ✅ | ✅ | |
+| Image generation (Imagen) | ✅ | ✅ | |
+| Multimodal (media) embeddings | ✅ | ❌ | the SDK sends only text parts to the Vertex embedding endpoint, so the library raises `NotImplementedError` when media is attached in Vertex mode |
+| Text-to-video with local download | ✅ | ❌ | downloaded via the Files API (`client.files.download`), which the SDK supports only in the Developer client; under Vertex set `download_outputs=False` to receive a remote `gs://` URI instead |
+| `source_video` (video continuation) | ❌ | ✅ | the library raises `NotImplementedError` in `api_key` mode; this path requires Vertex |
+| Voice (Gemini TTS / STT) | ⚠️ | ✅ | the library wires API keys into the Cloud TTS/STT clients, but Google may reject API keys that are not enabled for those APIs; `service_account` is the reliable mode |
+
+Pick the mode for what you need: multimodal-media embeddings and
+text-to-video-with-download require `api_key`, and `source_video` requires
+`service_account`. Running both families means switching `GOOGLE_AUTH_METHOD`
+between runs or constructing two clients. For a single call, `get_client(...,
+use_api_key=True)` on the shared Google base forces the Developer client
+without changing the environment.
+
 #### Azure TTS
 
 Required:
