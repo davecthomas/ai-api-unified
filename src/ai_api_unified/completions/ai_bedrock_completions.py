@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Iterator
 from typing import Any, ClassVar, Type
 
 from pydantic import ValidationError
@@ -11,14 +12,42 @@ from ..ai_base import (
     AIBaseCompletions,
     AiApiObservedCompletionsResultModel,
     AIStructuredPrompt,
+    AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
     SupportedDataType,
 )
 from ..ai_bedrock_base import AIBedrockBase, ClientError
-from ..middleware.observability_runtime import ObservabilityMetadataValue
+from ..middleware.observability_runtime import (
+    AiApiCallResultSummaryModel,
+    ObservabilityMetadataValue,
+)
 from ..util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+
+class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
+    """
+    Bedrock-specific completions capabilities.
+
+    Based on https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+    """
+
+    @classmethod
+    def for_model(
+        cls,
+        model_name: str,
+        *,
+        context_window_length: int,
+    ) -> "AICompletionsCapabilitiesBedrock":
+        """Create capabilities instance for the requested Bedrock model."""
+        # Normal return with Bedrock capabilities; every chat model this client
+        # targets streams via the ConverseStream API.
+        return cls(
+            context_window_length=context_window_length,
+            supported_data_types=[SupportedDataType.TEXT, SupportedDataType.IMAGE],
+            supports_streaming=True,
+        )
 
 
 class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
@@ -85,6 +114,14 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             "amazon.nova-premier-v1:0",
             "us.anthropic.claude-3-5-haiku-20241022-v1:0",
         ]
+
+    @property
+    def capabilities(self) -> AICompletionsCapabilitiesBedrock:
+        """Return model capabilities for the current Bedrock model."""
+        return AICompletionsCapabilitiesBedrock.for_model(
+            self.completions_model,
+            context_window_length=self.max_context_tokens,
+        )
 
     def _extract_json_text_from_converse_response(self, resp: dict[str, Any]) -> str:
         content = resp.get("output", {}).get("message", {}).get("content", [])
@@ -406,6 +443,118 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         )
         # Normal return with sanitized Bedrock text output after observability wrapping.
         return sanitized_output
+
+    def _send_prompt_streaming_provider(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> Iterator[str]:
+        """
+        Stream a text prompt response from Bedrock's ConverseStream API chunk by chunk.
+
+        Capability and PII gating already ran in the base template method.
+        There is no retry wrapper: retrying a partially consumed stream would
+        duplicate output.
+
+        Args:
+            prompt: Validated text prompt to send.
+            other_params: Optional provider-specific parameters.
+
+        Returns:
+            Iterator of response text chunks in provider order.
+        """
+        user_content: list[dict[str, Any]] = self._build_user_content(
+            prompt, other_params
+        )
+        messages = [{"role": "user", "content": user_content}]
+        system_prompt: str = (
+            other_params.system_prompt
+            if other_params is not None and other_params.system_prompt is not None
+            else AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT
+        )
+        inference_config = {"temperature": 0.2, "topP": 0.85, "maxTokens": 256}
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_completions_observability_input_metadata(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                other_params=other_params,
+                response_mode=self.RESPONSE_MODE_TEXT,
+            )
+        )
+        dict_input_metadata["response_streaming"] = True
+
+        dict_stream_state: dict[str, Any] = {
+            "list_text_parts": [],
+            "int_chunk_count": 0,
+            "finish_reason": None,
+            "metadata_event": None,
+            "bool_completed": False,
+        }
+
+        def _open_stream() -> Iterator[str]:
+            response = self.client.converse_stream(
+                modelId=self.model,
+                messages=messages,
+                system=[{"text": system_prompt}],
+                inferenceConfig=inference_config,
+            )
+            # Loop through ConverseStream events so callers see text as it arrives.
+            for event in response.get("stream", []):
+                if "contentBlockDelta" in event:
+                    str_chunk_text: str = (
+                        event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    )
+                    if str_chunk_text:
+                        dict_stream_state["int_chunk_count"] += 1
+                        dict_stream_state["list_text_parts"].append(str_chunk_text)
+                        yield str_chunk_text
+                elif "messageStop" in event:
+                    dict_stream_state["finish_reason"] = str(
+                        event["messageStop"].get("stopReason", "")
+                    )
+                elif "metadata" in event:
+                    dict_stream_state["metadata_event"] = event["metadata"]
+            dict_stream_state["bool_completed"] = True
+
+        def _build_summary(provider_elapsed_ms: float) -> AiApiCallResultSummaryModel:
+            # ConverseStream reports usage in the terminal metadata event using the
+            # same shape as the synchronous converse response.
+            dict_usage_response: dict[str, Any] = (
+                dict_stream_state["metadata_event"] or {}
+            )
+            str_full_text: str = "".join(dict_stream_state["list_text_parts"])
+            observed_result: AiApiObservedCompletionsResultModel[str] = (
+                AiApiObservedCompletionsResultModel(
+                    return_value=str_full_text,
+                    raw_output_text=str_full_text,
+                    finish_reason=dict_stream_state["finish_reason"],
+                    provider_prompt_tokens=self._extract_bedrock_prompt_tokens(
+                        dict_usage_response
+                    ),
+                    provider_completion_tokens=self._extract_bedrock_completion_tokens(
+                        dict_usage_response
+                    ),
+                    provider_total_tokens=self._extract_bedrock_total_tokens(
+                        dict_usage_response
+                    ),
+                )
+            )
+            # Normal return with the streaming summary built from accumulated events.
+            return self._build_streaming_completions_observability_result_summary(
+                observed_result=observed_result,
+                provider_elapsed_ms=provider_elapsed_ms,
+                int_chunk_count=dict_stream_state["int_chunk_count"],
+                bool_stream_completed=dict_stream_state["bool_completed"],
+            )
+
+        # Normal return with the observability-wrapped Bedrock stream.
+        return self._execute_streaming_provider_call_with_observability(
+            operation="send_prompt_streaming",
+            dict_input_metadata=dict_input_metadata,
+            callable_open_stream=_open_stream,
+            callable_build_result_summary=_build_summary,
+        )
 
     @staticmethod
     def _extract_bedrock_prompt_tokens(response: dict[str, Any]) -> int | None:

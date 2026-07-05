@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import time
+from collections.abc import Iterator
 from datetime import date
 from typing import Any, ClassVar, Type
 
@@ -22,7 +23,10 @@ from ..ai_base import (
     AICompletionsPromptParamsBase,
     SupportedDataType,
 )
-from ..middleware.observability_runtime import ObservabilityMetadataValue
+from ..middleware.observability_runtime import (
+    AiApiCallResultSummaryModel,
+    ObservabilityMetadataValue,
+)
 
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -44,6 +48,8 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
             SupportedDataType.AUDIO,
         ],
         "supports_data_residency_constraint": True,
+        # All supported chat models stream via chat.completions stream=True.
+        "supports_streaming": True,
     }
 
     # Context window sizes (max tokens each model can handle)
@@ -595,6 +601,121 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         except Exception as e:
             _LOGGER.exception("An error occurred while sending the prompt: %s", e)
             raise
+
+    def _send_prompt_streaming_provider(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> Iterator[str]:
+        """
+        Stream a chat completion response from OpenAI chunk by chunk.
+
+        Capability and PII gating already ran in the base template method.
+        Unlike send_prompt, streaming does not auto-continue on a `length`
+        finish reason: the caller sees exactly one provider stream. There is
+        no retry wrapper: retrying a partially consumed stream would duplicate
+        output.
+
+        Args:
+            prompt: Validated text prompt to send.
+            other_params: Optional provider-specific parameters.
+
+        Returns:
+            Iterator of response text chunks in provider order.
+        """
+        system_prompt: str = (
+            other_params.system_prompt
+            if other_params is not None and other_params.system_prompt is not None
+            else AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT
+        )
+        user_content = self._build_user_message_content(prompt, other_params)
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_completions_observability_input_metadata(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                other_params=other_params,
+                response_mode=self.RESPONSE_MODE_TEXT,
+            )
+        )
+        dict_input_metadata["response_streaming"] = True
+
+        dict_stream_state: dict[str, Any] = {
+            "list_text_parts": [],
+            "int_chunk_count": 0,
+            "finish_reason": None,
+            "usage_chunk": None,
+            "bool_completed": False,
+        }
+
+        def _open_stream() -> Iterator[str]:
+            stream = self.client.chat.completions.create(
+                model=self.completions_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+            # Loop through provider chunks so callers see text as it arrives.
+            for chunk in stream:
+                if chunk.usage is not None:
+                    dict_stream_state["usage_chunk"] = chunk
+                if not chunk.choices:
+                    # Usage-only terminal chunk carries no delta content.
+                    continue
+                choice = chunk.choices[0]
+                if choice.finish_reason is not None:
+                    dict_stream_state["finish_reason"] = str(choice.finish_reason)
+                str_chunk_text: str | None = choice.delta.content
+                if str_chunk_text:
+                    dict_stream_state["int_chunk_count"] += 1
+                    dict_stream_state["list_text_parts"].append(str_chunk_text)
+                    yield str_chunk_text
+            dict_stream_state["bool_completed"] = True
+
+        def _build_summary(provider_elapsed_ms: float) -> AiApiCallResultSummaryModel:
+            usage_chunk = dict_stream_state["usage_chunk"]
+            str_full_text: str = "".join(dict_stream_state["list_text_parts"])
+            observed_result: AiApiObservedCompletionsResultModel[str] = (
+                AiApiObservedCompletionsResultModel(
+                    return_value=str_full_text,
+                    raw_output_text=str_full_text,
+                    finish_reason=dict_stream_state["finish_reason"],
+                    provider_prompt_tokens=(
+                        self._extract_openai_prompt_tokens(usage_chunk)
+                        if usage_chunk is not None
+                        else None
+                    ),
+                    provider_completion_tokens=(
+                        self._extract_openai_completion_tokens(usage_chunk)
+                        if usage_chunk is not None
+                        else None
+                    ),
+                    provider_total_tokens=(
+                        self._extract_openai_total_tokens(usage_chunk)
+                        if usage_chunk is not None
+                        else None
+                    ),
+                )
+            )
+            # Normal return with the streaming summary built from accumulated chunks.
+            return self._build_streaming_completions_observability_result_summary(
+                observed_result=observed_result,
+                provider_elapsed_ms=provider_elapsed_ms,
+                int_chunk_count=dict_stream_state["int_chunk_count"],
+                bool_stream_completed=dict_stream_state["bool_completed"],
+            )
+
+        # Normal return with the observability-wrapped OpenAI stream.
+        return self._execute_streaming_provider_call_with_observability(
+            operation="send_prompt_streaming",
+            dict_input_metadata=dict_input_metadata,
+            callable_open_stream=_open_stream,
+            callable_build_result_summary=_build_summary,
+            legacy_caller_id=self.user,
+        )
 
     @staticmethod
     def _extract_openai_prompt_tokens(completion: Any) -> int | None:

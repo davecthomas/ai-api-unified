@@ -303,6 +303,25 @@ class TestNonMockedGoogleGeminiModules:
             len(result["embedding"]) == override_dim
         ), f"Expected vector length {override_dim}, got {len(result['embedding'])}"
 
+    def test_gemini_completions_streaming(
+        self, gemini_client: AIBaseCompletions
+    ) -> None:
+        """Streaming completions yield incremental chunks that join into a response."""
+        assert gemini_client.capabilities.supports_streaming is True
+        try:
+            list_chunks: list[str] = list(
+                gemini_client.send_prompt_streaming(
+                    "Count from 1 to 5 as words, one per line."
+                )
+            )
+        except Exception as exception:
+            _skip_if_google_quota_exhausted(exception)
+            raise
+
+        assert len(list_chunks) >= 1
+        str_full_text: str = "".join(list_chunks)
+        assert "one" in str_full_text.lower()
+
     def test_gemini_embeddings_multimodal_image_and_text(self) -> None:
         """gemini-embedding-2 embeds interleaved text + image into one vector."""
         try:

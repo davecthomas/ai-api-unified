@@ -27,6 +27,7 @@ from ai_api_unified.ai_completions_exceptions import (
 )
 from ai_api_unified.ai_provider_exceptions import (
     AiProviderCapabilityUnsupportedError,
+    AiProviderConfigurationError,
 )
 from ai_api_unified.middleware.observability import (
     AiApiObservabilityMiddleware,
@@ -40,6 +41,7 @@ from ai_api_unified.middleware.observability_runtime import (
     TOKEN_COUNT_SOURCE_NONE,
     TOKEN_COUNT_SOURCE_PROVIDER,
     execute_observed_call,
+    execute_observed_streaming_call,
     get_observability_context,
     resolve_originating_caller,
 )
@@ -73,6 +75,7 @@ class AICompletionsCapabilitiesBase(BaseModel):
     reasoning: bool = False
     supported_data_types: list[SupportedDataType] = [SupportedDataType.TEXT]
     supports_data_residency_constraint: bool = False
+    supports_streaming: bool = False
 
 
 class AIIncludedMediaParamsBase(BaseModel):
@@ -1577,6 +1580,165 @@ class AIBaseCompletions(AIBase):
             prompt: The text prompt to send
             other_params: Optional provider-specific parameters
         """
+
+    @property
+    def capabilities(self) -> AICompletionsCapabilitiesBase:
+        """
+        Returns the capabilities descriptor for the configured completions model.
+
+        Providers override this with model-specific capabilities. The base
+        default describes a text-only, non-streaming model at the configured
+        context window.
+        """
+        # Normal return with conservative default completions capabilities.
+        return AICompletionsCapabilitiesBase(
+            context_window_length=self.max_context_tokens
+        )
+
+    def send_prompt_streaming(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> Iterator[str]:
+        """
+        Sends a prompt and yields response text chunks as the provider streams them.
+
+        Template method: capability and configuration gating happen here so
+        providers cannot skip them. Providers whose capabilities declare
+        streaming support implement _send_prompt_streaming_provider.
+
+        Args:
+            prompt: The text prompt to send.
+            other_params: Optional provider-specific parameters.
+
+        Returns:
+            Iterator of response text chunks in provider order.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the configured model does
+                not support streaming completions.
+            AiProviderConfigurationError: When PII redaction middleware is
+                enabled; chunk-boundary redaction cannot be guaranteed for
+                streamed output.
+        """
+        if not prompt or not prompt.strip():
+            raise ValueError("Prompt cannot be empty or None")
+        if not self.capabilities.supports_streaming:
+            raise AiProviderCapabilityUnsupportedError(
+                f"{type(self).__name__} model '{self.model_name}' does not support "
+                "streaming completions. Use send_prompt, or configure a model whose "
+                "capabilities include streaming."
+            )
+        if self.pii_middleware.bool_enabled:
+            raise AiProviderConfigurationError(
+                "Streaming completions are unavailable while PII redaction "
+                "middleware is enabled: redaction cannot be guaranteed across "
+                "stream chunk boundaries. Use send_prompt, or disable the PII "
+                "redaction middleware profile."
+            )
+        # Normal return with the provider-implemented streaming iterator.
+        return self._send_prompt_streaming_provider(prompt, other_params=other_params)
+
+    def _send_prompt_streaming_provider(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> Iterator[str]:
+        """
+        Provider hook for streaming completion generation.
+
+        The base implementation raises: a provider whose capabilities declare
+        streaming support must implement this hook.
+
+        Args:
+            prompt: Validated text prompt to send.
+            other_params: Optional provider-specific parameters.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: Always, in the base class.
+        """
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} does not implement streaming completions."
+        )
+
+    def _execute_streaming_provider_call_with_observability(
+        self,
+        *,
+        operation: str,
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] | None,
+        callable_open_stream: Callable[[], Iterator[str]],
+        callable_build_result_summary: Callable[[float], AiApiCallResultSummaryModel],
+        legacy_caller_id: str | None = None,
+    ) -> Iterator[str]:
+        """
+        Wraps one streaming provider call with shared observability lifecycle helpers.
+
+        Args:
+            operation: Public operation name such as `send_prompt_streaming`.
+            dict_input_metadata: Optional scalar request metadata safe for input-event logs.
+            callable_open_stream: Zero-argument callable that opens the provider stream.
+            callable_build_result_summary: Callable that summarizes accumulated output
+                using elapsed milliseconds; caller-owned accumulators supply output state.
+            legacy_caller_id: Optional explicit legacy caller hint supplied by existing config.
+
+        Returns:
+            Iterator of caller-facing stream chunks with observability emission attached.
+        """
+        # Normal return with the observability-wrapped streaming iterator.
+        return execute_observed_streaming_call(
+            observability_middleware=self._get_observability_middleware(),
+            callable_build_call_context=lambda: self._build_observability_call_context(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation=operation,
+                dict_metadata=dict_input_metadata,
+                legacy_caller_id=legacy_caller_id,
+            ),
+            callable_open_stream=callable_open_stream,
+            callable_build_result_summary=callable_build_result_summary,
+        )
+
+    def _build_streaming_completions_observability_result_summary(
+        self,
+        *,
+        observed_result: AiApiObservedCompletionsResultModel[str],
+        provider_elapsed_ms: float,
+        int_chunk_count: int,
+        bool_stream_completed: bool,
+    ) -> AiApiCallResultSummaryModel:
+        """
+        Builds metadata-only output fields for one observed streaming completion.
+
+        Args:
+            observed_result: Accumulated stream state shaped as an observed completions result.
+            provider_elapsed_ms: Elapsed milliseconds spanning the full stream consumption.
+            int_chunk_count: Number of text chunks yielded to the caller.
+            bool_stream_completed: False when the caller abandoned the stream early.
+
+        Returns:
+            AiApiCallResultSummaryModel containing output metadata safe for observability logging.
+        """
+        call_result_summary: AiApiCallResultSummaryModel = (
+            self._build_completions_observability_result_summary(
+                observed_result=AiApiObservedCompletionsResultModel(
+                    return_value=observed_result.return_value,
+                    raw_output_text=observed_result.raw_output_text,
+                    finish_reason=observed_result.finish_reason,
+                    provider_prompt_tokens=observed_result.provider_prompt_tokens,
+                    provider_completion_tokens=observed_result.provider_completion_tokens,
+                    provider_total_tokens=observed_result.provider_total_tokens,
+                    dict_metadata={
+                        "stream_chunk_count": int_chunk_count,
+                        "stream_completed": bool_stream_completed,
+                        **observed_result.dict_metadata,
+                    },
+                ),
+                provider_elapsed_ms=provider_elapsed_ms,
+            )
+        )
+        # Normal return with the streaming completions output summary.
+        return call_result_summary
 
 
 class AIBaseImageProperties(BaseModel):

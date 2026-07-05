@@ -30,6 +30,8 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
                 SupportedDataType.AUDIO,
                 SupportedDataType.PDF,
             ],
+            # All Gemini chat models stream via generate_content_stream.
+            "supports_streaming": True,
         }
 
         # Model-specific capabilities
