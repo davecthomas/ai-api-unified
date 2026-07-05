@@ -156,6 +156,27 @@ response: str = client.send_prompt("Say hello in one short sentence.")
 print(response)
 ```
 
+### Streaming Completions
+
+Every completions client exposes a `capabilities` descriptor with a
+`supports_streaming` flag set per model. Models without streaming support raise
+`AiProviderCapabilityUnsupportedError` from `send_prompt_streaming`. OpenAI,
+Google Gemini, and Bedrock chat models all stream:
+
+```python
+from ai_api_unified import AIFactory
+
+client = AIFactory.get_ai_completions_client()
+
+if client.capabilities.supports_streaming:
+    for chunk in client.send_prompt_streaming("Tell me a short story."):
+        print(chunk, end="", flush=True)
+```
+
+Streaming is unavailable while the PII redaction middleware is enabled
+(`AiProviderConfigurationError`): redaction cannot be guaranteed across chunk
+boundaries, so use `send_prompt` in PII-redacting deployments.
+
 ### Embeddings
 
 ```python

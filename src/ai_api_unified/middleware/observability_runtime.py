@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, TypeVar
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 
 if TYPE_CHECKING:
     from ai_api_unified.middleware.observability import (
@@ -387,6 +387,123 @@ def execute_observed_call(
     )
     # Normal return with the original provider result after observability emission.
     return provider_result
+
+
+def execute_observed_streaming_call(
+    *,
+    observability_middleware: AiApiObservabilityMiddleware,
+    callable_build_call_context: Callable[[], AiApiCallContextModel],
+    callable_open_stream: Callable[[], Iterator[str]],
+    callable_build_result_summary: Callable[[float], AiApiCallResultSummaryModel],
+) -> Iterator[str]:
+    """
+    Wraps one streaming provider call with shared observability lifecycle emission.
+
+    Mirrors execute_observed_call for generator-shaped provider calls: the
+    input event fires before the stream opens, elapsed time spans the full
+    stream consumption, and the output event fires when the stream is
+    exhausted or abandoned by the caller.
+
+    Args:
+        observability_middleware: Effective observability middleware implementation for the call.
+        callable_build_call_context: Zero-argument callable that builds the shared call context
+            only when observability is enabled.
+        callable_open_stream: Zero-argument callable that opens the provider stream and
+            returns an iterator of caller-facing chunks.
+        callable_build_result_summary: Callable that summarizes accumulated provider output
+            using elapsed milliseconds; caller-owned accumulators supply the output state.
+
+    Yields:
+        Caller-facing stream chunks unchanged from `callable_open_stream`.
+
+    Raises:
+        Propagates the original provider exception unchanged when the stream fails.
+    """
+    if not observability_middleware.bool_enabled:
+        # Early yield-through because observability is disabled and the stream is unchanged.
+        yield from callable_open_stream()
+        return
+
+    try:
+        call_context: AiApiCallContextModel = callable_build_call_context()
+    except Exception as exception:
+        _LOGGER.warning(
+            OBSERVABILITY_CONTEXT_HOOK_FAILURE_LOG_MESSAGE,
+            "build_call_context",
+            exception.__class__.__name__,
+        )
+        # Early yield-through because call-context construction failed and observability fails open.
+        yield from callable_open_stream()
+        return
+
+    _safe_emit_observability_hook(
+        stage="before_call",
+        callable_emit=lambda: observability_middleware.before_call(
+            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_INPUT)
+        ),
+    )
+
+    float_started_at: float = time.perf_counter()
+    bool_output_event_emitted: bool = False
+
+    def _emit_output_event() -> None:
+        """Emits the after-call summary exactly once per stream lifecycle."""
+        nonlocal bool_output_event_emitted
+        if bool_output_event_emitted:
+            # Early return because the output event already fired for this stream.
+            return None
+        bool_output_event_emitted = True
+        provider_elapsed_ms: float = (time.perf_counter() - float_started_at) * 1000.0
+        try:
+            call_result_summary: AiApiCallResultSummaryModel = (
+                callable_build_result_summary(provider_elapsed_ms)
+            )
+        except Exception as exception:
+            _LOGGER.warning(
+                OBSERVABILITY_CONTEXT_HOOK_FAILURE_LOG_MESSAGE,
+                "build_result_summary",
+                exception.__class__.__name__,
+            )
+            # Early return because result-summary construction failed and observability fails open.
+            return None
+        _safe_emit_observability_hook(
+            stage="after_call",
+            callable_emit=lambda: observability_middleware.after_call(
+                call_context=call_context.with_direction(
+                    OBSERVABILITY_DIRECTION_OUTPUT
+                ),
+                call_result_summary=call_result_summary,
+            ),
+        )
+        # Normal return after emitting the streaming output event.
+        return None
+
+    try:
+        # Loop through provider chunks so callers stream output while observability accrues.
+        for str_chunk in callable_open_stream():
+            yield str_chunk
+    except GeneratorExit:
+        # The caller abandoned the stream; summarize what was consumed so far.
+        _emit_output_event()
+        raise
+    except Exception as exception:
+        caught_exception: Exception = exception
+        bool_output_event_emitted = True
+        provider_elapsed_ms = (time.perf_counter() - float_started_at) * 1000.0
+        _safe_emit_observability_hook(
+            stage="on_error",
+            callable_emit=lambda: observability_middleware.on_error(
+                call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_ERROR),
+                exception=caught_exception,
+                float_elapsed_ms=provider_elapsed_ms,
+            ),
+        )
+        # Early return via re-raise because provider exception behavior must remain unchanged.
+        raise
+
+    _emit_output_event()
+    # Normal return after the stream is exhausted and the output event has fired.
+    return
 
 
 def _safe_emit_observability_hook(

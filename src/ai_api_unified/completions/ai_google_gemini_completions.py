@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Iterator
 from typing import Any, Type
 
 from google import genai
@@ -51,7 +52,10 @@ from ..ai_base import (
     AICompletionsPromptParamsBase,
     SupportedDataType,
 )
-from ..middleware.observability_runtime import ObservabilityMetadataValue
+from ..middleware.observability_runtime import (
+    AiApiCallResultSummaryModel,
+    ObservabilityMetadataValue,
+)
 from ..util.env_settings import EnvSettings
 from .ai_google_gemini_capabilities import (
     AICompletionsCapabilitiesGoogle,
@@ -318,6 +322,115 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         )
         # Normal return with sanitized Gemini text after observability wrapping.
         return sanitized_output
+
+    def _send_prompt_streaming_provider(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> Iterator[str]:
+        """
+        Stream a text prompt response from Google Gemini chunk by chunk.
+
+        Capability and PII gating already ran in the base template method, so
+        the streamed chunks are yielded to the caller unmodified. There is no
+        retry wrapper: retrying a partially consumed stream would duplicate
+        output.
+
+        Args:
+            prompt: Validated text prompt to send.
+            other_params: Optional Google-specific parameters (AICompletionsPromptParamsGoogle).
+
+        Returns:
+            Iterator of response text chunks in provider order.
+        """
+        params = self._coerce_params(other_params)
+        system_prompt: str | None = params.system_prompt
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_completions_observability_input_metadata(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                other_params=params,
+                response_mode=self.RESPONSE_MODE_TEXT,
+            )
+        )
+        dict_input_metadata["response_streaming"] = True
+
+        dict_stream_state: dict[str, Any] = {
+            "list_text_parts": [],
+            "int_chunk_count": 0,
+            "last_chunk": None,
+            "bool_completed": False,
+        }
+
+        def _open_stream() -> Iterator[str]:
+            contents: list[dict[str, Any]] = self._build_contents(
+                prompt=prompt, params=params
+            )
+            config: genai.types.GenerateContentConfig = self._build_config(
+                params=params,
+                system_prompt=system_prompt,
+                max_output_tokens=params.max_output_tokens,
+            )
+            stream = self.client.models.generate_content_stream(
+                model=self.completions_model,
+                contents=contents,
+                config=config,
+            )
+            # Loop through provider chunks so callers see text as it arrives.
+            for chunk in stream:
+                dict_stream_state["last_chunk"] = chunk
+                str_chunk_text: str | None = chunk.text
+                if str_chunk_text:
+                    dict_stream_state["int_chunk_count"] += 1
+                    dict_stream_state["list_text_parts"].append(str_chunk_text)
+                    yield str_chunk_text
+            dict_stream_state["bool_completed"] = True
+
+        def _build_summary(provider_elapsed_ms: float) -> AiApiCallResultSummaryModel:
+            last_chunk = dict_stream_state["last_chunk"]
+            str_full_text: str = "".join(dict_stream_state["list_text_parts"])
+            observed_result: AiApiObservedCompletionsResultModel[str] = (
+                AiApiObservedCompletionsResultModel(
+                    return_value=str_full_text,
+                    raw_output_text=str_full_text,
+                    finish_reason=(
+                        self._extract_gemini_finish_reason(last_chunk)
+                        if last_chunk is not None
+                        else None
+                    ),
+                    provider_prompt_tokens=(
+                        self._extract_gemini_prompt_tokens(last_chunk)
+                        if last_chunk is not None
+                        else None
+                    ),
+                    provider_completion_tokens=(
+                        self._extract_gemini_completion_tokens(last_chunk)
+                        if last_chunk is not None
+                        else None
+                    ),
+                    provider_total_tokens=(
+                        self._extract_gemini_total_tokens(last_chunk)
+                        if last_chunk is not None
+                        else None
+                    ),
+                )
+            )
+            # Normal return with the streaming summary built from accumulated chunks.
+            return self._build_streaming_completions_observability_result_summary(
+                observed_result=observed_result,
+                provider_elapsed_ms=provider_elapsed_ms,
+                int_chunk_count=dict_stream_state["int_chunk_count"],
+                bool_stream_completed=dict_stream_state["bool_completed"],
+            )
+
+        # Normal return with the observability-wrapped Gemini stream.
+        return self._execute_streaming_provider_call_with_observability(
+            operation="send_prompt_streaming",
+            dict_input_metadata=dict_input_metadata,
+            callable_open_stream=_open_stream,
+            callable_build_result_summary=_build_summary,
+        )
 
     def strict_schema_prompt(
         self,
