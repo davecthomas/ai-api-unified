@@ -96,9 +96,7 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
         str_engine="openai-responses",
-        str_module_path=(
-            "ai_api_unified.completions.ai_openai_responses_completions"
-        ),
+        str_module_path=("ai_api_unified.completions.ai_openai_responses_completions"),
         str_class_name="AiOpenAIResponsesCompletions",
         str_required_extra="openai",
         str_consumer_install_command=("poetry add 'ai-api-unified[openai]'"),

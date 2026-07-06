@@ -1,4 +1,4 @@
-# ai-api-unified 2.7.1
+# ai-api-unified 2.8.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -176,6 +176,29 @@ if client.capabilities.supports_streaming:
 Streaming is unavailable while the PII redaction middleware is enabled
 (`AiProviderConfigurationError`): redaction cannot be guaranteed across chunk
 boundaries, so use `send_prompt` in PII-redacting deployments.
+
+### Token Counting
+
+Providers whose capabilities include `supports_token_counting` can return a
+provider-counted input token total without running inference. Bedrock supports
+this via its `CountTokens` operation; other providers raise
+`AiProviderCapabilityUnsupportedError`.
+
+```python
+client = AIFactory.get_ai_completions_client(completions_engine="nova")
+
+if client.capabilities.supports_token_counting:
+    print(client.count_tokens("How many tokens is this prompt?"))
+```
+
+### OpenAI Responses engine
+
+OpenAI exposes two completions engines. The default `openai` engine uses Chat
+Completions; the `openai-responses` engine (`COMPLETIONS_ENGINE=openai-responses`)
+uses the Responses API, OpenAI's successor to Chat Completions. Both implement
+`send_prompt`, `strict_schema_prompt`, and
+`send_prompt_streaming`. The Responses engine is text-only for now; use the
+`openai` engine for image inputs.
 
 ### Embeddings
 
@@ -360,7 +383,7 @@ There is no implicit default provider. Set the selector for each capability you 
 
 | Environment variable | Valid values                                                                                                                  |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `COMPLETIONS_ENGINE` | `openai`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
+| `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
 | `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
 | `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
 | `VIDEO_ENGINE`       | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel`                                                                     |
