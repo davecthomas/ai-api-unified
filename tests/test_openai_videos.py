@@ -1,9 +1,12 @@
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
-import httpx
 import pytest
 
 pytest.importorskip("openai")
@@ -15,44 +18,30 @@ from ai_api_unified.videos.ai_openai_videos import (
 )
 
 
+def _fake_video(**overrides: Any) -> SimpleNamespace:
+    """Build a stand-in for the openai SDK Video object (model_dump-compatible)."""
+    payload: dict[str, Any] = {
+        "id": "video_123",
+        "model": "sora-2",
+        "status": "queued",
+        "progress": 0,
+        "created_at": 1_712_697_600,
+        "completed_at": None,
+        "error": None,
+        "expires_at": None,
+    }
+    payload.update(overrides)
+    return SimpleNamespace(model_dump=lambda: payload)
+
+
 class _InspectableOpenAIVideos(AIOpenAIVideos):
-    """OpenAI video test double that captures outbound request payloads."""
+    """OpenAI video test double with a mocked SDK client, no network or auth."""
 
     def __init__(self) -> None:
         self.video_model_name: str = "sora-2"
         self.base_url: str = "https://api.openai.com/v1"
         self.user: str = "test-user"
-        self.captured_request: dict[str, Any] | None = None
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        json_payload: dict[str, Any] | None = None,
-        data_payload: dict[str, str] | None = None,
-        files_payload: dict[str, tuple[str, bytes, str]] | None = None,
-        accept: str = "application/json",
-    ) -> httpx.Response:
-        self.captured_request = {
-            "method": method,
-            "path": path,
-            "json_payload": json_payload,
-            "data_payload": data_payload,
-            "files_payload": files_payload,
-            "accept": accept,
-        }
-        return httpx.Response(
-            200,
-            json={
-                "id": "video_123",
-                "model": self.video_model_name,
-                "status": "queued",
-                "progress": 0,
-                "created_at": 1_712_697_600,
-            },
-            request=httpx.Request(method, path),
-        )
+        self.client = Mock()
 
     def _execute_provider_call_with_observability(
         self,
@@ -66,60 +55,51 @@ class _InspectableOpenAIVideos(AIOpenAIVideos):
         return "openai"
 
 
-def test_openai_video_submit_uses_multipart_upload_for_reference_images() -> None:
-    """Image-guided OpenAI video generation should upload input_reference as a file."""
+def test_openai_video_submit_passes_string_seconds_to_sdk() -> None:
+    """The SDK requires seconds as a string enum; the migration fixes the prior 400."""
 
     provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+    provider.client.videos.create.return_value = _fake_video()
     properties: AIOpenAIVideoProperties = AIOpenAIVideoProperties(
-        reference_image=AIMediaReference(
-            bytes_data=b"png-bytes", mime_type="image/png"
-        ),
+        output_dir=Path("/tmp/openai-videos"),
+    )
+
+    job = provider.submit_video_generation("A bright city skyline at dusk.", properties)
+
+    create_kwargs = provider.client.videos.create.call_args.kwargs
+    assert create_kwargs["prompt"] == "A bright city skyline at dusk."
+    assert create_kwargs["model"] == "sora-2"
+    assert create_kwargs["seconds"] == "8"
+    assert isinstance(create_kwargs["seconds"], str)
+    assert create_kwargs["size"] == "1280x720"
+    assert "input_reference" not in create_kwargs
+    assert job.provider_job_id == "video_123"
+
+
+def test_openai_video_submit_passes_reference_image_as_input_reference() -> None:
+    """Image-guided generation forwards the reference as an SDK input_reference tuple."""
+
+    provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+    provider.client.videos.create.return_value = _fake_video()
+    properties: AIOpenAIVideoProperties = AIOpenAIVideoProperties(
+        reference_image=AIMediaReference(bytes_data=b"png-bytes", mime_type="image/png"),
         output_dir=Path("/tmp/openai-videos"),
     )
 
     provider.submit_video_generation("A bright city skyline at dusk.", properties)
 
-    assert provider.captured_request is not None
-    assert provider.captured_request["json_payload"] is None
-    assert provider.captured_request["data_payload"] == {
-        "prompt": "A bright city skyline at dusk.",
-        "model": "sora-2",
-        "seconds": "8",
-        "size": "1280x720",
-    }
-    files_payload: dict[str, tuple[str, bytes, str]] = provider.captured_request[
-        "files_payload"
-    ]
-    assert "input_reference" in files_payload
-    file_name, file_bytes, mime_type = files_payload["input_reference"]
+    create_kwargs = provider.client.videos.create.call_args.kwargs
+    file_name, file_bytes, mime_type = create_kwargs["input_reference"]
     assert file_name == "input_reference.png"
     assert file_bytes == b"png-bytes"
     assert mime_type == "image/png"
-
-
-def test_openai_video_submit_uses_numeric_seconds_in_json_payload() -> None:
-    """OpenAI JSON video submits should keep duration values numeric."""
-
-    provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
-    properties: AIOpenAIVideoProperties = AIOpenAIVideoProperties(
-        output_dir=Path("/tmp/openai-videos"),
-    )
-
-    provider.submit_video_generation("A bright city skyline at dusk.", properties)
-
-    assert provider.captured_request is not None
-    assert provider.captured_request["json_payload"] == {
-        "prompt": "A bright city skyline at dusk.",
-        "model": "sora-2",
-        "seconds": 8,
-        "size": "1280x720",
-    }
 
 
 def test_openai_video_submit_rejects_remote_reference_images() -> None:
     """OpenAI input_reference currently requires uploadable local media."""
 
     provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+    provider.client.videos.create.return_value = _fake_video()
     properties: AIOpenAIVideoProperties = AIOpenAIVideoProperties(
         reference_image=AIMediaReference(remote_uri="https://example.com/image.png"),
         output_dir=Path("/tmp/openai-videos"),
@@ -132,18 +112,19 @@ def test_openai_video_submit_rejects_remote_reference_images() -> None:
         provider.submit_video_generation("A bright city skyline at dusk.", properties)
 
 
-def test_openai_video_close_closes_owned_http_client() -> None:
-    """Providers should expose an explicit cleanup path for the owned HTTP client."""
+def test_openai_video_get_job_uses_sdk_retrieve() -> None:
+    """Polling a job maps the SDK retrieve response into a normalized job."""
 
     provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
-    http_client: httpx.Client = httpx.Client()
-    provider.http_client = http_client
+    provider.client.videos.retrieve.return_value = _fake_video(
+        status="completed", progress=100, completed_at=1_712_697_700
+    )
 
-    provider.close()
-    provider.close()
+    job = provider.get_video_generation_job("video_123")
 
-    assert http_client.is_closed is True
-    assert provider.http_client is None
+    provider.client.videos.retrieve.assert_called_once_with("video_123")
+    assert job.status.value == "completed"
+    assert job.progress_percent == 100
 
 
 def test_openai_video_coerce_properties_applies_provider_defaults_for_base_inputs() -> (
