@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import logging
 import mimetypes
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
 
-import httpx
 from pydantic import model_validator
 
 from ai_api_unified.ai_base import (
@@ -30,7 +28,7 @@ class AIOpenAIVideoProperties(AIBaseVideoProperties):
     """
     OpenAI video-generation request properties.
 
-    The initial rollout supports text-to-video plus one optional reference image.
+    Supports text-to-video plus one optional reference image.
     """
 
     reference_image: AIMediaReference | None = None
@@ -77,8 +75,10 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
     """
     OpenAI Sora video-generation provider.
 
-    OpenAI documents this API as deprecated as of April 4, 2026, with shutdown scheduled
-    for September 24, 2026. The implementation remains supported while the upstream API exists.
+    Uses the openai SDK's native ``client.videos`` resource for job submission,
+    polling, and content download. The SDK sends the correct request shape for
+    the current /v1/videos API (notably ``seconds`` as a string enum), which the
+    prior hand-rolled HTTP client did not.
     """
 
     DEFAULT_VIDEO_MODEL: ClassVar[str] = "sora-2"
@@ -86,7 +86,6 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
     DEFAULT_RESOLUTION: ClassVar[str] = "1280x720"
     DEFAULT_ASPECT_RATIO: ClassVar[str] = "16:9"
     SUPPORTED_VIDEO_MODELS: ClassVar[list[str]] = ["sora-2", "sora-2-pro"]
-    RETRYABLE_STATUS_CODES: ClassVar[set[int]] = {408, 429, 500, 502, 503, 504}
     RESOLUTION_BY_ASPECT_RATIO: ClassVar[dict[str, str]] = {
         "16:9": "1280x720",
         "9:16": "720x1280",
@@ -112,38 +111,16 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
             or self.DEFAULT_VIDEO_MODEL
         )
         resolved_model = resolved_model.strip() or self.DEFAULT_VIDEO_MODEL
+        # AIOpenAIBase.__init__ builds self.client (the openai SDK client).
         AIOpenAIBase.__init__(self, **kwargs)
         AIBaseVideos.__init__(self, model=resolved_model)
         self.video_model_name: str = resolved_model
-        self.http_client: httpx.Client | None = httpx.Client(
-            base_url=self.base_url,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            timeout=httpx.Timeout(timeout=120.0, connect=30.0),
-            follow_redirects=True,
-        )
 
     def model_name(self) -> str:
         return self.video_model_name
 
     def list_model_names(self) -> list[str]:
         return list(self.SUPPORTED_VIDEO_MODELS)
-
-    def close(self) -> None:
-        """Close the owned HTTP client."""
-
-        http_client: httpx.Client | None = getattr(self, "http_client", None)
-        if http_client is None:
-            return
-        http_client.close()
-        self.http_client = None
-
-    def __del__(self) -> None:
-        try:
-            self.close()
-        except Exception:
-            pass
 
     def _coerce_properties(
         self,
@@ -193,88 +170,6 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
             )
         return openai_properties
 
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        json_payload: dict[str, Any] | None = None,
-        data_payload: dict[str, str] | None = None,
-        files_payload: dict[str, tuple[str, bytes, str]] | None = None,
-        accept: str = "application/json",
-    ) -> httpx.Response:
-        if json_payload is not None and (
-            data_payload is not None or files_payload is not None
-        ):
-            raise ValueError(
-                "OpenAI video requests must use either JSON or multipart form data, not both."
-            )
-        if self.http_client is None:
-            raise RuntimeError(
-                "AIOpenAIVideos http_client is closed and can no longer make requests."
-            )
-        max_attempts: int = len(self.backoff_delays)
-        last_exception: Exception | None = None
-        for attempt_index, delay_seconds in enumerate(self.backoff_delays, start=1):
-            try:
-                request_headers: dict[str, str] = {"Accept": accept}
-                if json_payload is not None:
-                    request_headers["Content-Type"] = "application/json"
-                response: httpx.Response = self.http_client.request(
-                    method=method,
-                    url=path,
-                    json=json_payload,
-                    data=data_payload,
-                    files=files_payload,
-                    headers=request_headers,
-                )
-                if (
-                    response.status_code in self.RETRYABLE_STATUS_CODES
-                    and attempt_index < max_attempts
-                ):
-                    _LOGGER.warning(
-                        "openai_video_request_retry",
-                        extra={
-                            "path": path,
-                            "method": method,
-                            "status_code": response.status_code,
-                            "attempt": attempt_index,
-                            "retry_in_seconds": delay_seconds,
-                        },
-                    )
-                    time.sleep(delay_seconds)
-                    continue
-                response.raise_for_status()
-                return response
-            except (httpx.TimeoutException, httpx.HTTPStatusError) as exception:
-                last_exception = exception
-                status_code: int | None = None
-                if isinstance(exception, httpx.HTTPStatusError):
-                    status_code = exception.response.status_code
-                    if (
-                        status_code not in self.RETRYABLE_STATUS_CODES
-                        or attempt_index == max_attempts
-                    ):
-                        break
-                elif attempt_index == max_attempts:
-                    break
-                _LOGGER.warning(
-                    "openai_video_request_retry_exception",
-                    extra={
-                        "path": path,
-                        "method": method,
-                        "status_code": status_code,
-                        "attempt": attempt_index,
-                        "retry_in_seconds": delay_seconds,
-                        "error_type": exception.__class__.__name__,
-                    },
-                )
-                time.sleep(delay_seconds)
-        assert last_exception is not None
-        raise RuntimeError(
-            f"OpenAI video request failed for {method} {path}."
-        ) from last_exception
-
     def _build_reference_upload_file(
         self,
         media_reference: AIMediaReference,
@@ -283,7 +178,6 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
             raise ValueError(
                 "OpenAI video input_reference must be provided as local bytes or a local file path."
             )
-
         mime_type: str = media_reference.mime_type or "application/octet-stream"
         media_bytes: bytes = media_reference.read_bytes()
         if media_reference.file_path is not None:
@@ -310,12 +204,17 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
 
     def _normalize_job(
         self,
-        payload: dict[str, Any],
+        video: Any,
         *,
         previous_provider_metadata: (
             dict[str, str | int | float | bool | None] | None
         ) = None,
     ) -> AIVideoGenerationJob:
+        # The SDK returns a pydantic Video; normalize to a plain payload so the
+        # attribute reads below stay uniform across create/retrieve responses.
+        payload: dict[str, Any] = (
+            video.model_dump() if hasattr(video, "model_dump") else dict(video)
+        )
         provider_job_id: str = str(payload["id"])
         raw_status: str = str(payload.get("status", "queued")).strip().lower()
         status: AIVideoGenerationStatus = self.STATUS_MAPPING.get(
@@ -383,16 +282,18 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
         )
         assert openai_properties.duration_seconds is not None
         assert openai_properties.resolution is not None
-        request_payload: dict[str, Any] = {
+        # The SDK types seconds as a string enum ('4' | '8' | '12'); passing an
+        # int is what the prior hand-rolled client got wrong.
+        create_kwargs: dict[str, Any] = {
             "prompt": video_prompt,
             "model": self.video_model_name,
-            "seconds": openai_properties.duration_seconds,
+            "seconds": str(openai_properties.duration_seconds),
             "size": openai_properties.resolution,
         }
         if openai_properties.reference_image is not None:
-            request_payload["input_reference"] = {
-                "image_url": openai_properties.reference_image.to_data_url()
-            }
+            create_kwargs["input_reference"] = self._build_reference_upload_file(
+                openai_properties.reference_image
+            )
         provider_metadata: dict[str, str | int | float | bool | None] = {
             "download_outputs": openai_properties.download_outputs,
             "resolved_output_dir": (
@@ -406,31 +307,9 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
         }
 
         def _execute_submit() -> AiApiObservedVideosResultModel[AIVideoGenerationJob]:
-            json_payload: dict[str, Any] | None = request_payload
-            data_payload: dict[str, str] | None = None
-            files_payload: dict[str, tuple[str, bytes, str]] | None = None
-            if openai_properties.reference_image is not None:
-                json_payload = None
-                data_payload = {
-                    "prompt": video_prompt,
-                    "model": self.video_model_name,
-                    "seconds": str(openai_properties.duration_seconds),
-                    "size": str(openai_properties.resolution),
-                }
-                file_name, file_bytes, mime_type = self._build_reference_upload_file(
-                    openai_properties.reference_image
-                )
-                files_payload = {"input_reference": (file_name, file_bytes, mime_type)}
-            response: httpx.Response = self._request(
-                "POST",
-                "/videos",
-                json_payload=json_payload,
-                data_payload=data_payload,
-                files_payload=files_payload,
-            )
-            payload: dict[str, Any] = response.json()
+            video = self.client.videos.create(**create_kwargs)
             job: AIVideoGenerationJob = self._normalize_job(
-                payload,
+                video,
                 previous_provider_metadata=provider_metadata,
             )
             return AiApiObservedVideosResultModel(
@@ -463,10 +342,9 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
         previous_provider_metadata: dict[str, str | int | float | bool | None] = {}
         if isinstance(job, AIVideoGenerationJob):
             previous_provider_metadata = dict(job.provider_metadata)
-        response: httpx.Response = self._request("GET", f"/videos/{provider_job_id}")
-        payload: dict[str, Any] = response.json()
+        video = self.client.videos.retrieve(provider_job_id)
         return self._normalize_job(
-            payload,
+            video,
             previous_provider_metadata=previous_provider_metadata,
         )
 
@@ -484,6 +362,12 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
             current_job.provider_metadata.get("download_outputs", True)
         )
 
+        def _resolved_duration() -> int | None:
+            raw_duration: Any = current_job.provider_metadata.get(
+                "resolved_duration_seconds"
+            )
+            return int(raw_duration) if raw_duration is not None else None
+
         def _execute_download() -> (
             AiApiObservedVideosResultModel[AIVideoGenerationResult]
         ):
@@ -499,31 +383,19 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
                     else self._resolve_video_output_dir(AIBaseVideoProperties())
                 )
                 output_dir.mkdir(parents=True, exist_ok=True)
-                response: httpx.Response = self._request(
-                    "GET",
-                    f"/videos/{current_job.provider_job_id}/content",
-                    accept="video/mp4",
+                content = self.client.videos.download_content(
+                    current_job.provider_job_id,
+                    variant="video",
                 )
-                video_bytes: bytes = response.content
+                video_bytes: bytes = content.read()
                 total_output_bytes = len(video_bytes)
                 file_path: Path = output_dir / f"{current_job.provider_job_id}.mp4"
                 file_path.write_bytes(video_bytes)
                 artifacts.append(
                     AIVideoArtifact(
-                        mime_type=response.headers.get("content-type", "video/mp4"),
+                        mime_type="video/mp4",
                         file_path=file_path,
-                        duration_seconds=(
-                            int(
-                                current_job.provider_metadata[
-                                    "resolved_duration_seconds"
-                                ]
-                            )
-                            if current_job.provider_metadata.get(
-                                "resolved_duration_seconds"
-                            )
-                            is not None
-                            else None
-                        ),
+                        duration_seconds=_resolved_duration(),
                         provider_metadata={
                             "provider_job_id": current_job.provider_job_id
                         },
@@ -534,18 +406,7 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
                     AIVideoArtifact(
                         mime_type="video/mp4",
                         remote_uri=f"{self.base_url}/videos/{current_job.provider_job_id}/content",
-                        duration_seconds=(
-                            int(
-                                current_job.provider_metadata[
-                                    "resolved_duration_seconds"
-                                ]
-                            )
-                            if current_job.provider_metadata.get(
-                                "resolved_duration_seconds"
-                            )
-                            is not None
-                            else None
-                        ),
+                        duration_seconds=_resolved_duration(),
                         provider_metadata={
                             "provider_job_id": current_job.provider_job_id
                         },
