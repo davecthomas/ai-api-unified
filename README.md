@@ -1,4 +1,4 @@
-# ai-api-unified 2.7.0
+# ai-api-unified 2.7.1
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
