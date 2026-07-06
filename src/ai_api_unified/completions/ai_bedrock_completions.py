@@ -42,11 +42,13 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
     ) -> "AICompletionsCapabilitiesBedrock":
         """Create capabilities instance for the requested Bedrock model."""
         # Normal return with Bedrock capabilities; every chat model this client
-        # targets streams via the ConverseStream API.
+        # targets streams via the ConverseStream API and supports the
+        # provider-side CountTokens operation.
         return cls(
             context_window_length=context_window_length,
             supported_data_types=[SupportedDataType.TEXT, SupportedDataType.IMAGE],
             supports_streaming=True,
+            supports_token_counting=True,
         )
 
 
@@ -555,6 +557,79 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             callable_open_stream=_open_stream,
             callable_build_result_summary=_build_summary,
         )
+
+    def _count_tokens_provider(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> int:
+        """
+        Count input tokens via the Bedrock CountTokens operation.
+
+        Builds the same Converse-shaped request send_prompt would submit and
+        asks Bedrock to count its input tokens without running inference.
+
+        Args:
+            prompt: Validated text prompt to measure.
+            other_params: Optional provider-specific parameters.
+
+        Returns:
+            Provider-reported input token count.
+        """
+        user_content: list[dict[str, Any]] = self._build_user_content(
+            prompt, other_params
+        )
+        system_prompt: str = (
+            other_params.system_prompt
+            if other_params is not None and other_params.system_prompt is not None
+            else AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT
+        )
+        dict_converse_input: dict[str, Any] = {
+            "messages": [{"role": "user", "content": user_content}],
+            "system": [{"text": system_prompt}],
+        }
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_completions_observability_input_metadata(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                other_params=other_params,
+                response_mode=self.RESPONSE_MODE_TEXT,
+            )
+        )
+
+        def _execute_count_tokens() -> AiApiObservedCompletionsResultModel[int]:
+            response = self.client.count_tokens(
+                modelId=self.model,
+                input={"converse": dict_converse_input},
+            )
+            int_input_tokens: int = int(response.get("inputTokens", 0))
+            observed_result: AiApiObservedCompletionsResultModel[int] = (
+                AiApiObservedCompletionsResultModel(
+                    return_value=int_input_tokens,
+                    raw_output_text="",
+                    provider_prompt_tokens=int_input_tokens,
+                    provider_total_tokens=int_input_tokens,
+                    dict_metadata={"operation": "count_tokens"},
+                )
+            )
+            # Normal return with the provider-counted input token total.
+            return observed_result
+
+        observed_result: AiApiObservedCompletionsResultModel[int] = (
+            self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="count_tokens",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_count_tokens,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
+        )
+        # Normal return with the caller-facing input token count.
+        return observed_result.return_value
 
     @staticmethod
     def _extract_bedrock_prompt_tokens(response: dict[str, Any]) -> int | None:
