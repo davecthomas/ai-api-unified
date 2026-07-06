@@ -88,8 +88,16 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
     def __init__(self, model: str = "text-embedding-3-small", dimensions: int = 512):
         env = EnvSettings()
         self.api_key = env.get_setting("OPENAI_API_KEY")
-        self.embedding_model = model
-        self.dimensions = dimensions
+        # The factory passes empty/zero values when EMBEDDING_MODEL_NAME or
+        # EMBEDDING_DIMENSIONS are unset; fall back to the model's own default
+        # so the provider never receives model="" or dimensions=0 (a 400).
+        self.embedding_model = model or self.embedding_model_default
+        self.dimensions = (
+            dimensions
+            or AIEmbeddingsCapabilitiesOpenAI.for_model(
+                self.embedding_model
+            ).default_dimensions
+        )
         self.base_url = self.get_api_base_url()
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         self.backoff_delays = [1, 2, 4, 8, 16]
