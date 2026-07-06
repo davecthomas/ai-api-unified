@@ -76,6 +76,7 @@ class AICompletionsCapabilitiesBase(BaseModel):
     supported_data_types: list[SupportedDataType] = [SupportedDataType.TEXT]
     supports_data_residency_constraint: bool = False
     supports_streaming: bool = False
+    supports_token_counting: bool = False
 
 
 class AIIncludedMediaParamsBase(BaseModel):
@@ -1661,6 +1662,65 @@ class AIBaseCompletions(AIBase):
         """
         raise AiProviderCapabilityUnsupportedError(
             f"{type(self).__name__} does not implement streaming completions."
+        )
+
+    def count_tokens(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> int:
+        """
+        Returns the provider-counted input token count for a prompt.
+
+        Template method: capability gating happens here so providers cannot
+        skip it. Providers whose capabilities declare token counting implement
+        _count_tokens_provider. This measures input tokens only, using the same
+        request shape send_prompt would build.
+
+        Args:
+            prompt: The text prompt to measure.
+            other_params: Optional provider-specific parameters.
+
+        Returns:
+            Provider-reported input token count.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the configured model does
+                not support provider-side token counting.
+        """
+        if not prompt or not prompt.strip():
+            raise ValueError("Prompt cannot be empty or None")
+        if not self.capabilities.supports_token_counting:
+            raise AiProviderCapabilityUnsupportedError(
+                f"{type(self).__name__} model '{self.model_name}' does not support "
+                "provider-side token counting. Configure a model whose capabilities "
+                "include token counting."
+            )
+        # Normal return with the provider-counted input token total.
+        return self._count_tokens_provider(prompt, other_params=other_params)
+
+    def _count_tokens_provider(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> int:
+        """
+        Provider hook for input token counting.
+
+        The base implementation raises: a provider whose capabilities declare
+        token counting must implement this hook.
+
+        Args:
+            prompt: Validated text prompt to measure.
+            other_params: Optional provider-specific parameters.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: Always, in the base class.
+        """
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} does not implement token counting."
         )
 
     def _execute_streaming_provider_call_with_observability(

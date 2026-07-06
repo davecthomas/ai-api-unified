@@ -336,3 +336,53 @@ class TestBedrockStreaming:
         converse_kwargs = client.client.converse_stream.call_args.kwargs
         assert converse_kwargs["modelId"] == "amazon.nova-lite-v1:0"
         assert converse_kwargs["messages"][0]["role"] == "user"
+
+
+class TestBedrockCountTokens:
+    """Mocked Bedrock CountTokens call shape and gating."""
+
+    @staticmethod
+    def _build_client() -> Any:
+        pytest.importorskip("boto3")
+        with patch("ai_api_unified.ai_bedrock_base.boto3"):
+            from ai_api_unified.completions.ai_bedrock_completions import (
+                AiBedrockCompletions,
+            )
+
+            client = AiBedrockCompletions(model="amazon.nova-lite-v1:0")
+        client.client = Mock()
+        # Normal return with a Bedrock completions client whose SDK client is mocked.
+        return client
+
+    def test_capability_flag_is_on(self) -> None:
+        client = self._build_client()
+        assert client.capabilities.supports_token_counting is True
+
+    def test_count_tokens_returns_provider_count(self) -> None:
+        client = self._build_client()
+        client.client.count_tokens.return_value = {"inputTokens": 42}
+
+        int_count: int = client.count_tokens("How many tokens is this?")
+
+        assert int_count == 42
+        count_kwargs = client.client.count_tokens.call_args.kwargs
+        assert count_kwargs["modelId"] == "amazon.nova-lite-v1:0"
+        assert "converse" in count_kwargs["input"]
+        assert count_kwargs["input"]["converse"]["messages"][0]["role"] == "user"
+
+    def test_empty_prompt_raises(self) -> None:
+        client = self._build_client()
+        with pytest.raises(ValueError, match="cannot be empty"):
+            client.count_tokens("   ")
+
+
+class TestBaseCountTokensGate:
+    """Base template gating for count_tokens on non-supporting providers."""
+
+    def test_non_supporting_model_raises(self) -> None:
+        client = _StubCompletions()
+        with pytest.raises(
+            AiProviderCapabilityUnsupportedError,
+            match="does not support provider-side token counting",
+        ):
+            client.count_tokens("hello")
