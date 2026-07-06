@@ -1,4 +1,4 @@
-# ai-api-unified 2.5.0
+# ai-api-unified 2.7.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -666,8 +666,10 @@ Before publishing:
 
 1. Bump the version in `pyproject.toml`.
 2. Bump the version in `src/ai_api_unified/__version__.py`.
-3. Ensure the working tree is clean.
-4. Ensure your PyPI token is configured for Poetry.
+3. Bump the version in the `README.md` title heading (line 1).
+4. Run `poetry run pytest tests/test_version_sync.py` to confirm all three agree.
+5. Ensure the working tree is clean.
+6. Ensure your PyPI token is configured for Poetry.
 
 Publish with the checked-in script:
 
