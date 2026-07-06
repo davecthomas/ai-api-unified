@@ -288,6 +288,34 @@ class TestGoogleEmbeddingsCapabilities:
         assert "config" not in embed_kwargs
 
 
+class TestOpenAIEmbeddingsFactoryDefaults:
+    """Factory-style falsy model/dimensions inputs resolve to model defaults."""
+
+    @staticmethod
+    def _build_client(model: str, dimensions: int) -> Any:
+        pytest.importorskip("openai")
+        import os
+        from ai_api_unified.embeddings.ai_openai_embeddings import AiOpenAIEmbeddings
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            # Normal return with an OpenAI embeddings client built factory-style.
+            return AiOpenAIEmbeddings(model=model, dimensions=dimensions)
+
+    def test_zero_dimensions_resolves_to_model_default(self) -> None:
+        client = self._build_client("text-embedding-3-small", 0)
+        assert client.dimensions == 1536
+
+    def test_empty_model_resolves_to_default_model(self) -> None:
+        client = self._build_client("", 0)
+        assert client.embedding_model == "text-embedding-3-small"
+        assert client.dimensions == 1536
+
+    def test_explicit_values_win(self) -> None:
+        client = self._build_client("text-embedding-3-large", 256)
+        assert client.embedding_model == "text-embedding-3-large"
+        assert client.dimensions == 256
+
+
 class TestOpenAIEmbeddingsCapabilities:
     """OpenAI capabilities descriptor."""
 
