@@ -27,6 +27,11 @@ from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
 )
+from ..pricing.pricing_registry import (
+    PROVIDER_OPENAI,
+    enforce_model_lifecycle,
+    get_model_pricing,
+)
 
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -54,6 +59,9 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
 
     # Context window sizes (max tokens each model can handle)
     DICT_OPENAI_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
+        # --- GPT-5.x current family (API) ---
+        "gpt-5.4": 400_000,
+        "gpt-5.1-codex-max": 400_000,
         # --- GPT-5 Family (API) ---
         "gpt-5": 400_000,
         "gpt-5-mini": 400_000,
@@ -94,23 +102,8 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
         },
     }
 
-    # dollars per 1 k tokens for each supported model
-    DICT_OPENAI_PRICES: ClassVar[dict[str, float]] = {
-        # --- GPT-5 Family (Aug 2025 release, latest generation) ---
-        "gpt-5": 0.0100,  # $0.010 / 1K tokens  (input+output, flagship tier)
-        "gpt-5-mini": 0.0040,  # $0.004 / 1K tokens
-        "gpt-5-nano": 0.0015,  # $0.0015 / 1K tokens  (lowest cost, speed optimized)
-        # --- GPT-4.1 Family (Apr 2025, still supported) ---
-        "gpt-4.1": 0.0060,  # $0.006 / 1K tokens
-        "gpt-4.1-mini": 0.0020,  # $0.002 / 1K tokens
-        "gpt-4.1-nano": 0.0001,  # $0.0001 / 1K tokens (experimental low-cost tier)
-        # --- o4 Reasoning Series (active) ---
-        "o4-mini": 0.0010,  # $0.001 / 1K tokens
-        "o4-mini-high": 0.0025,  # $0.0025 / 1K tokens (reasoning enhanced variant)
-        # --- GPT-4o Omni Series (superseded by GPT-5, not formally deprecated) ---
-        "gpt-4o": 0.0050,  # $0.005 / 1K tokens
-        "gpt-4o-mini": 0.0005,  # $0.0005 / 1K tokens
-    }
+    # Pricing now lives in the pricing registry (single source of truth), keyed
+    # by (provider, model) with split input/output/cached rates and provenance.
 
     @classmethod
     def for_model(cls, model_name: str) -> "AICompletionsCapabilitiesOpenAI":
@@ -127,7 +120,10 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
         if ctx_len is not None:
             capabilities["context_window_length"] = ctx_len
 
-        # 2) Family properties: map by prefix to avoid duplicating per-model conditionals
+        # 2) Pricing from the central registry (single source of truth)
+        capabilities["pricing"] = get_model_pricing(PROVIDER_OPENAI, normalized_name)
+
+        # 3) Family properties: map by prefix to avoid duplicating per-model conditionals
         if normalized_name.startswith("gpt-5"):
             capabilities.update(cls._OPENAI_FAMILY_PROPERTIES["gpt-5"])
         elif normalized_name.startswith("gpt-4.1"):
@@ -222,6 +218,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         )
         AIBaseCompletions.__init__(self, model=self.completions_model, **kwargs)
         self.model = self.completions_model
+        enforce_model_lifecycle(PROVIDER_OPENAI, self.completions_model)
         self._capabilities: AICompletionsCapabilitiesOpenAI = (
             AICompletionsCapabilitiesOpenAI.for_model(self.completions_model)
         )
@@ -236,8 +233,11 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
     def list_model_names(self) -> list[str]:
         # Updated as of Aug 2025 based on OpenAI announcements and docs
         return [
-            # --- GPT-5 Family (current, released Aug 2025) ---
-            "gpt-5",  # latest flagship
+            # --- GPT-5.x current family ---
+            "gpt-5.4",  # current workhorse
+            "gpt-5.1-codex-max",  # coding-optimized, large context
+            # --- GPT-5 Family (previous generation, still available) ---
+            "gpt-5",  # flagship
             "gpt-5-mini",  # smaller, cheaper variant
             "gpt-5-nano",  # lowest cost, optimized for speed
             # --- GPT-4.1 Family (still supported, introduced Apr 2025) ---
@@ -252,16 +252,6 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             "gpt-4o-mini",  # cheaper multimodal variant
             # Note: OpenAI has not yet announced deprecation, but GPT-5 is the successor.
         ]
-
-    @property
-    def price_per_1k_tokens(self) -> float:
-        """
-        Look up the cost-per-1 k tokens for this model.
-        Returns 0.0 if unknown (no guard).
-        """
-        return AICompletionsCapabilitiesOpenAI.DICT_OPENAI_PRICES.get(
-            self.completions_model, 0.0
-        )
 
     @property
     def max_context_tokens(self) -> int:

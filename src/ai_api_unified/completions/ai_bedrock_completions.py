@@ -3,7 +3,7 @@
 import json
 import logging
 from collections.abc import Iterator
-from typing import Any, ClassVar, Type
+from typing import Any, Type
 
 from pydantic import ValidationError
 
@@ -20,6 +20,11 @@ from ..ai_bedrock_base import AIBedrockBase, ClientError
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
+)
+from ..pricing.pricing_registry import (
+    PROVIDER_BEDROCK,
+    enforce_model_lifecycle,
+    get_model_pricing,
 )
 from ..util.env_settings import EnvSettings
 
@@ -49,6 +54,7 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
             supported_data_types=[SupportedDataType.TEXT, SupportedDataType.IMAGE],
             supports_streaming=True,
             supports_token_counting=True,
+            pricing=get_model_pricing(PROVIDER_BEDROCK, model_name),
         )
 
 
@@ -66,6 +72,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             else settings.get("COMPLETIONS_MODEL_NAME", "amazon.nova-lite-v1:0")
         )
         self.completions_model: str = resolved_model
+        enforce_model_lifecycle(PROVIDER_BEDROCK, resolved_model)
         AIBedrockBase.__init__(self, model=resolved_model, **kwargs)
         AIBaseCompletions.__init__(self, model=resolved_model, **kwargs)
         # Reuse the existing retry schedule from the base but allow overrides via kwargs
@@ -81,29 +88,12 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
         return self.DICT_CONTEXT_WINDOWS.get(self.completions_model, 0)
 
-    @property
-    def price_per_1k_tokens(self) -> float:
-        """
-        Look up the cost-per-1 k tokens for this model.
-        Returns 0.0 if unknown (no guard).
-        """
-        return self.DICT_PRICES.get(self.completions_model, 0.0)
-
     DICT_CONTEXT_WINDOWS: dict[str, int] = {
         "amazon.nova-micro-v1:0": 4_096_000,
         "amazon.nova-lite-v1:0": 8_192_000,
         "amazon.nova-pro-v1:0": 16_384_000,
         "amazon.nova-premier-v1:0": 32_768_000,
         "us.anthropic.claude-3-5-haiku-20241022-v1:0": 8_192_000,
-    }
-
-    # dollars per 1 k tokens for each supported model
-    DICT_PRICES: ClassVar[dict[str, float]] = {
-        "amazon.nova-micro-v1:0": 0.0004,
-        "amazon.nova-lite-v1:0": 0.0008,
-        "amazon.nova-pro-v1:0": 0.0016,
-        "amazon.nova-premier-v1:0": 0.0032,
-        "us.anthropic.claude-3-5-haiku-20241022-v1:0": 0.0015,
     }
 
     @property

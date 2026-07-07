@@ -56,6 +56,7 @@ from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
 )
+from ..pricing.pricing_registry import PROVIDER_GOOGLE, enforce_model_lifecycle
 from ..util.env_settings import EnvSettings
 from .ai_google_gemini_capabilities import (
     AICompletionsCapabilitiesGoogle,
@@ -84,54 +85,27 @@ STRUCTURED_DEFAULT_TOP_P: float = 0.8
 #  - Gemini 2.5 Flash-Lite: $0.10 / 1M input tokens → 0.00010 / 1k
 #  - Gemini 2.0 Flash: $0.15 / 1M input tokens → 0.00015 / 1k
 #  - Gemini 2.0 Flash-Lite: $0.075 / 1M input tokens → 0.000075 / 1k
+# Context window and status only. Pricing now lives in the pricing registry
+# (single source of truth); lifecycle (deprecated/retired) is enforced there.
 GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
     # Latest stable models
-    "gemini-2.5-pro": {
-        "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.00125,
-        "status": "Latest Stable",
-    },
-    "gemini-2.5-flash": {
-        "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.00030,
-        "status": "Latest Stable",
-    },
+    "gemini-2.5-pro": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
+    "gemini-2.5-flash": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
     "gemini-2.5-flash-lite": {
         "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.00010,
         "status": "Latest Stable",
     },
-    "gemini-2.0-flash-lite": {
-        "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.000075,
-        "status": "Latest Stable",
-    },
-    "gemini-2.0-flash": {
-        "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.00015,
-        "status": "Latest Stable",
-    },
-    "gemini-2.0-flash-001": {
-        "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.00015,
-        "status": "Latest Stable",
-    },
+    # Deprecated (still functional; the registry warns and names a replacement).
+    "gemini-2.0-flash-lite": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
+    "gemini-2.0-flash": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
+    "gemini-2.0-flash-001": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
     "gemini-2.0-flash-lite-001": {
         "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.000075,
-        "status": "Latest Stable",
+        "status": "Deprecated",
     },
-    # Legacy stable models (restricted for new projects)
-    "gemini-1.5-pro-002": {
-        "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.00125,  # converted from $0.0003125 per 1k characters
-        "status": "Legacy Stable (restricted for new projects)",
-    },
-    "gemini-1.5-flash-002": {
-        "max_context_tokens": 1_048_576,
-        "price_per_1k_tokens": 0.000075,  # converted from $0.00001875 per 1k characters
-        "status": "Legacy Stable (restricted for new projects)",
-    },
+    # gemini-1.5-pro-002 and gemini-1.5-flash-002 were removed: both are retired
+    # by Google (requests return 404). The pricing registry keeps RETIRED
+    # lifecycle entries so a request for them fails fast with a clear error.
 }
 
 
@@ -164,6 +138,10 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         self.completions_model: str = model or self.env.get_setting(
             "COMPLETIONS_MODEL_NAME", DEFAULT_COMPLETIONS_MODEL
         )
+
+        # Apply lifecycle policy on the requested model before any fallback so a
+        # retired model fails fast instead of being silently swapped.
+        enforce_model_lifecycle(PROVIDER_GOOGLE, self.completions_model)
 
         # Fallback to a known working model if the specified one isn't available
         if self.completions_model not in GEMINI_MODEL_SPECS:
@@ -212,13 +190,6 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         return GEMINI_MODEL_SPECS.get(
             self.completions_model, GEMINI_MODEL_SPECS[DEFAULT_FALLBACK_MODEL]
         )["max_context_tokens"]
-
-    @property
-    def price_per_1k_tokens(self) -> float:
-        """Return the price per 1000 tokens for the current model."""
-        return GEMINI_MODEL_SPECS.get(
-            self.completions_model, GEMINI_MODEL_SPECS[DEFAULT_FALLBACK_MODEL]
-        )["price_per_1k_tokens"]
 
     def send_prompt(
         self,

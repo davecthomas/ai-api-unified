@@ -8,6 +8,7 @@ from ..ai_base import (
     AICompletionsPromptParamsBase,
     SupportedDataType,
 )
+from ..pricing.pricing_registry import PROVIDER_GOOGLE, get_model_pricing
 
 
 class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
@@ -77,6 +78,7 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
                 }
             )
 
+        capabilities["pricing"] = get_model_pricing(PROVIDER_GOOGLE, model_name)
         return cls(**capabilities)
 
 

@@ -1,4 +1,4 @@
-# ai-api-unified 2.8.0
+# ai-api-unified 2.9.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -199,6 +199,37 @@ uses the Responses API, OpenAI's successor to Chat Completions. Both implement
 `send_prompt`, `strict_schema_prompt`, and
 `send_prompt_streaming`. The Responses engine is text-only for now; use the
 `openai` engine for image inputs.
+
+### Model pricing
+
+Each model's rates are exposed through `capabilities.pricing` as a structured
+`AIModelPricing`: separate per-1M input, output, and cached-input rates (a
+`Decimal`), with an effective date, source, and confidence. Compute the cost of
+a call from the token counts the provider reports:
+
+```python
+client = AIFactory.get_ai_completions_client(model_name="gpt-5.4")
+pricing = client.capabilities.pricing
+print(pricing.token_rates.input_per_1m, pricing.token_rates.output_per_1m)
+
+usd = client.compute_completion_cost(input_tokens=1200, output_tokens=800)
+```
+
+Embeddings clients expose `compute_embedding_cost(input_tokens=...)`. The rate
+tables live in a single pricing registry (`ai_api_unified.pricing`) keyed by
+`(provider, model)`; see `docs/pricing_research.md` for the full table and
+sources. The blended `price_per_1k_tokens` and `calculate_cost` are deprecated
+shims over the split rates.
+
+### Deprecated and retired models
+
+The pricing registry also carries model lifecycle status. Requesting a
+**retired** model (one the provider no longer serves) raises
+`AiProviderConfigurationError` at construction and names a replacement,
+surfacing the problem at setup. Requesting a **deprecated** model logs a
+warning and emits a `DeprecationWarning` once per process, naming the sunset
+date and replacement, then proceeds. Set `AI_STRICT_DEPRECATIONS=1` to escalate
+deprecated models to the same construction-time error (useful in CI).
 
 ### Embeddings
 
@@ -552,6 +583,7 @@ Typical factory failure modes:
 - selected provider extra is not installed: `AiProviderDependencyUnavailableError`
 - provider load/runtime failure: `AiProviderRuntimeError`
 - input modality unsupported by the configured embedding model: `AiProviderCapabilityUnsupportedError`
+- retired model requested (or deprecated model under `AI_STRICT_DEPRECATIONS`): `AiProviderConfigurationError`
 
 ## Middleware
 
