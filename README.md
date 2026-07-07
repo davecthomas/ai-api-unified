@@ -231,7 +231,11 @@ Models catalogued for the `claude` engine (alias model IDs):
 per model include the context window (1M tokens except `claude-haiku-4-5` at
 200K), streaming, provider-side token counting, image inputs, and registry
 pricing. Structured output uses the Messages API JSON-schema response format,
-so `strict_schema_prompt` works on every catalogued model.
+so `strict_schema_prompt` works on every catalogued model. On
+`claude-fable-5`, whose thinking is always on and counts against `max_tokens`,
+pass a `max_response_tokens` well above the 2048 default so the budget covers
+thinking plus the JSON body. Image attachments are capped at Anthropic's 5MB
+per-image limit.
 
 ### Model pricing
 

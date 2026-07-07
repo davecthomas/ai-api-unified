@@ -331,10 +331,11 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             "claude-haiku-4-5",
             _tok("1.00", "5.00", "0.10", _SRC_ANTHROPIC),
         ),
-        # ── Anthropic completions (deprecated) ──────────────────────────────
+        # ── Anthropic completions (deprecated, still billable) ──────────────
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-1",
+            _tok("15.00", "75.00", "1.50", _SRC_ANTHROPIC),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 8, 5),
             replacement="claude-opus-4-8",

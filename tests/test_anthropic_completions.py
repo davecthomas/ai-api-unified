@@ -94,6 +94,11 @@ class TestCapabilities:
         capabilities = AICompletionsCapabilitiesAnthropic.for_model("claude-haiku-4-5")
         assert capabilities.context_window_length == 200_000
 
+    def test_model_name_is_normalized_at_construction(self) -> None:
+        client = _build_client(model="  Claude-Opus-4-8  ")
+        assert client.completions_model == "claude-opus-4-8"
+        assert client.max_context_tokens == 1_000_000
+
     def test_unknown_model_gets_conservative_default(self) -> None:
         capabilities = AICompletionsCapabilitiesAnthropic.for_model("claude-unknown")
         assert (
@@ -132,6 +137,31 @@ class TestSendPrompt:
         )
 
         assert client.send_prompt("Go") == "Part one. Part two."
+
+    def test_send_prompt_raises_on_refusal(self) -> None:
+        client = _build_client()
+        client.client.messages.create.return_value = Mock(
+            content=[],
+            stop_reason="refusal",
+            usage=Mock(input_tokens=5, output_tokens=0),
+        )
+
+        with pytest.raises(RuntimeError, match="refusal"):
+            client.send_prompt("Do something declined")
+
+    def test_send_prompt_rejects_oversized_image(self) -> None:
+        client = _build_client()
+        params = AICompletionsPromptParamsOpenAI(
+            included_types=[SupportedDataType.IMAGE],
+            included_data=[
+                b"x" * (AiAnthropicCompletions.MAX_IMAGE_BYTES_ANTHROPIC + 1)
+            ],
+            included_mime_types=["image/png"],
+        )
+
+        with pytest.raises(ValueError, match="per-image"):
+            client.send_prompt("Describe", other_params=params)
+        client.client.messages.create.assert_not_called()
 
     def test_send_prompt_builds_image_content(self) -> None:
         client = _build_client()
@@ -217,6 +247,20 @@ class TestStrictSchemaPrompt:
         with pytest.raises(ValueError, match="Invalid JSON response"):
             client.strict_schema_prompt("Extract", _Person)
 
+    def test_schema_walker_ignores_field_named_properties(self) -> None:
+        class _Cfg(AIStructuredPrompt):
+            properties: dict[str, str] | None = None
+
+            @staticmethod
+            def get_prompt(input_text: str = "") -> str:
+                return input_text
+
+        dict_schema = AiAnthropicCompletions._build_output_config_schema(_Cfg)
+
+        assert dict_schema["additionalProperties"] is False
+        # The name->schema mapping must not gain a phantom property.
+        assert "additionalProperties" not in dict_schema["properties"]
+
 
 class TestCountTokens:
     def test_count_tokens_uses_provider_endpoint(self) -> None:
@@ -256,6 +300,13 @@ class TestPricingAndLifecycle:
         haiku = get_model_pricing(PROVIDER_ANTHROPIC, "claude-haiku-4-5")
         assert haiku is not None
         assert haiku.token_rates.input_per_1m == Decimal("1.00")
+
+    def test_deprecated_model_is_still_priced(self) -> None:
+        # Deprecated models keep billing until retirement, so finops cost
+        # enrichment must still find rates for them.
+        pricing = get_model_pricing(PROVIDER_ANTHROPIC, "claude-opus-4-1")
+        assert pricing is not None
+        assert pricing.token_rates.input_per_1m == Decimal("15.00")
 
     def test_retired_model_fails_fast(self) -> None:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):

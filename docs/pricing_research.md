@@ -72,6 +72,7 @@ models split into input / cached-input / output.
 | Anthropic | claude-opus-4-6 | 5.00 | 0.50 | 25.00 | high |
 | Anthropic | claude-sonnet-4-6 | 3.00 | 0.30 | 15.00 | high |
 | Anthropic | claude-haiku-4-5 | 1.00 | 0.10 | 5.00 | high |
+| Anthropic | claude-opus-4-1 ⚠ | 15.00 | 1.50 | 75.00 | high |
 
 Notes: Anthropic rates are the native-API list (added 2026-07 with the `claude`
 engine); the cached-input column is the documented 0.1x prompt-cache read rate,

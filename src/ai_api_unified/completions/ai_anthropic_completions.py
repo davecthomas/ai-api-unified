@@ -103,6 +103,11 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     SEND_PROMPT_MAX_TOKENS: ClassVar[int] = 16_000
     # Streaming has no timeout concern; give the model room.
     STREAMING_MAX_TOKENS: ClassVar[int] = 64_000
+    # Anthropic rejects images above 5MB per image, below the library-wide
+    # 20MB attachment cap, so this engine enforces the tighter limit locally.
+    MAX_IMAGE_BYTES_ANTHROPIC: ClassVar[int] = 5_000_000
+    STOP_REASON_REFUSAL: ClassVar[str] = "refusal"
+    STOP_REASON_MAX_TOKENS: ClassVar[str] = "max_tokens"
 
     def __init__(self, model: str = "", **kwargs: Any):
         """
@@ -113,10 +118,11 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             model: The Claude model to use; falls back to COMPLETIONS_MODEL_NAME.
         """
         AIAnthropicBase.__init__(self, **kwargs)
-        explicit_model: str = model.strip() if model else ""
-        self.completions_model: str = explicit_model or self.env.get_setting(
+        raw_model: str = model or self.env.get_setting(
             "COMPLETIONS_MODEL_NAME", self.DEFAULT_COMPLETIONS_MODEL
         )
+        # Normalize once so lifecycle, context, and pricing lookups agree.
+        self.completions_model: str = raw_model.strip().lower()
         AIBaseCompletions.__init__(self, model=self.completions_model, **kwargs)
         self.model = self.completions_model
         enforce_model_lifecycle(PROVIDER_ANTHROPIC, self.completions_model)
@@ -167,13 +173,18 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         # Anthropic recommends placing media blocks before the text block.
         content_parts: list[dict[str, Any]] = []
         for (
-            _index,
+            index,
             media_type,
             media_bytes,
             mime_type,
         ) in other_params.iter_included_media():
             if media_type is not SupportedDataType.IMAGE:
                 continue
+            if len(media_bytes) > self.MAX_IMAGE_BYTES_ANTHROPIC:
+                raise ValueError(
+                    f"Image attachment {index} exceeds Anthropic's per-image "
+                    f"limit of {self.MAX_IMAGE_BYTES_ANTHROPIC} bytes."
+                )
             encoded_bytes: str = base64.b64encode(media_bytes).decode("ascii")
             content_parts.append(
                 {
@@ -224,20 +235,33 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
 
         The structured-output format requires additionalProperties to be false
         on every object node; Pydantic does not emit that, so this walks the
-        generated schema and sets it.
+        generated schema and sets it. The walk recurses only through known
+        schema-bearing keywords so property names like "properties" or
+        "additionalProperties" on caller models are never mistaken for schema
+        nodes.
         """
         dict_schema: dict[str, Any] = copy.deepcopy(response_model.model_json_schema())
 
         def _close_objects(node: Any) -> None:
-            if isinstance(node, dict):
-                if node.get("type") == "object" or "properties" in node:
-                    node.setdefault("additionalProperties", False)
-                # Loop through nested schema nodes so every object is closed.
-                for value in node.values():
-                    _close_objects(value)
-            elif isinstance(node, list):
-                for item in node:
-                    _close_objects(item)
+            if not isinstance(node, dict):
+                return
+            if node.get("type") == "object":
+                node.setdefault("additionalProperties", False)
+            # Recurse only through schema-bearing keywords; "properties" and
+            # "$defs" values are name->schema mappings, the rest are schemas
+            # or schema lists.
+            for mapping_key in ("properties", "$defs", "patternProperties"):
+                mapping = node.get(mapping_key)
+                if isinstance(mapping, dict):
+                    for child_schema in mapping.values():
+                        _close_objects(child_schema)
+            for schema_key in ("items", "additionalProperties", "not"):
+                _close_objects(node.get(schema_key))
+            for list_key in ("anyOf", "allOf", "oneOf", "prefixItems"):
+                list_schemas = node.get(list_key)
+                if isinstance(list_schemas, list):
+                    for child_schema in list_schemas:
+                        _close_objects(child_schema)
 
         _close_objects(dict_schema)
         return dict_schema
@@ -281,7 +305,23 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_content}],
             )
+            str_stop_reason: str = str(getattr(response, "stop_reason", "") or "")
+            if str_stop_reason == self.STOP_REASON_REFUSAL:
+                # Safety classifiers return HTTP 200 with an empty or partial
+                # body; surfacing that as a successful completion would be
+                # indistinguishable from a real answer.
+                raise RuntimeError(
+                    f"Anthropic declined the request for model "
+                    f"'{self.completions_model}' (stop_reason=refusal)."
+                )
             raw_output_text: str = self._extract_response_text(response)
+            if str_stop_reason == self.STOP_REASON_MAX_TOKENS:
+                _LOGGER.warning(
+                    "Anthropic response for model '%s' was truncated at the "
+                    "%s-token max_tokens cap.",
+                    self.completions_model,
+                    self.SEND_PROMPT_MAX_TOKENS,
+                )
             prompt_tokens, completion_tokens, total_tokens = (
                 self._extract_anthropic_usage(response)
             )
@@ -289,7 +329,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             return AiApiObservedCompletionsResultModel(
                 return_value=raw_output_text,
                 raw_output_text=raw_output_text,
-                finish_reason=str(getattr(response, "stop_reason", "") or ""),
+                finish_reason=str_stop_reason,
                 provider_prompt_tokens=prompt_tokens,
                 provider_completion_tokens=completion_tokens,
                 provider_total_tokens=total_tokens,
@@ -322,6 +362,11 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         """
         Generate structured output via the Messages API output_config JSON-schema
         format and parse the response into the specified Pydantic model.
+
+        On models with always-on thinking (claude-fable-5), thinking tokens
+        count against max_tokens; pass a max_response_tokens well above the
+        2048 shared default there so the budget covers thinking plus the JSON
+        body.
 
         Args:
             prompt: The prompt string to send.
@@ -376,8 +421,13 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 output_config=dict_output_config,
             )
             str_finish_reason: str = str(getattr(response, "stop_reason", "") or "")
+            if str_finish_reason == self.STOP_REASON_REFUSAL:
+                raise RuntimeError(
+                    f"Anthropic declined the request for model "
+                    f"'{self.completions_model}' (stop_reason=refusal)."
+                )
             raw_output_text: str = self._extract_response_text(response)
-            if str_finish_reason == "max_tokens":
+            if str_finish_reason == self.STOP_REASON_MAX_TOKENS:
                 self._raise_structured_token_limit_error(
                     provider_name=self.PROVIDER_VENDOR_ANTHROPIC,
                     model_name=self.completions_model,
@@ -495,14 +545,20 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                             yield str_chunk_text
                 elif str_event_type == "message_start":
                     usage = getattr(getattr(event, "message", None), "usage", None)
-                    dict_stream_state["int_input_tokens"] = getattr(
-                        usage, "input_tokens", None
-                    )
+                    int_input_tokens: int | None = getattr(usage, "input_tokens", None)
+                    if int_input_tokens is not None:
+                        dict_stream_state["int_input_tokens"] = int_input_tokens
                 elif str_event_type == "message_delta":
                     delta = getattr(event, "delta", None)
                     str_stop_reason: str | None = getattr(delta, "stop_reason", None)
                     if str_stop_reason is not None:
                         dict_stream_state["finish_reason"] = str(str_stop_reason)
+                        if str(str_stop_reason) == self.STOP_REASON_REFUSAL:
+                            _LOGGER.warning(
+                                "Anthropic declined mid-stream for model '%s' "
+                                "(stop_reason=refusal); streamed text is partial.",
+                                self.completions_model,
+                            )
                     usage = getattr(event, "usage", None)
                     int_output_tokens: int | None = getattr(
                         usage, "output_tokens", None
