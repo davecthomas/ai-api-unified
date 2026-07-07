@@ -31,12 +31,16 @@ from ai_api_unified.middleware.observability_runtime import (
     OBSERVABILITY_DIRECTION_OUTPUT,
     ORIGINATING_CALLER_ID_SOURCE_NONE,
 )
+from ai_api_unified.pricing.model_pricing import AIModelPricing
+from ai_api_unified.pricing.pricing_registry import get_model_pricing
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 OBSERVABILITY_LOGGER_NAME: str = "ai_api_unified.middleware.observability"
+COST_LOGGER_NAME: str = "ai_api_unified.observability.cost"
 OBSERVABILITY_EVENT_INPUT: str = "ai_api_call_input"
 OBSERVABILITY_EVENT_OUTPUT: str = "ai_api_call_output"
 OBSERVABILITY_EVENT_ERROR: str = "ai_api_call_error"
+OBSERVABILITY_EVENT_COST: str = "ai_api_call_cost"
 OBSERVABILITY_MIDDLEWARE_NAME: str = "observability"
 OBSERVABILITY_LOG_FAILURE_WARNING_MESSAGE: str = (
     "observability_log_failed stage=%s error_type=%s"
@@ -250,6 +254,9 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         self._bool_enabled: bool = True
         self.event_logger: logging.Logger = logging.getLogger(OBSERVABILITY_LOGGER_NAME)
         self.metrics_logger: logging.Logger = logging.getLogger(METRICS_LOGGER_NAME)
+        self.cost_logger: logging.Logger = logging.getLogger(
+            observability_settings.emit_cost_topic or COST_LOGGER_NAME
+        )
         self.int_log_level: int = DICT_STR_LOG_LEVELS.get(
             observability_settings.log_level,
             logging.INFO,
@@ -308,6 +315,12 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         Returns:
             None after the metadata-only output event and timing metric have been handled.
         """
+        # Cost enrichment fires whenever emit_cost is on, independent of the
+        # output-direction gate, so cost can be captured even with output events off.
+        self._maybe_emit_cost_event(
+            call_context=call_context,
+            call_result_summary=call_result_summary,
+        )
         if not self._should_emit_direction(
             call_context=call_context,
             direction=OBSERVABILITY_DIRECTION_OUTPUT,
@@ -323,6 +336,75 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             ),
         )
         # Normal return after output-side observability handling.
+        return None
+
+    def _maybe_emit_cost_event(
+        self,
+        *,
+        call_context: AiApiCallContextModel,
+        call_result_summary: AiApiCallResultSummaryModel,
+    ) -> None:
+        """
+        Emits one financial-ops cost event when cost enrichment is enabled.
+
+        Computes USD cost from the provider-reported token counts and the
+        model's registry pricing, then logs a structured event on the cost topic
+        with pricing provenance. Skips silently when disabled, the model is
+        unpriced, or no token counts are available.
+
+        Args:
+            call_context: Immutable provider-boundary call metadata for the call.
+            call_result_summary: Scalar provider-result metadata for the call output.
+
+        Returns:
+            None after the cost event has been logged or intentionally skipped.
+        """
+        if not self.observability_settings.emit_cost:
+            # Early return because cost enrichment is disabled.
+            return None
+        if call_context.model_name is None:
+            # Early return because a model is required to resolve pricing.
+            return None
+        pricing: AIModelPricing | None = get_model_pricing(
+            call_context.provider_vendor, call_context.model_name
+        )
+        if pricing is None or pricing.token_rates is None:
+            # Early return because this model has no token pricing on record.
+            return None
+        int_input_tokens: int | None = call_result_summary.provider_prompt_tokens
+        int_output_tokens: int | None = call_result_summary.provider_completion_tokens
+        if int_input_tokens is None and int_output_tokens is None:
+            # Early return because there is no usage to cost.
+            return None
+        usd_cost = pricing.compute_token_cost(
+            input_tokens=int_input_tokens or 0,
+            output_tokens=int_output_tokens or 0,
+        )
+        dict_cost_fields: dict[str, object] = {
+            "call_id": call_context.call_id,
+            "event_time_utc": call_context.event_time_utc.isoformat(),
+            "provider": call_context.provider_vendor,
+            "provider_engine": call_context.provider_engine,
+            "model": call_context.model_name,
+            "capability": call_context.capability,
+            "operation": call_context.operation,
+            "caller_id": call_context.originating_caller_id,
+            "input_tokens": int_input_tokens,
+            "output_tokens": int_output_tokens,
+            "cached_input_tokens": None,
+            "usd_cost": str(usd_cost),
+            "currency": pricing.currency,
+            "pricing_effective_date": pricing.effective_date.isoformat(),
+            "pricing_source": pricing.source,
+            "pricing_confidence": pricing.confidence,
+        }
+        self.cost_logger.log(
+            self.int_log_level,
+            OBSERVABILITY_EVENT_LOG_MESSAGE,
+            OBSERVABILITY_EVENT_COST,
+            dict_cost_fields,
+        )
+        # Normal return after cost event logging.
         return None
 
     def on_error(

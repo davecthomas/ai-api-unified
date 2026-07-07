@@ -1,4 +1,4 @@
-# ai-api-unified 2.9.0
+# ai-api-unified 2.10.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -608,6 +608,29 @@ middleware:
 ```
 
 See [`docs/observability_middleware_example.yaml`](docs/observability_middleware_example.yaml) and [`docs/observability_middleware_design.md`](docs/observability_middleware_design.md).
+
+#### Cost tracking (financial-ops)
+
+Set `emit_cost: true` on the observability settings to attach a USD cost to each
+call. Cost is computed from the provider-reported token counts and the model's
+registry pricing (`capabilities.pricing`). The result is emitted as a structured
+event on a dedicated cost topic logger (`ai_api_unified.observability.cost`),
+separate from the observability event stream so handlers can route it
+independently. Each event carries the pricing provenance (effective date,
+source, confidence) so the cost is auditable. Unpriced models are skipped. This
+is observe-only — it never affects program flow.
+
+```yaml
+middleware:
+  - name: 'observability'
+    enabled: true
+    settings:
+      emit_cost: true
+      # emit_cost_topic: 'my.cost.logger'   # optional logger-name override
+```
+
+Cost enrichment fires whenever `emit_cost` is on, even when output events are
+disabled by `direction`. See [`docs/finops_middleware_design.md`](docs/finops_middleware_design.md).
 
 ### PII Redaction
 

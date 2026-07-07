@@ -1079,6 +1079,11 @@ class ObservabilitySettingsModel(BaseModel):
     include_image_byte_count: bool = True
     include_video_byte_count: bool = True
     emit_error_events: bool = True
+    # Financial-ops cost enrichment (observe-only). When enabled, a per-call
+    # cost event is emitted on the cost topic logger; emit_cost_topic overrides
+    # that logger name.
+    emit_cost: bool = False
+    emit_cost_topic: str | None = None
 
     @field_validator(DIRECTION_KEY, mode="before")
     @classmethod
