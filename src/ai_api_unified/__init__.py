@@ -41,6 +41,15 @@ from .ai_base import (
 from .ai_completions_exceptions import StructuredResponseTokenLimitError
 from .ai_provider_exceptions import AiProviderCapabilityUnsupportedError
 from .ai_factory import AIFactory
+from .pricing import (
+    AIModelInfo,
+    AIModelPricing,
+    AITokenRates,
+    ModelLifecycleStatus,
+    PricingUnit,
+    get_model_info,
+    get_model_pricing,
+)
 from .voice.ai_voice_base import AIVoiceBase, AIVoiceCapabilities, AIVoiceSelectionBase
 from .voice.ai_voice_factory import AIVoiceFactory
 from .voice.audio_models import AudioFormat
@@ -69,6 +78,13 @@ __all__: list[str] = [
     "AiProviderCapabilityUnsupportedError",
     "StructuredResponseTokenLimitError",
     "SupportedDataType",
+    "AIModelPricing",
+    "AIModelInfo",
+    "AITokenRates",
+    "ModelLifecycleStatus",
+    "PricingUnit",
+    "get_model_pricing",
+    "get_model_info",
     "AIVoiceSelectionBase",
     "AIVoiceCapabilities",
     "AIVoiceFactory",

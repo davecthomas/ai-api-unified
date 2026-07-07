@@ -45,6 +45,7 @@ from ai_api_unified.middleware.observability_runtime import (
     get_observability_context,
     resolve_originating_caller,
 )
+from ai_api_unified.pricing.model_pricing import AIModelPricing
 from ai_api_unified.middleware.pii_redactor import AiApiPiiMiddleware
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class AICompletionsCapabilitiesBase(BaseModel):
     supports_data_residency_constraint: bool = False
     supports_streaming: bool = False
     supports_token_counting: bool = False
+    pricing: AIModelPricing | None = None
 
 
 class AIIncludedMediaParamsBase(BaseModel):
@@ -232,6 +234,7 @@ class AIEmbeddingsCapabilitiesBase(BaseModel):
     max_images_per_request: int | None = None
     max_video_seconds: int | None = None
     max_audio_seconds: int | None = None
+    pricing: AIModelPricing | None = None
 
 
 # Maps each embeddable media type to the MIME prefixes accepted for it.
@@ -962,6 +965,26 @@ class AIBaseEmbeddings(AIBase):
         # Normal return with text-only default capabilities.
         return AIEmbeddingsCapabilitiesBase(default_dimensions=self.dimensions)
 
+    def compute_embedding_cost(self, *, input_tokens: int) -> float:
+        """
+        Return the USD cost for measured embedding input tokens.
+
+        Uses `capabilities.pricing` (per-1M input rate). Embeddings are input
+        only.
+
+        Args:
+            input_tokens: Provider-reported input tokens embedded.
+
+        Returns:
+            USD cost as a float; 0.0 when the model has no token pricing.
+        """
+        pricing: AIModelPricing | None = self.capabilities.pricing
+        if pricing is None or pricing.token_rates is None:
+            # Early return because this model has no token pricing on record.
+            return 0.0
+        # Normal return with the computed input-token cost.
+        return float(pricing.compute_token_cost(input_tokens=input_tokens))
+
     def _raise_capability_unsupported(self, str_requested_input: str) -> NoReturn:
         """
         Raises the canonical capability error for one unsupported embeddings input.
@@ -1459,13 +1482,51 @@ class AIBaseCompletions(AIBase):
         ...
 
     @property
-    @abstractmethod
     def price_per_1k_tokens(self) -> float:
         """
-        USD cost for 1 000 tokens (in+out) on this model.
-        Subclasses **must** override.
+        Deprecated blended USD cost for 1,000 tokens (input+output mean).
+
+        Retained for back-compat. Prefer `capabilities.pricing` for the split
+        input/output/cached rates and `compute_completion_cost(...)` for a real
+        cost from measured usage. Returns 0.0 when the model is not priced.
         """
-        ...
+        pricing: AIModelPricing | None = self.capabilities.pricing
+        # Normal return with a registry-backed blended rate, or 0.0 when unpriced.
+        return pricing.blended_per_1k_tokens() if pricing is not None else 0.0
+
+    def compute_completion_cost(
+        self,
+        *,
+        input_tokens: int,
+        output_tokens: int = 0,
+        cached_input_tokens: int = 0,
+    ) -> float:
+        """
+        Return the USD cost for measured token usage using split model rates.
+
+        Uses `capabilities.pricing` (per-1M input/output/cached rates). This is
+        the accurate replacement for the blended `price_per_1k_tokens`.
+
+        Args:
+            input_tokens: Non-cached input tokens billed at the input rate.
+            output_tokens: Output tokens billed at the output rate.
+            cached_input_tokens: Input tokens billed at the cached-input rate.
+
+        Returns:
+            USD cost as a float; 0.0 when the model has no token pricing.
+        """
+        pricing: AIModelPricing | None = self.capabilities.pricing
+        if pricing is None or pricing.token_rates is None:
+            # Early return because this model has no token pricing on record.
+            return 0.0
+        # Normal return with the computed cost from the split rates.
+        return float(
+            pricing.compute_token_cost(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_tokens=cached_input_tokens,
+            )
+        )
 
     @staticmethod
     def generate_prompt_addendum_json_schema_instruction(

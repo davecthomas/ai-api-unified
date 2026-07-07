@@ -16,6 +16,11 @@ from ..ai_base import (
     AIEmbeddingsCapabilitiesBase,
     AiApiObservedEmbeddingsResultModel,
 )
+from ..pricing.pricing_registry import (
+    PROVIDER_OPENAI,
+    enforce_model_lifecycle,
+    get_model_pricing,
+)
 from ..util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -31,6 +36,7 @@ class AIEmbeddingsCapabilitiesOpenAI(AIEmbeddingsCapabilitiesBase):
     @classmethod
     def for_model(cls, model_name: str) -> "AIEmbeddingsCapabilitiesOpenAI":
         """Create capabilities instance for a specific OpenAI embedding model."""
+        pricing = get_model_pricing(PROVIDER_OPENAI, model_name)
         if model_name == "text-embedding-3-large":
             return cls(
                 default_dimensions=3072,
@@ -39,6 +45,7 @@ class AIEmbeddingsCapabilitiesOpenAI(AIEmbeddingsCapabilitiesBase):
                 recommended_dimensions=[256, 1024, 3072],
                 max_input_tokens=8191,
                 max_batch_size=2048,
+                pricing=pricing,
             )
         if model_name == "text-embedding-3-small":
             return cls(
@@ -48,12 +55,14 @@ class AIEmbeddingsCapabilitiesOpenAI(AIEmbeddingsCapabilitiesBase):
                 recommended_dimensions=[512, 1536],
                 max_input_tokens=8191,
                 max_batch_size=2048,
+                pricing=pricing,
             )
         # text-embedding-ada-002 and unknown models: fixed 1536 dimensions.
         return cls(
             default_dimensions=1536,
             max_input_tokens=8191,
             max_batch_size=2048,
+            pricing=pricing,
         )
 
 
@@ -62,11 +71,12 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
     Handles OpenAI embedding operations.
     """
 
-    # Static list of embedding models with their settings
+    # Default output dimensions per model. Pricing now lives in the pricing
+    # registry (single source of truth), not here.
     embedding_models: dict = {
-        "text-embedding-ada-002": {"dimensions": 1536, "pricing_per_token": 0.0004},
-        "text-embedding-3-small": {"dimensions": 1536, "pricing_per_token": 0.00025},
-        "text-embedding-3-large": {"dimensions": 3072, "pricing_per_token": 0.0005},
+        "text-embedding-ada-002": {"dimensions": 1536},
+        "text-embedding-3-small": {"dimensions": 1536},
+        "text-embedding-3-large": {"dimensions": 3072},
     }
 
     embedding_model_default = "text-embedding-3-small"
@@ -92,6 +102,7 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
         # EMBEDDING_DIMENSIONS are unset; fall back to the model's own default
         # so the provider never receives model="" or dimensions=0 (a 400).
         self.embedding_model = model or self.embedding_model_default
+        enforce_model_lifecycle(PROVIDER_OPENAI, self.embedding_model)
         self.dimensions = (
             dimensions
             or AIEmbeddingsCapabilitiesOpenAI.for_model(
@@ -117,19 +128,12 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
 
     def calculate_cost(self, num_tokens: int) -> float:
         """
-        Calculate the cost of generating embeddings based on the number of tokens.
+        Deprecated. Calculate embedding cost for a token count.
 
-        Args:
-            num_tokens (int): The number of tokens used.
-
-        Returns:
-            float: The calculated cost.
+        Prefer `compute_embedding_cost(input_tokens=...)`, which uses the
+        registry-backed per-1M rate. This shim delegates to it.
         """
-        pricing_per_token: float = self.embedding_models[self.embedding_model].get(
-            "pricing_per_token", 0.0
-        )
-        cost = pricing_per_token * num_tokens
-        return cost
+        return self.compute_embedding_cost(input_tokens=num_tokens)
 
     def generate_embeddings(self, text: str) -> dict[str, Any]:
         """

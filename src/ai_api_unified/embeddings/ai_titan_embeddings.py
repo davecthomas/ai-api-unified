@@ -15,6 +15,11 @@ from ..ai_base import (
     AIEmbeddingsCapabilitiesBase,
     AiApiObservedEmbeddingsResultModel,
 )
+from ..pricing.pricing_registry import (
+    PROVIDER_BEDROCK,
+    enforce_model_lifecycle,
+    get_model_pricing,
+)
 from ..util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -30,6 +35,7 @@ class AIEmbeddingsCapabilitiesTitan(AIEmbeddingsCapabilitiesBase):
     @classmethod
     def for_model(cls, model_name: str) -> "AIEmbeddingsCapabilitiesTitan":
         """Create capabilities instance for a specific Titan embedding model."""
+        pricing = get_model_pricing(PROVIDER_BEDROCK, model_name)
         if "titan-embed-text-v2" in model_name:
             return cls(
                 default_dimensions=1024,
@@ -37,11 +43,13 @@ class AIEmbeddingsCapabilitiesTitan(AIEmbeddingsCapabilitiesBase):
                 max_dimensions=1024,
                 recommended_dimensions=[256, 512, 1024],
                 max_input_tokens=8192,
+                pricing=pricing,
             )
         # titan-embed-text-v1 and unknown models: fixed 1536 dimensions.
         return cls(
             default_dimensions=1536,
             max_input_tokens=8192,
+            pricing=pricing,
         )
 
 
@@ -62,6 +70,7 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
         settings = EnvSettings()  # Load settings from the EnvSettings class
 
         self.embedding_model = model if model else "amazon.titan-embed-text-v2:0"
+        enforce_model_lifecycle(PROVIDER_BEDROCK, self.embedding_model)
         self.dimensions = dimensions if dimensions else 1024
         self.region_name = settings.get("AWS_REGION", "us-east-1")
 
@@ -110,10 +119,10 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
 
     def calculate_cost(self, num_tokens: int) -> float:
         """
-        Stub for Titan cost calculation. Adjust once AWS publishes official pricing.
+        Deprecated. Prefer `compute_embedding_cost(input_tokens=...)`, which uses
+        the registry-backed per-1M rate. This shim delegates to it.
         """
-        cost_per_token = 0.00000002
-        return cost_per_token * num_tokens
+        return self.compute_embedding_cost(input_tokens=num_tokens)
 
     def generate_embeddings(self, text: str) -> dict[str, Any]:
         """

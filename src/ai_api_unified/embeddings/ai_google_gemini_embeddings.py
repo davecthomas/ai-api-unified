@@ -69,6 +69,11 @@ from ..ai_base import (
     AiApiObservedEmbeddingsResultModel,
     SupportedDataType,
 )
+from ..pricing.pricing_registry import (
+    PROVIDER_GOOGLE,
+    enforce_model_lifecycle,
+    get_model_pricing,
+)
 from ..util.env_settings import EnvSettings
 
 GOOGLE_GENAI_ERRORS: object = gerr
@@ -87,6 +92,7 @@ class AIEmbeddingsCapabilitiesGoogle(AIEmbeddingsCapabilitiesBase):
     @classmethod
     def for_model(cls, model_name: str) -> "AIEmbeddingsCapabilitiesGoogle":
         """Create capabilities instance for a specific Gemini embedding model."""
+        pricing = get_model_pricing(PROVIDER_GOOGLE, model_name)
         if "gemini-embedding-2" in model_name:
             # Natively multimodal: text, images, video, audio, and PDF inputs
             # share one embedding space (stable since April 2026).
@@ -107,6 +113,7 @@ class AIEmbeddingsCapabilitiesGoogle(AIEmbeddingsCapabilitiesBase):
                 max_images_per_request=6,
                 max_video_seconds=120,
                 max_audio_seconds=180,
+                pricing=pricing,
             )
         # gemini-embedding-001 and unknown models: text-only defaults.
         return cls(
@@ -116,6 +123,7 @@ class AIEmbeddingsCapabilitiesGoogle(AIEmbeddingsCapabilitiesBase):
             recommended_dimensions=[768, 1536, 3072],
             max_input_tokens=2048,
             max_batch_size=100,
+            pricing=pricing,
         )
 
 
@@ -161,6 +169,7 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
         self.embedding_model: str = model or self.env.get_setting(
             "EMBEDDING_MODEL_NAME", self.DEFAULT_EMBEDDING_MODEL
         )
+        enforce_model_lifecycle(PROVIDER_GOOGLE, self.embedding_model)
         self.dimensions: int = dimensions or int(
             self.env.get_setting(
                 "EMBEDDING_DIMENSIONS", str(self.DEFAULT_EMBEDDING_DIMENSIONS)
