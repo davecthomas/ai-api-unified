@@ -288,7 +288,9 @@ class AIBase(ABC):
     PROVIDER_VENDOR_GOOGLE = "google"
     PROVIDER_VENDOR_AZURE = "azure"
     PROVIDER_VENDOR_ELEVENLABS = "elevenlabs"
+    PROVIDER_VENDOR_ANTHROPIC = "anthropic"
     PROVIDER_ENGINE_GOOGLE_GEMINI = "google-gemini"
+    PROVIDER_ENGINE_CLAUDE = "claude"
     _observability_middleware: AiApiObservabilityMiddleware | None = None
 
     def __init__(self, model: str | None = None, **kwargs):
@@ -444,6 +446,9 @@ class AIBase(ABC):
             Best-effort provider vendor label derived from the concrete client module or class.
         """
         lower_module_name: str = self.__class__.__module__.lower()
+        if "anthropic" in lower_module_name:
+            # Early return for native Anthropic API clients.
+            return self.PROVIDER_VENDOR_ANTHROPIC
         if "openai" in lower_module_name:
             # Early return for OpenAI-backed clients.
             return self.PROVIDER_VENDOR_OPENAI
@@ -473,6 +478,9 @@ class AIBase(ABC):
             Best-effort provider engine label derived from the concrete client module or class.
         """
         lower_module_name: str = self.__class__.__module__.lower()
+        if "anthropic" in lower_module_name:
+            # Early return for native Anthropic API clients (the claude engine).
+            return self.PROVIDER_ENGINE_CLAUDE
         if "google_gemini" in lower_module_name or "gemini" in lower_module_name:
             # Early return for Gemini-backed clients.
             return self.PROVIDER_ENGINE_GOOGLE_GEMINI

@@ -42,11 +42,13 @@ _SRC_OPENAI: str = "https://developers.openai.com/api/docs/pricing"
 _SRC_GOOGLE: str = "https://ai.google.dev/gemini-api/docs/pricing"
 _SRC_GOOGLE_DEP: str = "https://ai.google.dev/gemini-api/docs/deprecations"
 _SRC_BEDROCK: str = "https://aws.amazon.com/bedrock/pricing/"
+_SRC_ANTHROPIC: str = "https://platform.claude.com/docs/en/about-claude/models/overview"
 
 # Provider labels used as the first half of registry keys.
 PROVIDER_OPENAI: str = "openai"
 PROVIDER_GOOGLE: str = "google"
 PROVIDER_BEDROCK: str = "bedrock"
+PROVIDER_ANTHROPIC: str = "anthropic"
 
 
 def _tok(
@@ -295,6 +297,66 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             PROVIDER_BEDROCK,
             "us.anthropic.claude-3-5-haiku-20241022-v1:0",
             _tok("0.80", "4.00", None, _SRC_BEDROCK),
+        ),
+        # ── Anthropic completions (native API; cached rate is the documented
+        # 0.1x prompt-cache read multiplier; 5-minute cache writes bill 1.25x
+        # and are not modeled) ───────────────────────────────────────────────
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-fable-5",
+            _tok("10.00", "50.00", "1.00", _SRC_ANTHROPIC),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-opus-4-8",
+            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-opus-4-7",
+            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-opus-4-6",
+            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-sonnet-4-6",
+            _tok("3.00", "15.00", "0.30", _SRC_ANTHROPIC),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-haiku-4-5",
+            _tok("1.00", "5.00", "0.10", _SRC_ANTHROPIC),
+        ),
+        # ── Anthropic completions (deprecated) ──────────────────────────────
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-opus-4-1",
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 8, 5),
+            replacement="claude-opus-4-8",
+        ),
+        # ── Anthropic completions (retired: hard 404) ───────────────────────
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-3-7-sonnet-20250219",
+            status=ModelLifecycleStatus.RETIRED,
+            replacement="claude-sonnet-4-6",
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-3-5-haiku-20241022",
+            status=ModelLifecycleStatus.RETIRED,
+            replacement="claude-haiku-4-5",
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-3-opus-20240229",
+            status=ModelLifecycleStatus.RETIRED,
+            replacement="claude-opus-4-8",
         ),
         # ── Bedrock / Titan embeddings ──────────────────────────────────────
         _info(

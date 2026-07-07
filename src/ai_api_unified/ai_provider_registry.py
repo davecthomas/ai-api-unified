@@ -131,6 +131,19 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ),
     (
         AI_PROVIDER_CAPABILITY_COMPLETIONS,
+        "claude",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
+        str_engine="claude",
+        str_module_path=("ai_api_unified.completions.ai_anthropic_completions"),
+        str_class_name="AiAnthropicCompletions",
+        str_required_extra="anthropic",
+        str_consumer_install_command=("poetry add 'ai-api-unified[anthropic]'"),
+        str_local_install_command='poetry install --extras "anthropic"',
+        set_str_dependency_roots={"anthropic"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_COMPLETIONS,
         "anthropic",
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,

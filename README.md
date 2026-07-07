@@ -1,4 +1,4 @@
-# ai-api-unified 2.10.0
+# ai-api-unified 2.11.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -37,7 +37,7 @@ The public entry points are the stable base interfaces and factories:
 
 | Capability  | Stable interface    | Engines                                                                                                                       | Required extra(s)                                    |
 | ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Completions | `AIBaseCompletions` | `openai`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `google_gemini`, `bedrock`                 |
+| Completions | `AIBaseCompletions` | `openai`, `openai-responses`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `anthropic`, `google_gemini`, `bedrock`    |
 | Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`                                                                                            | `openai`, `bedrock`, `google_gemini`                 |
 | Images      | `AIBaseImages`      | `openai`, `google-gemini`, `nova-canvas` and Bedrock image aliases                                                            | `openai`, `google_gemini`, `bedrock`                 |
 | Videos      | `AIBaseVideos`      | `openai`, `google-gemini`, `nova-reel` and Bedrock video aliases                                                              | `openai`, `google_gemini`, `bedrock`                 |
@@ -46,6 +46,7 @@ The public entry points are the stable base interfaces and factories:
 
 Default model guidance in the checked-in OSS env files:
 
+- Anthropic completions: `claude-opus-4-8`
 - Google completions: `gemini-2.5-flash`
 - Google embeddings: `gemini-embedding-001` (text-only) or `gemini-embedding-2` (multimodal)
 - Google images: `imagen-4.0-generate-001`
@@ -71,6 +72,7 @@ Install with one or more provider extras:
 ```bash
 poetry add 'ai-api-unified[google_gemini]'
 poetry add 'ai-api-unified[openai]'
+poetry add 'ai-api-unified[anthropic]'
 poetry add 'ai-api-unified[bedrock,google_gemini]'
 poetry add 'ai-api-unified[google_gemini,video_frames]'
 poetry add 'ai-api-unified[openai,video_frames]'
@@ -100,6 +102,7 @@ poetry install --all-extras --with dev
 | Extra                            | Installs                                                               |
 | -------------------------------- | ---------------------------------------------------------------------- |
 | `openai`                         | OpenAI completions, embeddings, images, and voice                      |
+| `anthropic`                      | Anthropic Claude completions via the native Anthropic API (`claude` engine) |
 | `google_gemini`                  | Google Gemini completions, embeddings, images, and Google voice        |
 | `bedrock`                        | AWS Bedrock completions, Titan embeddings, Bedrock image providers, and Bedrock video providers |
 | `video_frames`                   | Optional frame extraction helpers backed by ImageIO + Pillow           |
@@ -161,7 +164,7 @@ print(response)
 Every completions client exposes a `capabilities` descriptor with a
 `supports_streaming` flag set per model. Models without streaming support raise
 `AiProviderCapabilityUnsupportedError` from `send_prompt_streaming`. OpenAI,
-Google Gemini, and Bedrock chat models all stream:
+Anthropic, Google Gemini, and Bedrock chat models all stream:
 
 ```python
 from ai_api_unified import AIFactory
@@ -181,11 +184,12 @@ boundaries, so use `send_prompt` in PII-redacting deployments.
 
 Providers whose capabilities include `supports_token_counting` can return a
 provider-counted input token total without running inference. Bedrock supports
-this via its `CountTokens` operation; other providers raise
+this via its `CountTokens` operation and the native Anthropic API via its
+`count_tokens` endpoint; other providers raise
 `AiProviderCapabilityUnsupportedError`.
 
 ```python
-client = AIFactory.get_ai_completions_client(completions_engine="nova")
+client = AIFactory.get_ai_completions_client(completions_engine="claude")
 
 if client.capabilities.supports_token_counting:
     print(client.count_tokens("How many tokens is this prompt?"))
@@ -199,6 +203,35 @@ uses the Responses API, OpenAI's successor to Chat Completions. Both implement
 `send_prompt`, `strict_schema_prompt`, and
 `send_prompt_streaming`. The Responses engine is text-only for now; use the
 `openai` engine for image inputs.
+
+### Anthropic Claude engines
+
+Claude models are reachable through two completions engines:
+
+- `claude` — the native Anthropic API (api.anthropic.com) via the official
+  `anthropic` SDK. Requires the `anthropic` extra and `ANTHROPIC_API_KEY`.
+- `anthropic` — Claude on Amazon Bedrock via the Converse API. Requires the
+  `bedrock` extra and AWS credentials.
+
+The two engines expose the same caller-facing API (`send_prompt`,
+`strict_schema_prompt`, `send_prompt_streaming`, `count_tokens`); switching
+between them is a configuration change. Use `claude` for the current model
+lineup on Anthropic's own endpoint; use `anthropic` when your Claude access is
+provisioned through AWS.
+
+```dotenv
+COMPLETIONS_ENGINE=claude
+COMPLETIONS_MODEL_NAME=claude-opus-4-8
+ANTHROPIC_API_KEY=...
+```
+
+Models catalogued for the `claude` engine (alias model IDs):
+`claude-fable-5`, `claude-opus-4-8` (default), `claude-opus-4-7`,
+`claude-opus-4-6`, `claude-sonnet-4-6`, and `claude-haiku-4-5`. Capabilities
+per model include the context window (1M tokens except `claude-haiku-4-5` at
+200K), streaming, provider-side token counting, image inputs, and registry
+pricing. Structured output uses the Messages API JSON-schema response format,
+so `strict_schema_prompt` works on every catalogued model.
 
 ### Model pricing
 
@@ -414,7 +447,7 @@ There is no implicit default provider. Set the selector for each capability you 
 
 | Environment variable | Valid values                                                                                                                  |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
+| `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
 | `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
 | `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
 | `VIDEO_ENGINE`       | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel`                                                                     |
@@ -454,6 +487,25 @@ Common optional settings:
 - `VIDEO_MODEL_NAME`
 - `EMBEDDING_DIMENSIONS`
 - `AI_API_GEO_RESIDENCY`
+
+#### Anthropic (native Claude API)
+
+Required for the `claude` completions engine:
+
+- `ANTHROPIC_API_KEY`
+
+Common optional settings:
+
+- `COMPLETIONS_MODEL_NAME` (defaults to `claude-opus-4-8`)
+
+Claude via Amazon Bedrock (the `anthropic` engine) does not use
+`ANTHROPIC_API_KEY`; it authenticates with AWS credentials like the other
+Bedrock engines below.
+
+For current model IDs and pricing, use the Anthropic documentation:
+
+- [Claude model overview](https://platform.claude.com/docs/en/about-claude/models/overview)
+- [Claude API pricing](https://platform.claude.com/docs/en/pricing)
 
 #### AWS Bedrock and Titan
 
