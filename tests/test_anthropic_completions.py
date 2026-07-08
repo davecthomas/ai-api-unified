@@ -45,12 +45,28 @@ def _build_client(model: str = "claude-opus-4-8") -> AiAnthropicCompletions:
     return client
 
 
+def _usage(
+    *,
+    input_tokens: int | None = 10,
+    output_tokens: int | None = 5,
+    cache_read_input_tokens: int | None = None,
+) -> Mock:
+    # A real Anthropic usage object always carries cache_read_input_tokens; set
+    # it explicitly so a bare Mock does not auto-vivify a truthy child attribute.
+    return Mock(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+    )
+
+
 def _text_response(
     text: str,
     *,
     stop_reason: str = "end_turn",
     input_tokens: int = 10,
     output_tokens: int = 5,
+    cache_read_input_tokens: int | None = None,
 ) -> Mock:
     return Mock(
         content=[
@@ -58,7 +74,11 @@ def _text_response(
             Mock(type="text", text=text),
         ],
         stop_reason=stop_reason,
-        usage=Mock(input_tokens=input_tokens, output_tokens=output_tokens),
+        usage=_usage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+        ),
     )
 
 
@@ -133,7 +153,7 @@ class TestSendPrompt:
                 Mock(type="text", text="Part two."),
             ],
             stop_reason="end_turn",
-            usage=Mock(input_tokens=1, output_tokens=2),
+            usage=_usage(input_tokens=1, output_tokens=2),
         )
 
         assert client.send_prompt("Go") == "Part one. Part two."
@@ -143,7 +163,7 @@ class TestSendPrompt:
         client.client.messages.create.return_value = Mock(
             content=[],
             stop_reason="refusal",
-            usage=Mock(input_tokens=5, output_tokens=0),
+            usage=_usage(input_tokens=5, output_tokens=0),
         )
 
         with pytest.raises(RuntimeError, match="refusal"):
@@ -188,7 +208,12 @@ class TestStreaming:
         client = _build_client()
         client.client.messages.create.return_value = iter(
             [
-                Mock(type="message_start", message=Mock(usage=Mock(input_tokens=7))),
+                Mock(
+                    type="message_start",
+                    message=Mock(
+                        usage=Mock(input_tokens=7, cache_read_input_tokens=None)
+                    ),
+                ),
                 Mock(
                     type="content_block_delta",
                     delta=Mock(type="text_delta", text="Hel"),
@@ -262,6 +287,18 @@ class TestStrictSchemaPrompt:
         assert "additionalProperties" not in dict_schema["properties"]
 
 
+class _RedactingStubMiddleware:
+    """Minimal PII middleware stub that redacts all input."""
+
+    bool_enabled = True
+
+    def process_input(self, text: str) -> str:
+        return "[REDACTED]"
+
+    def process_output(self, text: str) -> str:
+        return text
+
+
 class TestCountTokens:
     def test_count_tokens_uses_provider_endpoint(self) -> None:
         client = _build_client()
@@ -271,6 +308,19 @@ class TestCountTokens:
         count_kwargs = client.client.messages.count_tokens.call_args.kwargs
         assert count_kwargs["model"] == "claude-opus-4-8"
         assert count_kwargs["messages"][0]["role"] == "user"
+
+    def test_count_tokens_redacts_prompt_before_provider(self) -> None:
+        # The base template redacts input before the provider hook, so the
+        # counted request matches what send_prompt would submit and no
+        # unredacted PII leaves the trust boundary.
+        client = _build_client()
+        client.pii_middleware = _RedactingStubMiddleware()
+        client.client.messages.count_tokens.return_value = Mock(input_tokens=3)
+
+        client.count_tokens("My SSN is 123-45-6789")
+
+        count_kwargs = client.client.messages.count_tokens.call_args.kwargs
+        assert count_kwargs["messages"][0]["content"] == "[REDACTED]"
 
 
 class TestObservabilityIdentity:

@@ -60,15 +60,25 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
     @staticmethod
     def _extract_responses_usage(
         response: Any,
-    ) -> tuple[int | None, int | None, int | None]:
-        """Return (input, output, total) token counts from a Responses result."""
+    ) -> tuple[int | None, int | None, int | None, int | None]:
+        """Return (input, output, total, cached_input) token counts.
+
+        The Responses API reports prompt-cache reads in
+        `usage.input_tokens_details.cached_tokens`; they are a subset of
+        `usage.input_tokens`.
+        """
         usage = getattr(response, "usage", None)
         if usage is None:
-            return None, None, None
+            return None, None, None, None
+        details = getattr(usage, "input_tokens_details", None)
+        cached_tokens = (
+            getattr(details, "cached_tokens", None) if details is not None else None
+        )
         return (
             getattr(usage, "input_tokens", None),
             getattr(usage, "output_tokens", None),
             getattr(usage, "total_tokens", None),
+            cached_tokens,
         )
 
     def send_prompt(
@@ -111,7 +121,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 instructions=system_prompt,
             )
             raw_output_text: str = response.output_text or ""
-            prompt_tokens, completion_tokens, total_tokens = (
+            prompt_tokens, completion_tokens, total_tokens, cached_tokens = (
                 self._extract_responses_usage(response)
             )
             # Normal return with the Responses text output and usage metadata.
@@ -121,6 +131,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 finish_reason=str(getattr(response, "status", "") or ""),
                 provider_prompt_tokens=prompt_tokens,
                 provider_completion_tokens=completion_tokens,
+                provider_cached_input_tokens=cached_tokens,
                 provider_total_tokens=total_tokens,
             )
 
@@ -206,7 +217,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
             raw_output_text: str = response.output_text or ""
             if not raw_output_text:
                 raise ValueError("Empty response from OpenAI Responses API")
-            prompt_tokens, completion_tokens, total_tokens = (
+            prompt_tokens, completion_tokens, total_tokens, cached_tokens = (
                 self._extract_responses_usage(response)
             )
             try:
@@ -227,6 +238,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 finish_reason=str(getattr(response, "status", "") or ""),
                 provider_prompt_tokens=prompt_tokens,
                 provider_completion_tokens=completion_tokens,
+                provider_cached_input_tokens=cached_tokens,
                 provider_total_tokens=total_tokens,
             )
 
@@ -312,10 +324,10 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
 
         def _build_summary(provider_elapsed_ms: float) -> AiApiCallResultSummaryModel:
             final_response = dict_stream_state["final_response"]
-            prompt_tokens, completion_tokens, total_tokens = (
+            prompt_tokens, completion_tokens, total_tokens, cached_tokens = (
                 self._extract_responses_usage(final_response)
                 if final_response is not None
-                else (None, None, None)
+                else (None, None, None, None)
             )
             str_full_text: str = "".join(dict_stream_state["list_text_parts"])
             observed_result: AiApiObservedCompletionsResultModel[str] = (
@@ -329,6 +341,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                     ),
                     provider_prompt_tokens=prompt_tokens,
                     provider_completion_tokens=completion_tokens,
+                    provider_cached_input_tokens=cached_tokens,
                     provider_total_tokens=total_tokens,
                 )
             )

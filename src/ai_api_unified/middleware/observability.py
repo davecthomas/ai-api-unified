@@ -373,12 +373,20 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             return None
         int_input_tokens: int | None = call_result_summary.provider_prompt_tokens
         int_output_tokens: int | None = call_result_summary.provider_completion_tokens
+        int_cached_input_tokens: int | None = (
+            call_result_summary.provider_cached_input_tokens
+        )
         if int_input_tokens is None and int_output_tokens is None:
             # Early return because there is no usage to cost.
             return None
+        # Cached input tokens are a subset of provider_prompt_tokens billed at
+        # the cached rate; the remainder bills at the full input rate.
+        int_cached: int = int_cached_input_tokens or 0
+        int_non_cached_input: int = max((int_input_tokens or 0) - int_cached, 0)
         usd_cost = pricing.compute_token_cost(
-            input_tokens=int_input_tokens or 0,
+            input_tokens=int_non_cached_input,
             output_tokens=int_output_tokens or 0,
+            cached_input_tokens=int_cached,
         )
         dict_cost_fields: dict[str, object] = {
             "call_id": call_context.call_id,
@@ -391,7 +399,7 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             "caller_id": call_context.originating_caller_id,
             "input_tokens": int_input_tokens,
             "output_tokens": int_output_tokens,
-            "cached_input_tokens": None,
+            "cached_input_tokens": int_cached_input_tokens,
             "usd_cost": str(usd_cost),
             "currency": pricing.currency,
             "pricing_effective_date": pricing.effective_date.isoformat(),

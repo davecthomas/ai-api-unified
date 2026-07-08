@@ -56,11 +56,16 @@ def _context(model_name: str = "gpt-5.4") -> AiApiCallContextModel:
     )
 
 
-def _summary(prompt: int | None = 1000, completion: int | None = 500):
+def _summary(
+    prompt: int | None = 1000,
+    completion: int | None = 500,
+    cached: int | None = None,
+):
     return AiApiCallResultSummaryModel(
         provider_elapsed_ms=10.0,
         provider_prompt_tokens=prompt,
         provider_completion_tokens=completion,
+        provider_cached_input_tokens=cached,
     )
 
 
@@ -87,6 +92,29 @@ class TestCostEmission:
         assert fields["pricing_confidence"] == "high"
         assert fields["pricing_source"].startswith("https://")
         assert fields["pricing_effective_date"] == "2026-07-07"
+
+    def test_cached_input_tokens_priced_at_cached_rate(self, cost_capture) -> None:
+        mw = LoggerBackedObservabilityMiddleware(
+            ObservabilitySettingsModel(emit_cost=True)
+        )
+        # gpt-5.4: 1000 prompt tokens of which 400 are cache reads, 500 output.
+        # Non-cached input 600*2.50/1M + cached 400*0.25/1M + output 500*15.00/1M
+        # = 0.0015 + 0.0001 + 0.0075 = 0.0091.
+        mw.after_call(_context(), _summary(prompt=1000, completion=500, cached=400))
+        fields = _cost_fields(cost_capture)
+        assert fields["usd_cost"] == "0.0091"
+        assert fields["input_tokens"] == 1000
+        assert fields["cached_input_tokens"] == 400
+
+    def test_cached_none_matches_uncached_cost(self, cost_capture) -> None:
+        mw = LoggerBackedObservabilityMiddleware(
+            ObservabilitySettingsModel(emit_cost=True)
+        )
+        mw.after_call(_context(), _summary(prompt=1000, completion=500, cached=None))
+        fields = _cost_fields(cost_capture)
+        # Unchanged from the no-cache case: 1000*2.50/1M + 500*15.00/1M = 0.0100.
+        assert fields["usd_cost"] == "0.0100"
+        assert fields["cached_input_tokens"] is None
 
     def test_disabled_by_default_emits_nothing(self, cost_capture) -> None:
         mw = LoggerBackedObservabilityMiddleware(ObservabilitySettingsModel())

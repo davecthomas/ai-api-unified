@@ -212,19 +212,45 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         return "".join(list_text_parts)
 
     @staticmethod
+    def _fold_anthropic_prompt_tokens(
+        int_input_tokens: int | None,
+        int_cached_tokens: int | None,
+    ) -> tuple[int | None, int | None, int | None]:
+        """Normalize Anthropic input/cache counts to the library's convention.
+
+        Anthropic reports `input_tokens` exclusive of cache reads, with
+        `cache_read_input_tokens` billed separately. The library convention is
+        that prompt tokens include the cached subset, so this folds cache reads
+        into the prompt count and returns (prompt, total_prompt_component,
+        cached) where prompt is the combined billable input.
+        """
+        if int_input_tokens is None and int_cached_tokens is None:
+            return None, None, None
+        int_prompt_tokens: int = (int_input_tokens or 0) + (int_cached_tokens or 0)
+        return int_prompt_tokens, int_prompt_tokens, int_cached_tokens
+
+    @staticmethod
     def _extract_anthropic_usage(
         response: Any,
-    ) -> tuple[int | None, int | None, int | None]:
-        """Return (input, output, total) token counts from a Messages result."""
+    ) -> tuple[int | None, int | None, int | None, int | None]:
+        """Return (prompt, output, total, cached) token counts from a Messages result.
+
+        `prompt` folds any cache reads into the input count so cached is a
+        subset of it, matching the library-wide convention.
+        """
         usage = getattr(response, "usage", None)
         if usage is None:
-            return None, None, None
+            return None, None, None, None
         int_input_tokens: int | None = getattr(usage, "input_tokens", None)
         int_output_tokens: int | None = getattr(usage, "output_tokens", None)
+        int_cached_tokens: int | None = getattr(usage, "cache_read_input_tokens", None)
+        int_prompt_tokens, _, _ = AiAnthropicCompletions._fold_anthropic_prompt_tokens(
+            int_input_tokens, int_cached_tokens
+        )
         int_total_tokens: int | None = None
-        if int_input_tokens is not None or int_output_tokens is not None:
-            int_total_tokens = (int_input_tokens or 0) + (int_output_tokens or 0)
-        return int_input_tokens, int_output_tokens, int_total_tokens
+        if int_prompt_tokens is not None or int_output_tokens is not None:
+            int_total_tokens = (int_prompt_tokens or 0) + (int_output_tokens or 0)
+        return int_prompt_tokens, int_output_tokens, int_total_tokens, int_cached_tokens
 
     @staticmethod
     def _build_output_config_schema(
@@ -322,7 +348,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                     self.completions_model,
                     self.SEND_PROMPT_MAX_TOKENS,
                 )
-            prompt_tokens, completion_tokens, total_tokens = (
+            prompt_tokens, completion_tokens, total_tokens, cached_tokens = (
                 self._extract_anthropic_usage(response)
             )
             # Normal return with the Messages text output and usage metadata.
@@ -332,6 +358,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 finish_reason=str_stop_reason,
                 provider_prompt_tokens=prompt_tokens,
                 provider_completion_tokens=completion_tokens,
+                provider_cached_input_tokens=cached_tokens,
                 provider_total_tokens=total_tokens,
             )
 
@@ -437,7 +464,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 )
             if not raw_output_text:
                 raise ValueError("Empty response from Anthropic Messages API")
-            prompt_tokens, completion_tokens, total_tokens = (
+            prompt_tokens, completion_tokens, total_tokens, cached_tokens = (
                 self._extract_anthropic_usage(response)
             )
             try:
@@ -460,6 +487,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 finish_reason=str_finish_reason,
                 provider_prompt_tokens=prompt_tokens,
                 provider_completion_tokens=completion_tokens,
+                provider_cached_input_tokens=cached_tokens,
                 provider_total_tokens=total_tokens,
             )
 
@@ -520,6 +548,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             "int_chunk_count": 0,
             "finish_reason": None,
             "int_input_tokens": None,
+            "int_cached_input_tokens": None,
             "int_output_tokens": None,
             "bool_completed": False,
         }
@@ -548,6 +577,11 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                     int_input_tokens: int | None = getattr(usage, "input_tokens", None)
                     if int_input_tokens is not None:
                         dict_stream_state["int_input_tokens"] = int_input_tokens
+                    int_cached_tokens: int | None = getattr(
+                        usage, "cache_read_input_tokens", None
+                    )
+                    if int_cached_tokens is not None:
+                        dict_stream_state["int_cached_input_tokens"] = int_cached_tokens
                 elif str_event_type == "message_delta":
                     delta = getattr(event, "delta", None)
                     str_stop_reason: str | None = getattr(delta, "stop_reason", None)
@@ -569,18 +603,24 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
 
         def _build_summary(provider_elapsed_ms: float) -> AiApiCallResultSummaryModel:
             int_input_tokens: int | None = dict_stream_state["int_input_tokens"]
+            int_cached_tokens: int | None = dict_stream_state["int_cached_input_tokens"]
             int_output_tokens: int | None = dict_stream_state["int_output_tokens"]
+            # Fold cache reads into the prompt count so cached is a subset of it.
+            int_prompt_tokens, _, _ = self._fold_anthropic_prompt_tokens(
+                int_input_tokens, int_cached_tokens
+            )
             int_total_tokens: int | None = None
-            if int_input_tokens is not None or int_output_tokens is not None:
-                int_total_tokens = (int_input_tokens or 0) + (int_output_tokens or 0)
+            if int_prompt_tokens is not None or int_output_tokens is not None:
+                int_total_tokens = (int_prompt_tokens or 0) + (int_output_tokens or 0)
             str_full_text: str = "".join(dict_stream_state["list_text_parts"])
             observed_result: AiApiObservedCompletionsResultModel[str] = (
                 AiApiObservedCompletionsResultModel(
                     return_value=str_full_text,
                     raw_output_text=str_full_text,
                     finish_reason=dict_stream_state["finish_reason"],
-                    provider_prompt_tokens=int_input_tokens,
+                    provider_prompt_tokens=int_prompt_tokens,
                     provider_completion_tokens=int_output_tokens,
+                    provider_cached_input_tokens=int_cached_tokens,
                     provider_total_tokens=int_total_tokens,
                 )
             )

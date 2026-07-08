@@ -253,6 +253,9 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                         provider_completion_tokens=self._extract_gemini_completion_tokens(
                             response
                         ),
+                        provider_cached_input_tokens=self._extract_gemini_cached_tokens(
+                            response
+                        ),
                         provider_total_tokens=self._extract_gemini_total_tokens(
                             response
                         ),
@@ -265,6 +268,9 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                     finish_reason=self._extract_gemini_finish_reason(response),
                     provider_prompt_tokens=self._extract_gemini_prompt_tokens(response),
                     provider_completion_tokens=self._extract_gemini_completion_tokens(
+                        response
+                    ),
+                    provider_cached_input_tokens=self._extract_gemini_cached_tokens(
                         response
                     ),
                     provider_total_tokens=self._extract_gemini_total_tokens(response),
@@ -377,6 +383,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                     ),
                     provider_completion_tokens=(
                         self._extract_gemini_completion_tokens(last_chunk)
+                        if last_chunk is not None
+                        else None
+                    ),
+                    provider_cached_input_tokens=(
+                        self._extract_gemini_cached_tokens(last_chunk)
                         if last_chunk is not None
                         else None
                     ),
@@ -500,6 +511,9 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                             response
                         ),
                         provider_completion_tokens=self._extract_gemini_completion_tokens(
+                            response
+                        ),
+                        provider_cached_input_tokens=self._extract_gemini_cached_tokens(
                             response
                         ),
                         provider_total_tokens=self._extract_gemini_total_tokens(
@@ -760,6 +774,33 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 return None
             # Normal return with Gemini total token usage.
             return response.usage_metadata.total_token_count
+        except AttributeError:
+            # Early return because the SDK response did not expose usage metadata as expected.
+            return None
+
+    @staticmethod
+    def _extract_gemini_cached_tokens(
+        response: GenerateContentResponse,
+    ) -> int | None:
+        """
+        Returns provider-reported cached prompt token counts from a Gemini response.
+
+        Gemini reports context-cache hits in
+        `usage_metadata.cached_content_token_count`; they are a subset of
+        `prompt_token_count`.
+
+        Args:
+            response: Gemini SDK response object returned by `generate_content`.
+
+        Returns:
+            Provider-reported cached prompt token count when available, otherwise None.
+        """
+        try:
+            if response.usage_metadata is None:
+                # Early return because the Gemini response did not include usage metadata.
+                return None
+            # Normal return with Gemini cached prompt token usage.
+            return response.usage_metadata.cached_content_token_count
         except AttributeError:
             # Early return because the SDK response did not expose usage metadata as expected.
             return None

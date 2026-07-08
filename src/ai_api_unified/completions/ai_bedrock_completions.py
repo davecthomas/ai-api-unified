@@ -238,6 +238,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                         provider_completion_tokens=self._extract_bedrock_completion_tokens(
                             resp
                         ),
+                        provider_cached_input_tokens=self._extract_bedrock_cached_tokens(
+                            resp
+                        ),
                         provider_total_tokens=self._extract_bedrock_total_tokens(resp),
                     )
                     # Normal return with validated Bedrock structured output and raw provider metadata.
@@ -257,6 +260,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                                 resp
                             ),
                             provider_completion_tokens=self._extract_bedrock_completion_tokens(
+                                resp
+                            ),
+                            provider_cached_input_tokens=self._extract_bedrock_cached_tokens(
                                 resp
                             ),
                             provider_total_tokens=self._extract_bedrock_total_tokens(
@@ -402,6 +408,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                             provider_completion_tokens=self._extract_bedrock_completion_tokens(
                                 response
                             ),
+                            provider_cached_input_tokens=self._extract_bedrock_cached_tokens(
+                                response
+                            ),
                             provider_total_tokens=self._extract_bedrock_total_tokens(
                                 response
                             ),
@@ -527,6 +536,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     provider_completion_tokens=self._extract_bedrock_completion_tokens(
                         dict_usage_response
                     ),
+                    provider_cached_input_tokens=self._extract_bedrock_cached_tokens(
+                        dict_usage_response
+                    ),
                     provider_total_tokens=self._extract_bedrock_total_tokens(
                         dict_usage_response
                     ),
@@ -626,6 +638,10 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
         Returns provider-reported prompt token counts from one Bedrock converse response.
 
+        Converse reports `inputTokens` exclusive of prompt-cache reads
+        (`cacheReadInputTokens`); folds cache reads into the prompt count so the
+        library-wide convention holds (cached is a subset of prompt tokens).
+
         Args:
             response: Bedrock converse response dictionary.
 
@@ -633,9 +649,28 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             Provider-reported prompt token count when available, otherwise None.
         """
         usage: dict[str, Any] = response.get("usage", {})
-        prompt_tokens: int | None = usage.get("inputTokens")
-        # Normal return with provider prompt token usage when present.
-        return prompt_tokens
+        input_tokens: int | None = usage.get("inputTokens")
+        cached_tokens: int | None = usage.get("cacheReadInputTokens")
+        if input_tokens is None and cached_tokens is None:
+            # Early return because the response carried no input token usage.
+            return None
+        # Normal return with prompt tokens including any cached-read subset.
+        return (input_tokens or 0) + (cached_tokens or 0)
+
+    @staticmethod
+    def _extract_bedrock_cached_tokens(response: dict[str, Any]) -> int | None:
+        """
+        Returns provider-reported cached prompt token counts from a Bedrock response.
+
+        Args:
+            response: Bedrock converse response dictionary.
+
+        Returns:
+            Provider-reported cache-read token count when available, otherwise None.
+        """
+        usage: dict[str, Any] = response.get("usage", {})
+        # Normal return with provider cache-read token usage when present.
+        return usage.get("cacheReadInputTokens")
 
     @staticmethod
     def _extract_bedrock_completion_tokens(response: dict[str, Any]) -> int | None:

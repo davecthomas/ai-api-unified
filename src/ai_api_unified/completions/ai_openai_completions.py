@@ -427,6 +427,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         provider_completion_tokens=self._extract_openai_completion_tokens(
                             completion
                         ),
+                        provider_cached_input_tokens=self._extract_openai_cached_tokens(
+                            completion
+                        ),
                         provider_total_tokens=self._extract_openai_total_tokens(
                             completion
                         ),
@@ -531,6 +534,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 int_provider_total_tokens: int | None = (
                     self._extract_openai_total_tokens(response)
                 )
+                int_provider_cached_tokens: int | None = (
+                    self._extract_openai_cached_tokens(response)
+                )
                 bool_continued_response: bool = False
 
                 while response.choices[0].finish_reason == "length":
@@ -554,6 +560,10 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         int_provider_total_tokens,
                         self._extract_openai_total_tokens(response),
                     )
+                    int_provider_cached_tokens = self._sum_optional_ints(
+                        int_provider_cached_tokens,
+                        self._extract_openai_cached_tokens(response),
+                    )
 
                 observed_result: AiApiObservedCompletionsResultModel[str] = (
                     AiApiObservedCompletionsResultModel(
@@ -562,6 +572,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         finish_reason=str(response.choices[0].finish_reason),
                         provider_prompt_tokens=int_provider_prompt_tokens,
                         provider_completion_tokens=int_provider_completion_tokens,
+                        provider_cached_input_tokens=int_provider_cached_tokens,
                         provider_total_tokens=int_provider_total_tokens,
                         dict_metadata={"continued_response": bool_continued_response},
                     )
@@ -683,6 +694,11 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         if usage_chunk is not None
                         else None
                     ),
+                    provider_cached_input_tokens=(
+                        self._extract_openai_cached_tokens(usage_chunk)
+                        if usage_chunk is not None
+                        else None
+                    ),
                     provider_total_tokens=(
                         self._extract_openai_total_tokens(usage_chunk)
                         if usage_chunk is not None
@@ -766,6 +782,34 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 return None
             # Normal return with provider-reported total token usage.
             return completion.usage.total_tokens
+        except AttributeError:
+            # Early return because the SDK response did not expose usage metadata as expected.
+            return None
+
+    @staticmethod
+    def _extract_openai_cached_tokens(completion: Any) -> int | None:
+        """
+        Returns provider-reported cached prompt token counts from one OpenAI response.
+
+        OpenAI reports prompt-cache reads in `usage.prompt_tokens_details.cached_tokens`;
+        they are a subset of `usage.prompt_tokens`.
+
+        Args:
+            completion: OpenAI SDK response object returned by `chat.completions.create`.
+
+        Returns:
+            Provider-reported cached prompt token count when available, otherwise None.
+        """
+        try:
+            if completion.usage is None:
+                # Early return because the provider response did not include usage metadata.
+                return None
+            details: Any = getattr(completion.usage, "prompt_tokens_details", None)
+            if details is None:
+                # Early return because the SDK response did not include cache details.
+                return None
+            # Normal return with provider-reported cached prompt token usage.
+            return getattr(details, "cached_tokens", None)
         except AttributeError:
             # Early return because the SDK response did not expose usage metadata as expected.
             return None
