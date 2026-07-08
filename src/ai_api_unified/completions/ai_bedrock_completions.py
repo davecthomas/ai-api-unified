@@ -691,18 +691,31 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
     @staticmethod
     def _extract_bedrock_total_tokens(response: dict[str, Any]) -> int | None:
         """
-        Returns provider-reported total token counts from one Bedrock converse response.
+        Returns the total token count for one Bedrock converse response.
+
+        AWS reports `totalTokens` as `inputTokens + outputTokens`, both exclusive
+        of cache reads. Because `_extract_bedrock_prompt_tokens` folds cache reads
+        into the prompt count, the total is recomputed from the folded prompt plus
+        output so the emitted triple stays consistent (prompt + completion =
+        total). With no cache reads this equals the provider `totalTokens`.
 
         Args:
             response: Bedrock converse response dictionary.
 
         Returns:
-            Provider-reported total token count when available, otherwise None.
+            Total token count when available, otherwise None.
         """
-        usage: dict[str, Any] = response.get("usage", {})
-        total_tokens: int | None = usage.get("totalTokens")
-        # Normal return with provider total token usage when present.
-        return total_tokens
+        prompt_tokens: int | None = AiBedrockCompletions._extract_bedrock_prompt_tokens(
+            response
+        )
+        completion_tokens: int | None = (
+            AiBedrockCompletions._extract_bedrock_completion_tokens(response)
+        )
+        if prompt_tokens is None and completion_tokens is None:
+            # Early return because the response carried no token usage to total.
+            return None
+        # Normal return with the folded prompt plus output token total.
+        return (prompt_tokens or 0) + (completion_tokens or 0)
 
     def _build_user_content(
         self,

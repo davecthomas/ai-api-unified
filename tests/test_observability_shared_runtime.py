@@ -952,6 +952,7 @@ def test_logger_backed_observability_middleware_respects_optional_field_settings
         output_token_count_source="provider",
         provider_prompt_tokens=11,
         provider_completion_tokens=17,
+        provider_cached_input_tokens=4,
         provider_total_tokens=28,
         dict_metadata={
             "output_audio_byte_count": 1234,
@@ -980,9 +981,60 @@ def test_logger_backed_observability_middleware_respects_optional_field_settings
     assert "output_token_count_source" not in dict_output_fields
     assert "provider_prompt_tokens" not in dict_output_fields
     assert "provider_completion_tokens" not in dict_output_fields
+    assert "provider_cached_input_tokens" not in dict_output_fields
     assert "provider_total_tokens" not in dict_output_fields
     assert "output_audio_byte_count" not in dict_output_fields
     assert dict_output_fields["total_output_bytes"] == 4321
+
+
+def test_logger_backed_observability_middleware_emits_cached_input_tokens(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Ensures cached input tokens surface on the output event when provider usage
+    is enabled, mirroring the cost event's cached_input_tokens field.
+
+    Args:
+        caplog: Pytest fixture used to capture emitted observability records.
+
+    Returns:
+        None for normal test completion.
+    """
+    caplog.set_level(logging.INFO, logger=OBSERVABILITY_LOGGER_NAME)
+    middleware: LoggerBackedObservabilityMiddleware = (
+        LoggerBackedObservabilityMiddleware(
+            ObservabilitySettingsModel(include_provider_usage=True)
+        )
+    )
+    output_context: AiApiCallContextModel = AiApiCallContextModel(
+        call_id=TEST_CALL_ID,
+        event_time_utc=datetime.now(timezone.utc),
+        capability="completions",
+        operation="send_prompt",
+        provider_vendor="anthropic",
+        provider_engine="claude",
+        model_name="claude-opus-4-8",
+        model_version=None,
+        direction=OBSERVABILITY_DIRECTION_OUTPUT,
+    )
+    result_summary: AiApiCallResultSummaryModel = AiApiCallResultSummaryModel(
+        provider_elapsed_ms=TEST_PROVIDER_ELAPSED_MS,
+        provider_prompt_tokens=1000,
+        provider_completion_tokens=200,
+        provider_cached_input_tokens=400,
+        provider_total_tokens=1200,
+    )
+
+    middleware.after_call(output_context, result_summary)
+
+    dict_output_fields: dict[str, object] = next(
+        log_record.args[1]
+        for log_record in caplog.records
+        if log_record.name == OBSERVABILITY_LOGGER_NAME
+        and log_record.args[0] == OBSERVABILITY_EVENT_OUTPUT
+    )
+    assert dict_output_fields["provider_prompt_tokens"] == 1000
+    assert dict_output_fields["provider_cached_input_tokens"] == 400
 
 
 def test_logger_backed_observability_middleware_hides_video_byte_count_when_disabled(

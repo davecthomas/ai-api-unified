@@ -143,6 +143,10 @@ class TestBedrockCachedFold:
         }
         assert AiBedrockCompletions._extract_bedrock_prompt_tokens(response) == 1000
         assert AiBedrockCompletions._extract_bedrock_cached_tokens(response) == 400
+        # Total is recomputed from the folded prompt + output so the emitted
+        # triple stays consistent (prompt + completion = total), even though the
+        # raw provider totalTokens (700) excludes cache reads.
+        assert AiBedrockCompletions._extract_bedrock_total_tokens(response) == 1100
 
     def test_no_cache_leaves_prompt_unchanged(self) -> None:
         pytest.importorskip("boto3")
@@ -150,9 +154,13 @@ class TestBedrockCachedFold:
             AiBedrockCompletions,
         )
 
-        response = {"usage": {"inputTokens": 600, "outputTokens": 100}}
+        response = {
+            "usage": {"inputTokens": 600, "outputTokens": 100, "totalTokens": 700}
+        }
         assert AiBedrockCompletions._extract_bedrock_prompt_tokens(response) == 600
         assert AiBedrockCompletions._extract_bedrock_cached_tokens(response) is None
+        # With no cache reads the recomputed total equals the provider total.
+        assert AiBedrockCompletions._extract_bedrock_total_tokens(response) == 700
 
 
 class TestGeminiCached:

@@ -137,7 +137,11 @@ topic.
    `provider_prompt_tokens` so the cached subset is uniform across providers.
    The cost middleware bills the cached subset at the cached rate and the
    remainder at the full input rate, and the cost event carries
-   `cached_input_tokens`.
+   `cached_input_tokens`. Scope is cache *reads*: cache *writes* (priming a
+   cache, billed above the base input rate — Bedrock exposes them as
+   `cacheWriteInputTokens`) are not captured or billed yet, because the pricing
+   registry does not model a cache-write rate. That is a follow-on once a
+   cache-write rate column lands.
 
 4. **Aggregation: none in-library.** Per-call events only, correlated via the
    `caller_id` / session / workflow ids already on the context. Rollups are the

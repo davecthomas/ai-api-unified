@@ -67,6 +67,7 @@ SET_STR_AUDIO_BYTE_COUNT_METADATA_KEYS: set[str] = {"output_audio_byte_count"}
 SET_STR_PROVIDER_USAGE_EVENT_KEYS: set[str] = {
     "provider_prompt_tokens",
     "provider_completion_tokens",
+    "provider_cached_input_tokens",
     "provider_total_tokens",
 }
 SET_STR_TOKEN_COUNT_EVENT_KEYS: set[str] = {
@@ -673,6 +674,10 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         if call_result_summary.provider_completion_tokens is not None:
             dict_event_fields["provider_completion_tokens"] = (
                 call_result_summary.provider_completion_tokens
+            )
+        if call_result_summary.provider_cached_input_tokens is not None:
+            dict_event_fields["provider_cached_input_tokens"] = (
+                call_result_summary.provider_cached_input_tokens
             )
         if call_result_summary.provider_total_tokens is not None:
             dict_event_fields["provider_total_tokens"] = (
