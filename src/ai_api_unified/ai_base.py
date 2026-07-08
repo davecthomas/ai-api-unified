@@ -78,6 +78,7 @@ class AICompletionsCapabilitiesBase(BaseModel):
     supports_data_residency_constraint: bool = False
     supports_streaming: bool = False
     supports_token_counting: bool = False
+    supports_batch: bool = False
     pricing: AIModelPricing | None = None
 
 
@@ -211,6 +212,84 @@ class AICompletionsPromptParamsBase(AIIncludedMediaParamsBase, ABC):
     MAX_MEDIA_BYTES: ClassVar[int | None] = MAX_IMAGE_BYTES
 
     system_prompt: str | None = None
+
+
+class AIBatchStatus(str, Enum):
+    """Lifecycle status of a completions batch job.
+
+    Normalized across providers. IN_PROGRESS and CANCELING are non-terminal;
+    ENDED (results available), FAILED, EXPIRED, and CANCELED are terminal.
+    """
+
+    IN_PROGRESS = "in_progress"
+    CANCELING = "canceling"
+    ENDED = "ended"
+    FAILED = "failed"
+    EXPIRED = "expired"
+    CANCELED = "canceled"
+
+
+class AIBatchItemStatus(str, Enum):
+    """Per-request outcome within an ended batch."""
+
+    SUCCEEDED = "succeeded"
+    ERRORED = "errored"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
+
+
+class AIBatchRequestItem(BaseModel):
+    """One request in a completions batch.
+
+    Text-prompt batch requests, mirroring send_prompt. custom_id must be unique
+    within a batch and is echoed on the matching result so callers can correlate
+    results back to requests (results arrive in arbitrary order).
+    """
+
+    custom_id: str
+    prompt: str
+    system_prompt: str | None = None
+    max_response_tokens: int | None = None
+
+
+class AIBatchJob(BaseModel):
+    """Provider-agnostic handle for one submitted completions batch.
+
+    provider_batch_id is the raw provider identifier; batch_id namespaces it by
+    engine for stable cross-provider correlation.
+    """
+
+    batch_id: str
+    provider_batch_id: str
+    status: AIBatchStatus
+    request_count: int | None = None
+    succeeded_count: int | None = None
+    errored_count: int | None = None
+    canceled_count: int | None = None
+    expired_count: int | None = None
+    processing_count: int | None = None
+    submitted_at_utc: datetime | None = None
+    ended_at_utc: datetime | None = None
+    provider_engine: str | None = None
+    provider_model_name: str | None = None
+    provider_metadata: dict[str, Any] = {}
+
+    @property
+    def is_terminal(self) -> bool:
+        """Return True when the batch has stopped processing."""
+        return self.status is not AIBatchStatus.IN_PROGRESS
+
+
+class AIBatchResultItem(BaseModel):
+    """One request's outcome in an ended batch, keyed by custom_id."""
+
+    custom_id: str
+    status: AIBatchItemStatus
+    text: str | None = None
+    error_message: str | None = None
+    provider_prompt_tokens: int | None = None
+    provider_completion_tokens: int | None = None
+    provider_metadata: dict[str, Any] = {}
 
 
 class AIEmbeddingsCapabilitiesBase(BaseModel):
@@ -1801,6 +1880,186 @@ class AIBaseCompletions(AIBase):
         """
         raise AiProviderCapabilityUnsupportedError(
             f"{type(self).__name__} does not implement token counting."
+        )
+
+    # ── Batch completions ───────────────────────────────────────────────────
+    # Asynchronous batch processing of many prompts at reduced cost. Template
+    # methods gate on capabilities.supports_batch and delegate to provider
+    # hooks, mirroring the streaming and token-counting surfaces.
+
+    BATCH_DEFAULT_POLL_INTERVAL_SECONDS: ClassVar[float] = 30.0
+    BATCH_DEFAULT_TIMEOUT_SECONDS: ClassVar[float] = 86_400.0
+
+    def _require_batch_capability(self) -> None:
+        """Raise when the configured model does not support batch processing."""
+        if not self.capabilities.supports_batch:
+            raise AiProviderCapabilityUnsupportedError(
+                f"{type(self).__name__} model '{self.model_name}' does not support "
+                "batch completions. Configure a model whose capabilities include "
+                "batch processing."
+            )
+
+    @staticmethod
+    def _resolve_batch_id(batch: str | AIBatchJob) -> str:
+        """Return the namespaced batch_id from a batch id string or job object."""
+        if isinstance(batch, AIBatchJob):
+            return batch.batch_id
+        return batch
+
+    def submit_batch(self, requests: list[AIBatchRequestItem]) -> AIBatchJob:
+        """
+        Submit many prompts as one asynchronous batch and return a job handle.
+
+        Template method: capability and input validation happen here so
+        providers cannot skip them. Providers whose capabilities declare batch
+        support implement _submit_batch_provider.
+
+        Args:
+            requests: Batch request items, each with a unique custom_id.
+
+        Returns:
+            AIBatchJob handle for polling and result retrieval.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the model has no batch support.
+            ValueError: When requests is empty or custom_ids are not unique.
+        """
+        self._require_batch_capability()
+        if not requests:
+            raise ValueError("Batch requires at least one request item.")
+        list_custom_ids: list[str] = [item.custom_id for item in requests]
+        if len(set(list_custom_ids)) != len(list_custom_ids):
+            raise ValueError("Batch request custom_id values must be unique.")
+        for item in requests:
+            if not item.prompt or not item.prompt.strip():
+                raise ValueError(
+                    f"Batch request '{item.custom_id}' has an empty prompt."
+                )
+        # Normal return with the provider-created batch job handle.
+        return self._submit_batch_provider(requests)
+
+    def get_batch(self, batch: str | AIBatchJob) -> AIBatchJob:
+        """
+        Return the current status of a submitted batch.
+
+        Args:
+            batch: Batch id string or a previously returned AIBatchJob.
+
+        Returns:
+            AIBatchJob with refreshed status and request counts.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the model has no batch support.
+        """
+        self._require_batch_capability()
+        # Normal return with the refreshed batch job handle.
+        return self._get_batch_provider(self._resolve_batch_id(batch))
+
+    def get_batch_results(self, batch: str | AIBatchJob) -> list[AIBatchResultItem]:
+        """
+        Return per-request results for an ended batch, keyed by custom_id.
+
+        Args:
+            batch: Batch id string or a previously returned AIBatchJob.
+
+        Returns:
+            Result items in provider order; correlate to requests via custom_id.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the model has no batch support.
+        """
+        self._require_batch_capability()
+        # Normal return with the provider-reported batch results.
+        return self._get_batch_results_provider(self._resolve_batch_id(batch))
+
+    def cancel_batch(self, batch: str | AIBatchJob) -> AIBatchJob:
+        """
+        Request cancellation of an in-progress batch.
+
+        Args:
+            batch: Batch id string or a previously returned AIBatchJob.
+
+        Returns:
+            AIBatchJob reflecting the canceling/canceled status.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the model has no batch support.
+        """
+        self._require_batch_capability()
+        # Normal return with the batch job handle after requesting cancellation.
+        return self._cancel_batch_provider(self._resolve_batch_id(batch))
+
+    def run_batch(
+        self,
+        requests: list[AIBatchRequestItem],
+        *,
+        timeout_seconds: float | None = None,
+        poll_interval_seconds: float | None = None,
+    ) -> list[AIBatchResultItem]:
+        """
+        Submit a batch, poll until it ends, and return results.
+
+        Blocking convenience wrapper over submit_batch, get_batch, and
+        get_batch_results. Raises TimeoutError if the batch does not end within
+        timeout_seconds.
+
+        Args:
+            requests: Batch request items, each with a unique custom_id.
+            timeout_seconds: Max seconds to wait for the batch to end.
+            poll_interval_seconds: Seconds between status polls.
+
+        Returns:
+            Result items for the ended batch.
+
+        Raises:
+            TimeoutError: When the batch does not end before the timeout.
+        """
+        float_timeout: float = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else self.BATCH_DEFAULT_TIMEOUT_SECONDS
+        )
+        float_poll_interval: float = (
+            poll_interval_seconds
+            if poll_interval_seconds is not None
+            else self.BATCH_DEFAULT_POLL_INTERVAL_SECONDS
+        )
+        batch_job: AIBatchJob = self.submit_batch(requests)
+        float_deadline: float = time.monotonic() + float_timeout
+        # Loop until the batch reaches a terminal state or the deadline passes.
+        while not batch_job.is_terminal:
+            if time.monotonic() >= float_deadline:
+                raise TimeoutError(
+                    f"Batch '{batch_job.batch_id}' did not end within "
+                    f"{float_timeout} seconds (status={batch_job.status.value})."
+                )
+            time.sleep(float_poll_interval)
+            batch_job = self.get_batch(batch_job)
+        # Normal return with the ended batch's per-request results.
+        return self.get_batch_results(batch_job)
+
+    def _submit_batch_provider(self, requests: list[AIBatchRequestItem]) -> AIBatchJob:
+        """Provider hook for batch submission. Base implementation raises."""
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} does not implement batch completions."
+        )
+
+    def _get_batch_provider(self, batch_id: str) -> AIBatchJob:
+        """Provider hook for batch status. Base implementation raises."""
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} does not implement batch completions."
+        )
+
+    def _get_batch_results_provider(self, batch_id: str) -> list[AIBatchResultItem]:
+        """Provider hook for batch results. Base implementation raises."""
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} does not implement batch completions."
+        )
+
+    def _cancel_batch_provider(self, batch_id: str) -> AIBatchJob:
+        """Provider hook for batch cancellation. Base implementation raises."""
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} does not implement batch completions."
         )
 
     def _execute_streaming_provider_call_with_observability(

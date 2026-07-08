@@ -1,4 +1,4 @@
-# ai-api-unified 2.12.0
+# ai-api-unified 2.13.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -236,6 +236,64 @@ so `strict_schema_prompt` works on every catalogued model. On
 pass a `max_response_tokens` well above the 2048 default so the budget covers
 thinking plus the JSON body. Image attachments are capped at Anthropic's 5MB
 per-image limit.
+
+### Batch completions (Anthropic)
+
+The `claude` engine can process many prompts as one asynchronous batch through
+Anthropic's Message Batches API. Batches run in the background (most finish well
+under an hour, up to a 24-hour ceiling) at roughly half the per-token cost of
+individual calls — use them for bulk work that isn't latency-sensitive, such as
+classification, extraction, or evaluation runs.
+
+Batch support is capability-gated like streaming and token counting: check
+`capabilities.supports_batch` before calling. Every catalogued `claude` model
+supports it; other engines raise `AiProviderCapabilityUnsupportedError`.
+
+Each request carries a `custom_id` you choose. Results come back keyed by that
+`custom_id` (in arbitrary order), so you correlate results to requests yourself
+rather than relying on position.
+
+The blocking convenience path submits, polls, and returns results in one call:
+
+```python
+from ai_api_unified import AIBatchRequestItem, AIFactory
+
+client = AIFactory.get_ai_completions_client(completions_engine="claude")
+
+requests = [
+    AIBatchRequestItem(custom_id="a", prompt="Summarize: the cat sat on the mat."),
+    AIBatchRequestItem(custom_id="b", prompt="Translate to French: good morning."),
+]
+
+if client.capabilities.supports_batch:
+    results = client.run_batch(requests, poll_interval_seconds=30)
+    for item in results:
+        print(item.custom_id, item.status, item.text)
+```
+
+For explicit control instead of the blocking wrapper, drive the lifecycle
+directly — submit, poll status, then fetch results once the batch has ended:
+
+```python
+job = client.submit_batch(requests)
+print(job.batch_id, job.status)          # AIBatchStatus.IN_PROGRESS
+
+job = client.get_batch(job)               # refresh status + per-state counts
+if job.is_terminal:                        # ENDED, FAILED, EXPIRED, or CANCELED
+    for item in client.get_batch_results(job):
+        if item.status.value == "succeeded":
+            print(item.custom_id, item.text)
+        else:
+            print(item.custom_id, "failed:", item.error_message)
+
+# client.cancel_batch(job)                 # request cancellation while in progress
+```
+
+Request prompts are PII-redacted (when the redaction middleware is enabled)
+before submission, exactly as `send_prompt` redacts. Each `AIBatchRequestItem`
+also accepts an optional `system_prompt` and `max_response_tokens`. Successful
+result items carry the per-request `provider_prompt_tokens` /
+`provider_completion_tokens` for cost attribution.
 
 ### Model pricing
 
