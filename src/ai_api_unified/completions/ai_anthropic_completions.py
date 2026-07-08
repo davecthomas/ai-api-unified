@@ -755,14 +755,26 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         if any(value is not None for value in list_counts):
             int_request_count = sum(value or 0 for value in list_counts)
         str_provider_batch_id: str = str(getattr(batch, "id", "") or "")
+        str_processing_status: str = str(getattr(batch, "processing_status", "") or "")
+        batch_status: AIBatchStatus | None = self.DICT_BATCH_PROCESSING_STATUS.get(
+            str_processing_status
+        )
+        if batch_status is None:
+            # An unmapped status is treated as still in progress (so results are
+            # not fetched prematurely); log it since it can otherwise poll until
+            # the run_batch timeout.
+            _LOGGER.warning(
+                "Unmapped Anthropic batch processing_status %r for batch %s; "
+                "treating as in_progress.",
+                str_processing_status,
+                str_provider_batch_id,
+            )
+            batch_status = AIBatchStatus.IN_PROGRESS
         # Normal return with the normalized batch job handle.
         return AIBatchJob(
             batch_id=f"{self.BATCH_ID_PREFIX}{str_provider_batch_id}",
             provider_batch_id=str_provider_batch_id,
-            status=self.DICT_BATCH_PROCESSING_STATUS.get(
-                str(getattr(batch, "processing_status", "") or ""),
-                AIBatchStatus.IN_PROGRESS,
-            ),
+            status=batch_status,
             request_count=int_request_count,
             succeeded_count=int_succeeded,
             errored_count=int_errored,
@@ -792,9 +804,12 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             str_text = self.pii_middleware.process_output(
                 self._extract_response_text(message) if message is not None else ""
             )
-            prompt_tokens, completion_tokens, _ = self._extract_anthropic_usage(message)
-            int_prompt_tokens = prompt_tokens
-            int_completion_tokens = completion_tokens
+            # Index rather than unpack so this survives the usage tuple gaining
+            # a cached-token element (finops cached-token work); the first two
+            # positions are always (prompt, completion).
+            tuple_usage = self._extract_anthropic_usage(message)
+            int_prompt_tokens = tuple_usage[0]
+            int_completion_tokens = tuple_usage[1]
         else:
             error = getattr(inner, "error", None)
             if error is not None:

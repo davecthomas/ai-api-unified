@@ -109,6 +109,47 @@ class TestValidation:
         with pytest.raises(ValueError, match="empty prompt"):
             client.submit_batch([AIBatchRequestItem(custom_id="x", prompt="   ")])
 
+    def test_empty_custom_id_raises(self) -> None:
+        client = _build_client()
+        with pytest.raises(ValueError, match="custom_id cannot be empty"):
+            client.submit_batch([AIBatchRequestItem(custom_id="  ", prompt="hi")])
+
+    def test_non_positive_max_response_tokens_raises(self) -> None:
+        client = _build_client()
+        with pytest.raises(ValueError, match="non-positive"):
+            client.submit_batch(
+                [AIBatchRequestItem(custom_id="x", prompt="hi", max_response_tokens=0)]
+            )
+
+
+class TestJobTerminalState:
+    def test_canceling_is_not_terminal(self) -> None:
+        job = AIBatchJob(
+            batch_id="claude:b",
+            provider_batch_id="b",
+            status=AIBatchStatus.CANCELING,
+        )
+        assert job.is_terminal is False
+
+    def test_in_progress_is_not_terminal(self) -> None:
+        job = AIBatchJob(
+            batch_id="claude:b", provider_batch_id="b", status=AIBatchStatus.IN_PROGRESS
+        )
+        assert job.is_terminal is False
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            AIBatchStatus.ENDED,
+            AIBatchStatus.FAILED,
+            AIBatchStatus.EXPIRED,
+            AIBatchStatus.CANCELED,
+        ],
+    )
+    def test_stopped_states_are_terminal(self, status: AIBatchStatus) -> None:
+        job = AIBatchJob(batch_id="claude:b", provider_batch_id="b", status=status)
+        assert job.is_terminal is True
+
 
 class TestSubmit:
     def test_submit_builds_requests_and_normalizes_job(self) -> None:

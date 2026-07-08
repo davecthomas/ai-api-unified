@@ -276,8 +276,15 @@ class AIBatchJob(BaseModel):
 
     @property
     def is_terminal(self) -> bool:
-        """Return True when the batch has stopped processing."""
-        return self.status is not AIBatchStatus.IN_PROGRESS
+        """Return True when the batch has stopped processing.
+
+        IN_PROGRESS and CANCELING are non-terminal: a canceling batch is still
+        winding down and its results are not yet retrievable.
+        """
+        return self.status not in (
+            AIBatchStatus.IN_PROGRESS,
+            AIBatchStatus.CANCELING,
+        )
 
 
 class AIBatchResultItem(BaseModel):
@@ -1927,14 +1934,23 @@ class AIBaseCompletions(AIBase):
         self._require_batch_capability()
         if not requests:
             raise ValueError("Batch requires at least one request item.")
-        list_custom_ids: list[str] = [item.custom_id for item in requests]
-        if len(set(list_custom_ids)) != len(list_custom_ids):
-            raise ValueError("Batch request custom_id values must be unique.")
+        # Validate each item up front so a bad request fails locally with its
+        # custom_id, not deep in a provider 400 after the whole batch is built.
         for item in requests:
+            if not item.custom_id or not item.custom_id.strip():
+                raise ValueError("Batch request custom_id cannot be empty.")
             if not item.prompt or not item.prompt.strip():
                 raise ValueError(
                     f"Batch request '{item.custom_id}' has an empty prompt."
                 )
+            if item.max_response_tokens is not None and item.max_response_tokens <= 0:
+                raise ValueError(
+                    f"Batch request '{item.custom_id}' has a non-positive "
+                    "max_response_tokens."
+                )
+        list_custom_ids: list[str] = [item.custom_id for item in requests]
+        if len(set(list_custom_ids)) != len(list_custom_ids):
+            raise ValueError("Batch request custom_id values must be unique.")
         # Normal return with the provider-created batch job handle.
         return self._submit_batch_provider(requests)
 
