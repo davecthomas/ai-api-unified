@@ -11,18 +11,22 @@ EMBEDDING_ENGINE=google-gemini
 ########################################################################
 # --- OpenAI ---
 OPENAI_API_KEY=
+# --- Anthropic (native Claude API; used by COMPLETIONS_ENGINE=claude) ---
+ANTHROPIC_API_KEY=
 # Geo-residency constraint (optional: US | USA | United States)
 AI_API_GEO_RESIDENCY=
 GOOGLE_GEMINI_API_KEY=
 GOOGLE_AUTH_METHOD=api_key
+# Completions engine (openai | openai-responses | claude | google-gemini | nova | anthropic | ...)
 COMPLETIONS_ENGINE=google-gemini
 
 # Generic AI settings
 # Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001)
 EMBEDDING_MODEL_NAME=gemini-embedding-001
 # EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
-# Completions model name (gpt-4o-mini | amazon.nova-micro-v1:0 | amazon.nova-lite-v1:0 | gemini-2.5-flash)
+# Completions model name (gpt-4o-mini | claude-opus-4-8 | amazon.nova-micro-v1:0 | amazon.nova-lite-v1:0 | gemini-2.5-flash)
 COMPLETIONS_MODEL_NAME=gemini-2.5-flash
+# COMPLETIONS_MODEL_NAME=claude-opus-4-8
 # COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
 # Embedding dimensions (1536 for OpenAI | 1024 for Titan | 3072 default for Gemini)
 # Leave unset to use the provider default for the selected engine.

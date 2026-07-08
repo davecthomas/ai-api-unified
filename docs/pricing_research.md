@@ -66,8 +66,20 @@ models split into input / cached-input / output.
 | Bedrock | amazon.nova-pro | 0.80 | n/a | 3.20 | high |
 | Bedrock | amazon.nova-premier | 2.50 | n/a | 12.50 | high |
 | Bedrock | claude-3-5-haiku | 0.80 | n/a | 4.00 | high |
+| Anthropic | claude-fable-5 | 10.00 | 1.00 | 50.00 | high |
+| Anthropic | claude-opus-4-8 | 5.00 | 0.50 | 25.00 | high |
+| Anthropic | claude-opus-4-7 | 5.00 | 0.50 | 25.00 | high |
+| Anthropic | claude-opus-4-6 | 5.00 | 0.50 | 25.00 | high |
+| Anthropic | claude-sonnet-4-6 | 3.00 | 0.30 | 15.00 | high |
+| Anthropic | claude-haiku-4-5 | 1.00 | 0.10 | 5.00 | high |
+| Anthropic | claude-opus-4-1 ⚠ | 15.00 | 1.50 | 75.00 | high |
 
-Notes: Gemini audio input is priced higher than text (2.5-flash audio input
+Notes: Anthropic rates are the native-API list (added 2026-07 with the `claude`
+engine); the cached-input column is the documented 0.1x prompt-cache read rate,
+and 5-minute cache writes bill 1.25x input (not modeled). Anthropic lifecycle
+entries also cover claude-opus-4-1 (deprecated, retires 2026-08-05, replace
+with claude-opus-4-8) and the retired claude-3-7-sonnet, claude-3-5-haiku, and
+claude-3-opus snapshots. Gemini audio input is priced higher than text (2.5-flash audio input
 $1.00/1M). Gemini rates shown are the Gemini Developer API list; Vertex differs
 for the 2.0 family ($0.15 in / $0.60 out). Bedrock on-demand; cross-region
 inference profiles add ~10%, batch ≈50% off.
@@ -220,5 +232,6 @@ layer needs; building it first is why this work comes before the middleware.
 - OpenAI: developers.openai.com/api/docs/pricing and per-model `/models/<name>` pages
 - Google: ai.google.dev/gemini-api/docs/pricing, cloud.google.com/vertex-ai/generative-ai/pricing, ai.google.dev/gemini-api/docs/deprecations
 - AWS: aws.amazon.com/bedrock/pricing, aws.amazon.com/nova/pricing (tables are JS-rendered; AWS figures cross-checked via search, med confidence on embeddings/images/video)
+- Anthropic: platform.claude.com/docs/en/about-claude/models/overview and platform.claude.com/docs/en/pricing (high confidence)
 - Azure: azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services (page timed out; search-derived, med confidence)
 - ElevenLabs: elevenlabs.io/pricing/api (high confidence)

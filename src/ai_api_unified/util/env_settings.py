@@ -16,6 +16,7 @@ class EnvSettings(BaseSettings):
     COMPLETIONS_ENGINE: str | None = None
     OPENAI_API_KEY: str | None = None
     OPENAI_BASE_URL: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
     EMBEDDING_MODEL_NAME: str | None = None
     COMPLETIONS_MODEL_NAME: str | None = None
     EMBEDDING_DIMENSIONS: int | None = None
