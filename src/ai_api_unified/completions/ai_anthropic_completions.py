@@ -31,6 +31,11 @@ from ..ai_anthropic_base import AIAnthropicBase
 from ..ai_base import (
     AIBaseCompletions,
     AiApiObservedCompletionsResultModel,
+    AIBatchItemStatus,
+    AIBatchJob,
+    AIBatchRequestItem,
+    AIBatchResultItem,
+    AIBatchStatus,
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
@@ -87,6 +92,7 @@ class AICompletionsCapabilitiesAnthropic(AICompletionsCapabilitiesBase):
             supported_data_types=[SupportedDataType.TEXT, SupportedDataType.IMAGE],
             supports_streaming=True,
             supports_token_counting=True,
+            supports_batch=True,
             pricing=get_model_pricing(PROVIDER_ANTHROPIC, normalized_name),
         )
 
@@ -706,3 +712,165 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         )
         # Normal return with the caller-facing input token count.
         return observed_result.return_value
+
+    # ── Batch completions (Message Batches API) ─────────────────────────────
+
+    BATCH_ID_PREFIX: ClassVar[str] = "claude:"
+
+    DICT_BATCH_PROCESSING_STATUS: ClassVar[dict[str, AIBatchStatus]] = {
+        "in_progress": AIBatchStatus.IN_PROGRESS,
+        "canceling": AIBatchStatus.CANCELING,
+        "ended": AIBatchStatus.ENDED,
+    }
+
+    DICT_BATCH_RESULT_TYPE: ClassVar[dict[str, AIBatchItemStatus]] = {
+        "succeeded": AIBatchItemStatus.SUCCEEDED,
+        "errored": AIBatchItemStatus.ERRORED,
+        "canceled": AIBatchItemStatus.CANCELED,
+        "expired": AIBatchItemStatus.EXPIRED,
+    }
+
+    def _to_provider_batch_id(self, batch_id: str) -> str:
+        """Strip the engine namespace to recover the raw provider batch id."""
+        if batch_id.startswith(self.BATCH_ID_PREFIX):
+            return batch_id[len(self.BATCH_ID_PREFIX) :]
+        return batch_id
+
+    def _normalize_batch_job(self, batch: Any) -> AIBatchJob:
+        """Map an Anthropic batch object to the provider-agnostic AIBatchJob."""
+        counts = getattr(batch, "request_counts", None)
+        int_processing: int | None = getattr(counts, "processing", None)
+        int_succeeded: int | None = getattr(counts, "succeeded", None)
+        int_errored: int | None = getattr(counts, "errored", None)
+        int_canceled: int | None = getattr(counts, "canceled", None)
+        int_expired: int | None = getattr(counts, "expired", None)
+        list_counts: list[int | None] = [
+            int_processing,
+            int_succeeded,
+            int_errored,
+            int_canceled,
+            int_expired,
+        ]
+        int_request_count: int | None = None
+        if any(value is not None for value in list_counts):
+            int_request_count = sum(value or 0 for value in list_counts)
+        str_provider_batch_id: str = str(getattr(batch, "id", "") or "")
+        str_processing_status: str = str(getattr(batch, "processing_status", "") or "")
+        batch_status: AIBatchStatus | None = self.DICT_BATCH_PROCESSING_STATUS.get(
+            str_processing_status
+        )
+        if batch_status is None:
+            # An unmapped status is treated as still in progress (so results are
+            # not fetched prematurely); log it since it can otherwise poll until
+            # the run_batch timeout.
+            _LOGGER.warning(
+                "Unmapped Anthropic batch processing_status %r for batch %s; "
+                "treating as in_progress.",
+                str_processing_status,
+                str_provider_batch_id,
+            )
+            batch_status = AIBatchStatus.IN_PROGRESS
+        # Normal return with the normalized batch job handle.
+        return AIBatchJob(
+            batch_id=f"{self.BATCH_ID_PREFIX}{str_provider_batch_id}",
+            provider_batch_id=str_provider_batch_id,
+            status=batch_status,
+            request_count=int_request_count,
+            succeeded_count=int_succeeded,
+            errored_count=int_errored,
+            canceled_count=int_canceled,
+            expired_count=int_expired,
+            processing_count=int_processing,
+            submitted_at_utc=getattr(batch, "created_at", None),
+            ended_at_utc=getattr(batch, "ended_at", None),
+            provider_engine=self.PROVIDER_ENGINE_CLAUDE,
+            provider_model_name=self.completions_model,
+        )
+
+    def _normalize_batch_result_item(self, result: Any) -> AIBatchResultItem:
+        """Map one Anthropic batch result entry to AIBatchResultItem."""
+        str_custom_id: str = str(getattr(result, "custom_id", "") or "")
+        inner = getattr(result, "result", None)
+        str_result_type: str = str(getattr(inner, "type", "") or "")
+        item_status: AIBatchItemStatus = self.DICT_BATCH_RESULT_TYPE.get(
+            str_result_type, AIBatchItemStatus.ERRORED
+        )
+        str_text: str | None = None
+        str_error: str | None = None
+        int_prompt_tokens: int | None = None
+        int_completion_tokens: int | None = None
+        if item_status is AIBatchItemStatus.SUCCEEDED:
+            message = getattr(inner, "message", None)
+            str_text = self.pii_middleware.process_output(
+                self._extract_response_text(message) if message is not None else ""
+            )
+            # Index rather than unpack so this survives the usage tuple gaining
+            # a cached-token element (finops cached-token work); the first two
+            # positions are always (prompt, completion).
+            tuple_usage = self._extract_anthropic_usage(message)
+            int_prompt_tokens = tuple_usage[0]
+            int_completion_tokens = tuple_usage[1]
+        else:
+            error = getattr(inner, "error", None)
+            if error is not None:
+                str_error = str(getattr(error, "type", "") or "") or str(error)
+        # Normal return with the normalized per-request result.
+        return AIBatchResultItem(
+            custom_id=str_custom_id,
+            status=item_status,
+            text=str_text,
+            error_message=str_error,
+            provider_prompt_tokens=int_prompt_tokens,
+            provider_completion_tokens=int_completion_tokens,
+        )
+
+    def _submit_batch_provider(self, requests: list[AIBatchRequestItem]) -> AIBatchJob:
+        """Create an Anthropic message batch from the request items."""
+        list_batch_requests: list[dict[str, Any]] = []
+        # Loop through request items so each prompt is redacted and shaped for the API.
+        for item in requests:
+            str_prompt: str = self.pii_middleware.process_input(item.prompt)
+            str_system_prompt: str = (
+                item.system_prompt
+                if item.system_prompt is not None
+                else AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT
+            )
+            dict_params: dict[str, Any] = {
+                "model": self.completions_model,
+                "max_tokens": item.max_response_tokens or self.SEND_PROMPT_MAX_TOKENS,
+                "system": str_system_prompt,
+                "messages": [{"role": "user", "content": str_prompt}],
+            }
+            list_batch_requests.append(
+                {"custom_id": item.custom_id, "params": dict_params}
+            )
+        batch = self.client.messages.batches.create(requests=list_batch_requests)
+        # Normal return with the normalized submitted batch job.
+        return self._normalize_batch_job(batch)
+
+    def _get_batch_provider(self, batch_id: str) -> AIBatchJob:
+        """Retrieve current status for an Anthropic message batch."""
+        batch = self.client.messages.batches.retrieve(
+            self._to_provider_batch_id(batch_id)
+        )
+        # Normal return with the refreshed batch job.
+        return self._normalize_batch_job(batch)
+
+    def _cancel_batch_provider(self, batch_id: str) -> AIBatchJob:
+        """Request cancellation of an Anthropic message batch."""
+        batch = self.client.messages.batches.cancel(
+            self._to_provider_batch_id(batch_id)
+        )
+        # Normal return with the batch job after requesting cancellation.
+        return self._normalize_batch_job(batch)
+
+    def _get_batch_results_provider(self, batch_id: str) -> list[AIBatchResultItem]:
+        """Stream and normalize results for an ended Anthropic message batch."""
+        list_results: list[AIBatchResultItem] = []
+        # Loop through the streamed result entries, keyed by custom_id.
+        for result in self.client.messages.batches.results(
+            self._to_provider_batch_id(batch_id)
+        ):
+            list_results.append(self._normalize_batch_result_item(result))
+        # Normal return with the per-request batch results.
+        return list_results
