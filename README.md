@@ -1,4 +1,4 @@
-# ai-api-unified 2.11.0
+# ai-api-unified 2.12.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -675,6 +675,14 @@ separate from the observability event stream so handlers can route it
 independently. Each event carries the pricing provenance (effective date,
 source, confidence) so the cost is auditable. Unpriced models are skipped. This
 is observe-only — it never affects program flow.
+
+Prompt-cache reads are captured per provider (OpenAI, OpenAI Responses,
+Anthropic, Bedrock, and Google Gemini) and billed at the model's cached-input
+rate: the event carries `cached_input_tokens`, and the cached subset of
+`input_tokens` is priced at the cached rate while the remainder bills at the
+full input rate. Providers that report cache reads separately from the input
+count (Anthropic, Bedrock) are normalized so `input_tokens` includes the cached
+subset, keeping the cost split consistent across providers.
 
 ```yaml
 middleware:

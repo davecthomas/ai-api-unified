@@ -558,8 +558,14 @@ class AiApiObservedCompletionsResultModel(Generic[CompletionsReturnType]):
         return_value: Caller-facing return value produced by the provider path.
         raw_output_text: Raw provider output text before output-side middleware transformation.
         finish_reason: Optional provider finish reason for the final observed response.
-        provider_prompt_tokens: Optional provider-reported prompt token count.
+        provider_prompt_tokens: Optional provider-reported prompt/input token count.
+            Includes any cached-input tokens (cache reads are a subset of this
+            count); providers whose SDK reports cache reads separately are
+            normalized to this convention in their result-summary builders.
         provider_completion_tokens: Optional provider-reported completion token count.
+        provider_cached_input_tokens: Optional provider-reported cached-input
+            token count (cache reads billed at the cached rate), a subset of
+            provider_prompt_tokens. None when the provider does not report it.
         provider_total_tokens: Optional provider-reported total token count.
         dict_metadata: Additional metadata derived from the provider path.
 
@@ -572,6 +578,7 @@ class AiApiObservedCompletionsResultModel(Generic[CompletionsReturnType]):
     finish_reason: str | None = None
     provider_prompt_tokens: int | None = None
     provider_completion_tokens: int | None = None
+    provider_cached_input_tokens: int | None = None
     provider_total_tokens: int | None = None
     dict_metadata: dict[str, ObservabilityMetadataValue] = field(default_factory=dict)
 
@@ -1470,6 +1477,7 @@ class AIBaseCompletions(AIBase):
             output_token_count_source=output_token_count_source,
             provider_prompt_tokens=observed_result.provider_prompt_tokens,
             provider_completion_tokens=observed_result.provider_completion_tokens,
+            provider_cached_input_tokens=observed_result.provider_cached_input_tokens,
             provider_total_tokens=observed_result.provider_total_tokens,
             finish_reason=observed_result.finish_reason,
             dict_metadata={
@@ -1742,10 +1750,12 @@ class AIBaseCompletions(AIBase):
         """
         Returns the provider-counted input token count for a prompt.
 
-        Template method: capability gating happens here so providers cannot
-        skip it. Providers whose capabilities declare token counting implement
-        _count_tokens_provider. This measures input tokens only, using the same
-        request shape send_prompt would build.
+        Template method: capability gating and PII redaction happen here so
+        providers cannot skip them. Providers whose capabilities declare token
+        counting implement _count_tokens_provider. This measures input tokens
+        only, using the same redacted request shape send_prompt would build:
+        the prompt is redacted here so the count matches the request that would
+        actually be sent and no unredacted PII leaves the trust boundary.
 
         Args:
             prompt: The text prompt to measure.
@@ -1766,6 +1776,7 @@ class AIBaseCompletions(AIBase):
                 "provider-side token counting. Configure a model whose capabilities "
                 "include token counting."
             )
+        prompt = self.pii_middleware.process_input(prompt)
         # Normal return with the provider-counted input token total.
         return self._count_tokens_provider(prompt, other_params=other_params)
 
@@ -1856,6 +1867,7 @@ class AIBaseCompletions(AIBase):
                     finish_reason=observed_result.finish_reason,
                     provider_prompt_tokens=observed_result.provider_prompt_tokens,
                     provider_completion_tokens=observed_result.provider_completion_tokens,
+                    provider_cached_input_tokens=observed_result.provider_cached_input_tokens,
                     provider_total_tokens=observed_result.provider_total_tokens,
                     dict_metadata={
                         "stream_chunk_count": int_chunk_count,

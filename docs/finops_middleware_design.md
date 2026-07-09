@@ -127,12 +127,21 @@ topic.
    non-log destinations is deferred to Phase 2, added when a billing/metrics
    destination requires it.
 
-3. **Cached-token accuracy: deferred to Phase 3.** v1 computes input+output cost
-   accurately. Cached input bills ~10× cheaper, but the result summary does not
-   yet capture cached-token counts — providers report them in different places
-   (OpenAI `prompt_tokens_details.cached_tokens`, Gemini
-   `cached_content_token_count`, Anthropic cache read/write). Phase 3 adds
-   per-provider cached-token extraction into the result summary.
+3. **Cached-token accuracy: shipped in Phase 3 (2.12.0).** The result summary
+   now carries `provider_cached_input_tokens`, and each provider hook extracts
+   its cache-read count (OpenAI `prompt_tokens_details.cached_tokens`, OpenAI
+   Responses `input_tokens_details.cached_tokens`, Anthropic
+   `cache_read_input_tokens`, Bedrock `cacheReadInputTokens`, Gemini
+   `cached_content_token_count`). Providers that report cache reads separately
+   from the input count (Anthropic, Bedrock) fold them into
+   `provider_prompt_tokens` so the cached subset is uniform across providers.
+   The cost middleware bills the cached subset at the cached rate and the
+   remainder at the full input rate, and the cost event carries
+   `cached_input_tokens`. Scope is cache *reads*: cache *writes* (priming a
+   cache, billed above the base input rate — Bedrock exposes them as
+   `cacheWriteInputTokens`) are not captured or billed yet, because the pricing
+   registry does not model a cache-write rate. That is a follow-on once a
+   cache-write rate column lands.
 
 4. **Aggregation: none in-library.** Per-call events only, correlated via the
    `caller_id` / session / workflow ids already on the context. Rollups are the
@@ -146,6 +155,7 @@ topic.
   No new middleware class.
 - **Phase 2** — `AiApiCostSink` + a `cost_sink` config selector for non-log
   destinations, when one is needed. The default stays the cost log topic.
-- **Phase 3** — cached-token capture in the result summary (per provider) so
-  cost reflects cache discounts.
+- **Phase 3 (shipped, 2.12.0)** — cached-token capture in the result summary
+  (per provider) so cost reflects cache discounts. `provider_cached_input_tokens`
+  on the result summary; the cost middleware splits cached from full-rate input.
 - **Later** — budgets/alerting on the event stream, if wanted.

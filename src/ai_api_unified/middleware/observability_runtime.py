@@ -142,8 +142,12 @@ class AiApiCallResultSummaryModel:
         input_token_count_source: Source label for the input token count.
         output_token_count: Optional output token count when cheaply available.
         output_token_count_source: Source label for the output token count.
-        provider_prompt_tokens: Optional provider-reported prompt/input token count.
+        provider_prompt_tokens: Optional provider-reported prompt/input token count
+            (includes any cached-input tokens as a subset).
         provider_completion_tokens: Optional provider-reported completion/output token count.
+        provider_cached_input_tokens: Optional provider-reported cached-input token
+            count (cache reads billed at the cached rate), a subset of
+            provider_prompt_tokens. None when the provider does not report it.
         provider_total_tokens: Optional provider-reported total token count.
         finish_reason: Optional provider finish reason.
         dict_metadata: Additional scalar metadata fields safe to emit in logs.
@@ -156,6 +160,7 @@ class AiApiCallResultSummaryModel:
     output_token_count_source: str = TOKEN_COUNT_SOURCE_NONE
     provider_prompt_tokens: int | None = None
     provider_completion_tokens: int | None = None
+    provider_cached_input_tokens: int | None = None
     provider_total_tokens: int | None = None
     finish_reason: str | None = None
     dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(
