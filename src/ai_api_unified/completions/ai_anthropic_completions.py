@@ -1236,11 +1236,13 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         usage: AITokenUsage = self._usage_from_tuple(tuple_usage)
         if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
             # Early return so callers branch on finish_reason instead of parsing.
+            # raw_text passes through output redaction like every other model
+            # output surface, so truncated bodies follow the same PII policy.
             return AIStructuredOutputResult(
                 data=None,
                 finish_reason=finish_reason,
                 usage=usage,
-                raw_text=raw_output_text,
+                raw_text=self.pii_middleware.process_output(raw_output_text),
             )
         str_content: str = self.pii_middleware.process_output(raw_output_text)
         if not str_content:
