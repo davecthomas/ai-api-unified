@@ -1106,8 +1106,11 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         int_input_tokens: int | None = None
         int_cached_tokens: int | None = None
         int_output_tokens: int | None = None
+        # The engine owns the transport choice: assignment (not a keyword
+        # argument) deliberately wins over any caller-merged "stream" key.
+        dict_request_kwargs["stream"] = True
         try:
-            stream = call_client.messages.create(**dict_request_kwargs, stream=True)
+            stream = call_client.messages.create(**dict_request_kwargs)
             # Loop through stream events so long structured responses accumulate.
             for event in stream:
                 str_event_type: str = getattr(event, "type", "")
@@ -1172,10 +1175,11 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         int_input_tokens: int | None = None
         int_cached_tokens: int | None = None
         int_output_tokens: int | None = None
+        # The engine owns the transport choice: assignment (not a keyword
+        # argument) deliberately wins over any caller-merged "stream" key.
+        dict_request_kwargs["stream"] = True
         try:
-            stream = await call_client.messages.create(
-                **dict_request_kwargs, stream=True
-            )
+            stream = await call_client.messages.create(**dict_request_kwargs)
             # Loop through stream events so long structured responses accumulate.
             async for event in stream:
                 str_event_type: str = getattr(event, "type", "")

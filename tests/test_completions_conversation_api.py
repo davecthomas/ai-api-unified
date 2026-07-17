@@ -482,6 +482,33 @@ class TestSendStructuredOutput:
         assert kwargs["stream"] is True
         assert kwargs["max_tokens"] == 64_000
 
+    def test_stream_provider_option_does_not_collide(self):
+        # provider_options is merged verbatim, so a caller-supplied "stream"
+        # key must not raise a duplicate-keyword TypeError; the engine's
+        # transport choice wins.
+        client = _build_client()
+        client.client.messages.create.return_value = iter(
+            [
+                Mock(
+                    type="content_block_delta",
+                    delta=Mock(type="text_delta", text='{"nodes": []}'),
+                ),
+                Mock(
+                    type="message_delta",
+                    delta=Mock(stop_reason="end_turn"),
+                    usage=Mock(output_tokens=10),
+                ),
+            ]
+        )
+        result = client.send_structured_output(
+            "Compile.",
+            response_schema=RAW_GRAPH_SCHEMA,
+            max_response_tokens=64_000,
+            provider_options={"stream": False},
+        )
+        assert result.data == {"nodes": []}
+        assert client.client.messages.create.call_args.kwargs["stream"] is True
+
     def test_invalid_json_on_complete_raises(self):
         client = _build_client()
         client.client.messages.create.return_value = _response(
