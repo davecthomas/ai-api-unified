@@ -25,6 +25,7 @@ import logging
 from collections.abc import Iterator
 from typing import Any, ClassVar, Type
 
+from anthropic import APIConnectionError, APIStatusError, APITimeoutError
 from pydantic import ValidationError
 
 from ..ai_anthropic_base import AIAnthropicBase
@@ -36,11 +37,19 @@ from ..ai_base import (
     AIBatchRequestItem,
     AIBatchResultItem,
     AIBatchStatus,
+    AIFinishReason,
+    AIStructuredOutputResult,
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
+    AITokenUsage,
+    AITool,
+    AIToolCall,
+    AITurnResult,
+    RETRY_POLICY_NONE,
     SupportedDataType,
 )
+from ..ai_provider_exceptions import AiProviderRequestError
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
@@ -93,6 +102,9 @@ class AICompletionsCapabilitiesAnthropic(AICompletionsCapabilitiesBase):
             supports_streaming=True,
             supports_token_counting=True,
             supports_batch=True,
+            supports_tool_use=True,
+            supports_structured_output=True,
+            supports_async=True,
             pricing=get_model_pricing(PROVIDER_ANTHROPIC, normalized_name),
         )
 
@@ -114,6 +126,24 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     MAX_IMAGE_BYTES_ANTHROPIC: ClassVar[int] = 5_000_000
     STOP_REASON_REFUSAL: ClassVar[str] = "refusal"
     STOP_REASON_MAX_TOKENS: ClassVar[str] = "max_tokens"
+    STOP_REASON_TOOL_USE: ClassVar[str] = "tool_use"
+    # Above this response budget, non-streaming Messages requests risk the
+    # SDK's long-request guard, so structured calls stream and accumulate
+    # internally; the caller still sees one blocking call.
+    NONSTREAMING_MAX_TOKENS_THRESHOLD: ClassVar[int] = 16_000
+    # Reserved provider_options key honored by this engine: "retry_policy"
+    # ("none" disables SDK retries for that call). All other keys are merged
+    # verbatim into the Messages API request.
+    PROVIDER_OPTION_RETRY_POLICY: ClassVar[str] = "retry_policy"
+
+    DICT_FINISH_REASON_MAP: ClassVar[dict[str, AIFinishReason]] = {
+        "end_turn": AIFinishReason.COMPLETE,
+        "stop_sequence": AIFinishReason.COMPLETE,
+        "pause_turn": AIFinishReason.COMPLETE,
+        "max_tokens": AIFinishReason.LENGTH,
+        "tool_use": AIFinishReason.TOOL_USE,
+        "refusal": AIFinishReason.REFUSAL,
+    }
 
     def __init__(self, model: str = "", **kwargs: Any):
         """
@@ -273,6 +303,17 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         nodes.
         """
         dict_schema: dict[str, Any] = copy.deepcopy(response_model.model_json_schema())
+        AiAnthropicCompletions._close_schema_objects(dict_schema)
+        return dict_schema
+
+    @staticmethod
+    def _close_schema_objects(dict_schema: dict[str, Any]) -> dict[str, Any]:
+        """
+        Sets additionalProperties: false on every object node of one JSON schema.
+
+        Mutates and returns the supplied schema. Applied to both pydantic-derived
+        and caller-supplied raw schemas; compliant schemas pass through unchanged.
+        """
 
         def _close_objects(node: Any) -> None:
             if not isinstance(node, dict):
@@ -298,14 +339,258 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         _close_objects(dict_schema)
         return dict_schema
 
+    # ── Shared helpers for conversation, structured output, and async ───────
+
+    def _split_provider_options(
+        self, provider_options: dict[str, Any] | None
+    ) -> tuple[dict[str, Any], str | None]:
+        """
+        Splits provider_options into request-merge keys and reserved keys.
+
+        Args:
+            provider_options: Optional engine-specific escape hatch supplied
+                per call.
+
+        Returns:
+            Tuple of (kwargs merged verbatim into the Messages request,
+            optional per-call retry policy override).
+        """
+        if not provider_options:
+            # Early return because there is nothing to split.
+            return {}, None
+        dict_merge_options: dict[str, Any] = dict(provider_options)
+        str_retry_policy: str | None = dict_merge_options.pop(
+            self.PROVIDER_OPTION_RETRY_POLICY, None
+        )
+        # Normal return with merge options and the reserved retry override.
+        return dict_merge_options, str_retry_policy
+
+    def _client_for_call(
+        self,
+        *,
+        request_timeout_seconds: float | None = None,
+        retry_policy_override: str | None = None,
+    ) -> Any:
+        """
+        Returns the sync client, applying per-call timeout and retry options.
+
+        Args:
+            request_timeout_seconds: Optional per-call provider timeout.
+            retry_policy_override: Optional per-call retry policy token.
+
+        Returns:
+            Anthropic client (possibly a with_options view of it).
+        """
+        dict_options: dict[str, Any] = {}
+        if request_timeout_seconds is not None:
+            dict_options["timeout"] = request_timeout_seconds
+        if retry_policy_override is not None:
+            if retry_policy_override.strip().lower() == RETRY_POLICY_NONE:
+                dict_options["max_retries"] = 0
+        if not dict_options:
+            # Early return with the shared client when no per-call options apply.
+            return self.client
+        # Normal return with a per-call options view of the shared client.
+        return self.client.with_options(**dict_options)
+
+    def _async_client_for_call(
+        self,
+        *,
+        request_timeout_seconds: float | None = None,
+        retry_policy_override: str | None = None,
+    ) -> Any:
+        """
+        Async twin of _client_for_call.
+        """
+        dict_options: dict[str, Any] = {}
+        if request_timeout_seconds is not None:
+            dict_options["timeout"] = request_timeout_seconds
+        if retry_policy_override is not None:
+            if retry_policy_override.strip().lower() == RETRY_POLICY_NONE:
+                dict_options["max_retries"] = 0
+        if not dict_options:
+            # Early return with the shared async client when no per-call options apply.
+            return self.async_client
+        # Normal return with a per-call options view of the shared async client.
+        return self.async_client.with_options(**dict_options)
+
+    def _raise_request_error(self, exception: Exception) -> None:
+        """
+        Re-raises one Anthropic SDK transport error as the typed request error.
+
+        Carries the HTTP status code (when available) so caller-owned backoff
+        can classify 429/5xx/529 uniformly across engines. Non-transport
+        exceptions propagate unchanged.
+
+        Args:
+            exception: Exception raised by the Anthropic SDK call.
+
+        Raises:
+            AiProviderRequestError: For SDK status, timeout, and connection errors.
+        """
+        if isinstance(exception, APIStatusError):
+            raise AiProviderRequestError(
+                f"Anthropic request failed with status "
+                f"{exception.status_code}: {exception.message}",
+                status_code=exception.status_code,
+                provider_engine=self.PROVIDER_ENGINE_CLAUDE,
+            ) from exception
+        if isinstance(exception, (APITimeoutError, APIConnectionError)):
+            raise AiProviderRequestError(
+                f"Anthropic request failed before a status was available: "
+                f"{exception}",
+                status_code=None,
+                provider_engine=self.PROVIDER_ENGINE_CLAUDE,
+            ) from exception
+        # Normal return so non-transport exceptions propagate unchanged.
+        return None
+
+    @staticmethod
+    def _serialize_content_block(block: Any) -> dict[str, Any]:
+        """
+        Serializes one Messages content block into a replayable dictionary.
+
+        Uses the SDK model_dump when available; otherwise reconstructs the
+        block from its typed attributes so raw_content stays replayable as the
+        next assistant turn.
+        """
+        model_dump = getattr(block, "model_dump", None)
+        if callable(model_dump):
+            try:
+                dict_block: Any = model_dump()
+                if isinstance(dict_block, dict):
+                    # Early return with the SDK-serialized block.
+                    return dict_block
+            except TypeError:
+                # Fall through to attribute-based reconstruction (test doubles).
+                pass
+        str_block_type: str = str(getattr(block, "type", "") or "")
+        if str_block_type == "text":
+            return {"type": "text", "text": getattr(block, "text", "") or ""}
+        if str_block_type == "tool_use":
+            return {
+                "type": "tool_use",
+                "id": str(getattr(block, "id", "") or ""),
+                "name": str(getattr(block, "name", "") or ""),
+                "input": dict(getattr(block, "input", None) or {}),
+            }
+        # Normal return with a minimal typed placeholder for unknown blocks.
+        return {"type": str_block_type}
+
+    @staticmethod
+    def _build_provider_tools(list_tools: list[AITool]) -> list[dict[str, Any]]:
+        """
+        Maps provider-neutral AITool definitions onto Messages API tool dicts.
+        """
+        list_provider_tools: list[dict[str, Any]] = []
+        # Loop over tool definitions so each maps to the Messages tool shape.
+        for ai_tool in list_tools:
+            dict_tool: dict[str, Any] = {
+                "name": ai_tool.name,
+                "description": ai_tool.description,
+                "input_schema": ai_tool.input_schema,
+            }
+            if ai_tool.strict:
+                dict_tool["strict"] = True
+            list_provider_tools.append(dict_tool)
+        # Normal return with the Messages-shaped tool list.
+        return list_provider_tools
+
+    def _usage_from_tuple(
+        self,
+        tuple_usage: tuple[int | None, int | None, int | None, int | None],
+    ) -> AITokenUsage:
+        """
+        Builds the provider-neutral usage model from the engine usage tuple.
+        """
+        int_prompt_tokens, int_output_tokens, int_total_tokens, int_cached_tokens = (
+            tuple_usage
+        )
+        # Normal return with the provider-neutral token usage model.
+        return AITokenUsage(
+            input_tokens=int_prompt_tokens,
+            output_tokens=int_output_tokens,
+            cached_input_tokens=int_cached_tokens,
+            total_tokens=int_total_tokens,
+        )
+
+    def _build_turn_result(self, response: Any) -> AITurnResult:
+        """
+        Maps one Messages API response onto the provider-neutral AITurnResult.
+        """
+        list_text_parts: list[str] = []
+        list_tool_calls: list[AIToolCall] = []
+        list_raw_blocks: list[dict[str, Any]] = []
+        # Loop over response blocks so text, tool calls, and raw replay content align.
+        for block in getattr(response, "content", None) or []:
+            list_raw_blocks.append(self._serialize_content_block(block))
+            str_block_type: str = str(getattr(block, "type", "") or "")
+            if str_block_type == "text":
+                list_text_parts.append(getattr(block, "text", "") or "")
+            elif str_block_type == "tool_use":
+                list_tool_calls.append(
+                    AIToolCall(
+                        id=str(getattr(block, "id", "") or ""),
+                        name=str(getattr(block, "name", "") or ""),
+                        input=dict(getattr(block, "input", None) or {}),
+                    )
+                )
+        str_stop_reason: str | None = getattr(response, "stop_reason", None)
+        finish_reason: AIFinishReason = self._normalize_finish_reason(
+            str(str_stop_reason) if str_stop_reason is not None else None,
+            self.DICT_FINISH_REASON_MAP,
+        )
+        str_text: str = "".join(list_text_parts)
+        # Normal return with the provider-neutral turn result.
+        return AITurnResult(
+            text=str_text if str_text else None,
+            tool_calls=list_tool_calls,
+            finish_reason=finish_reason,
+            raw_content=list_raw_blocks,
+            usage=self._usage_from_tuple(self._extract_anthropic_usage(response)),
+        )
+
+    def _build_structured_messages(
+        self,
+        *,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Builds the Messages list for one structured-output call.
+
+        Caller-managed messages are replayed first (for example a prior model
+        output plus correction feedback); a supplied prompt is appended as the
+        final user turn.
+        """
+        list_messages: list[dict[str, Any]] = list(messages or [])
+        if prompt is not None and prompt.strip():
+            str_redacted_prompt: str = self.pii_middleware.process_input(prompt)
+            list_messages.append({"role": "user", "content": str_redacted_prompt})
+        # Normal return with the combined message list.
+        return list_messages
+
     def send_prompt(
-        self, prompt: str, *, other_params: AICompletionsPromptParamsBase | None = None
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
+        other_params: AICompletionsPromptParamsBase | None = None,
     ) -> str:
         """
         Sends a prompt to the Anthropic Messages API and returns the text result.
 
         Args:
             prompt: The prompt string to send.
+            system_prompt: Optional persistent instructions; maps to the
+                Messages API system field and overrides
+                other_params.system_prompt when both are supplied.
+            max_response_tokens: Optional response token budget; maps to the
+                Messages API max_tokens field (default SEND_PROMPT_MAX_TOKENS).
+            request_timeout_seconds: Optional per-call timeout; maps to the
+                Anthropic SDK request timeout.
             other_params: Optional provider-specific parameters (system prompt,
                 image attachments).
 
@@ -315,28 +600,37 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         if not prompt or not prompt.strip():
             raise ValueError("Prompt cannot be empty or None")
         prompt = self.pii_middleware.process_input(prompt)
-        system_prompt: str = (
-            other_params.system_prompt
-            if other_params is not None and other_params.system_prompt is not None
-            else AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT
+        str_system_prompt: str = self._resolve_system_prompt(
+            system_prompt,
+            other_params,
+            AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT,
+        )
+        int_max_tokens: int = max_response_tokens or self.SEND_PROMPT_MAX_TOKENS
+        call_client: Any = self._client_for_call(
+            request_timeout_seconds=request_timeout_seconds
         )
         user_content = self._build_user_message_content(prompt, other_params)
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_completions_observability_input_metadata(
                 prompt=prompt,
-                system_prompt=system_prompt,
+                system_prompt=str_system_prompt,
                 other_params=other_params,
                 response_mode=self.RESPONSE_MODE_TEXT,
+                max_response_tokens=max_response_tokens,
             )
         )
 
         def _execute_text_prompt() -> AiApiObservedCompletionsResultModel[str]:
-            response = self.client.messages.create(
-                model=self.completions_model,
-                max_tokens=self.SEND_PROMPT_MAX_TOKENS,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_content}],
-            )
+            try:
+                response = call_client.messages.create(
+                    model=self.completions_model,
+                    max_tokens=int_max_tokens,
+                    system=str_system_prompt,
+                    messages=[{"role": "user", "content": user_content}],
+                )
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
             str_stop_reason: str = str(getattr(response, "stop_reason", "") or "")
             if str_stop_reason == self.STOP_REASON_REFUSAL:
                 # Safety classifiers return HTTP 200 with an empty or partial
@@ -352,7 +646,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                     "Anthropic response for model '%s' was truncated at the "
                     "%s-token max_tokens cap.",
                     self.completions_model,
-                    self.SEND_PROMPT_MAX_TOKENS,
+                    int_max_tokens,
                 )
             prompt_tokens, completion_tokens, total_tokens, cached_tokens = (
                 self._extract_anthropic_usage(response)
@@ -512,6 +806,725 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         )
         # Normal return with the caller-facing structured response.
         return observed_result.return_value
+
+    # ── Conversation turns and tool use ─────────────────────────────────────
+
+    def _build_conversation_request_kwargs(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        dict_merge_options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Builds the Messages API request kwargs for one conversation turn.
+        """
+        dict_request_kwargs: dict[str, Any] = {
+            "model": self.completions_model,
+            "max_tokens": max_response_tokens or self.SEND_PROMPT_MAX_TOKENS,
+            "system": system_prompt,
+            "messages": messages,
+        }
+        if tools:
+            dict_request_kwargs["tools"] = self._build_provider_tools(tools)
+        if tool_choice is not None:
+            dict_request_kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
+        # provider_options merge last so callers can extend the raw request;
+        # unknown keys are the provider's to accept or reject.
+        dict_request_kwargs.update(dict_merge_options)
+        # Normal return with the Messages-shaped conversation request.
+        return dict_request_kwargs
+
+    def _build_conversation_observability_metadata(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only observability fields for one conversation turn.
+        """
+        dict_metadata: dict[str, ObservabilityMetadataValue] = {
+            "response_mode": self.RESPONSE_MODE_TEXT,
+            "message_count": len(messages),
+            "tool_count": len(tools),
+            "system_prompt_char_count": len(system_prompt),
+        }
+        if tool_choice is not None:
+            dict_metadata["forced_tool"] = tool_choice
+        if max_response_tokens is not None:
+            dict_metadata["max_response_tokens"] = max_response_tokens
+        # Normal return with scalar conversation metadata.
+        return dict_metadata
+
+    def _observed_turn_result(
+        self, response: Any
+    ) -> AiApiObservedCompletionsResultModel[AITurnResult]:
+        """
+        Wraps one Messages response as an observed conversation-turn result.
+        """
+        turn_result: AITurnResult = self._build_turn_result(response)
+        tuple_usage = self._extract_anthropic_usage(response)
+        str_stop_reason: str | None = getattr(response, "stop_reason", None)
+        # Normal return with the observed turn result and usage metadata.
+        return AiApiObservedCompletionsResultModel(
+            return_value=turn_result,
+            raw_output_text=turn_result.text or "",
+            finish_reason=str(str_stop_reason) if str_stop_reason else None,
+            provider_prompt_tokens=tuple_usage[0],
+            provider_completion_tokens=tuple_usage[1],
+            provider_cached_input_tokens=tuple_usage[3],
+            provider_total_tokens=tuple_usage[2],
+            dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
+        )
+
+    def _send_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Sends one conversation turn to the Messages API.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        call_client: Any = self._client_for_call(
+            request_timeout_seconds=request_timeout_seconds,
+            retry_policy_override=str_retry_override,
+        )
+        dict_request_kwargs: dict[str, Any] = self._build_conversation_request_kwargs(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_response_tokens=max_response_tokens,
+            dict_merge_options=dict_merge_options,
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_conversation_observability_metadata(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        def _execute_turn() -> AiApiObservedCompletionsResultModel[AITurnResult]:
+            try:
+                response = call_client.messages.create(**dict_request_kwargs)
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            # Normal return with the observed conversation turn.
+            return self._observed_turn_result(response)
+
+        observed_result: AiApiObservedCompletionsResultModel[AITurnResult] = (
+            self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="send_conversation",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_turn,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+                legacy_caller_id=self.user,
+            )
+        )
+        # Normal return with the caller-facing conversation turn.
+        return observed_result.return_value
+
+    async def _asend_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Async twin of _send_conversation_provider using the AsyncAnthropic client.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        call_client: Any = self._async_client_for_call(
+            request_timeout_seconds=request_timeout_seconds,
+            retry_policy_override=str_retry_override,
+        )
+        dict_request_kwargs: dict[str, Any] = self._build_conversation_request_kwargs(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_response_tokens=max_response_tokens,
+            dict_merge_options=dict_merge_options,
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_conversation_observability_metadata(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _execute_turn() -> AiApiObservedCompletionsResultModel[AITurnResult]:
+            try:
+                response = await call_client.messages.create(**dict_request_kwargs)
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            # Normal return with the observed conversation turn.
+            return self._observed_turn_result(response)
+
+        observed_result: AiApiObservedCompletionsResultModel[AITurnResult] = (
+            await self._execute_provider_acall_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="asend_conversation",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_turn,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+                legacy_caller_id=self.user,
+            )
+        )
+        # Normal return with the caller-facing conversation turn.
+        return observed_result.return_value
+
+    def _build_tool_result_message_provider(
+        self,
+        *,
+        tool_call_id: str,
+        result: dict[str, Any],
+        is_error: bool,
+    ) -> dict[str, Any]:
+        """
+        Builds one Messages API tool_result user message.
+        """
+        # Normal return with the Messages-shaped tool-result entry.
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_call_id,
+                    "content": json.dumps(result),
+                    "is_error": is_error,
+                }
+            ],
+        }
+
+    # ── Structured output (send_structured_output) ──────────────────────────
+
+    def _build_structured_request_kwargs(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        dict_merge_options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Builds the Messages API request kwargs for one structured-output call.
+        """
+        str_system_prompt: str = self._resolve_system_prompt(
+            system_prompt,
+            None,
+            AICompletionsPromptParamsBase.DEFAULT_STRICT_SCHEMA_SYSTEM_PROMPT,
+        )
+        dict_schema: dict[str, Any] = self._close_schema_objects(
+            copy.deepcopy(response_schema)
+        )
+        dict_request_kwargs: dict[str, Any] = {
+            "model": self.completions_model,
+            "max_tokens": max_response_tokens,
+            "system": str_system_prompt,
+            "messages": self._build_structured_messages(
+                prompt=prompt, messages=messages
+            ),
+            "output_config": {"format": {"type": "json_schema", "schema": dict_schema}},
+        }
+        dict_request_kwargs.update(dict_merge_options)
+        # Normal return with the Messages-shaped structured request.
+        return dict_request_kwargs
+
+    def _execute_structured_request(
+        self,
+        call_client: Any,
+        dict_request_kwargs: dict[str, Any],
+        *,
+        bool_stream: bool,
+    ) -> tuple[str, str | None, tuple[int | None, int | None, int | None, int | None]]:
+        """
+        Executes one structured request, streaming and accumulating when asked.
+
+        Large response budgets trip the SDK's non-streaming long-request guard,
+        so calls above NONSTREAMING_MAX_TOKENS_THRESHOLD stream internally and
+        accumulate; the caller still sees one blocking call.
+
+        Returns:
+            Tuple of (raw output text, provider stop reason, usage tuple).
+        """
+        if not bool_stream:
+            try:
+                response = call_client.messages.create(**dict_request_kwargs)
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            # Normal return with the non-streaming structured response parts.
+            return (
+                self._extract_response_text(response),
+                getattr(response, "stop_reason", None),
+                self._extract_anthropic_usage(response),
+            )
+
+        list_text_parts: list[str] = []
+        str_stop_reason: str | None = None
+        int_input_tokens: int | None = None
+        int_cached_tokens: int | None = None
+        int_output_tokens: int | None = None
+        try:
+            stream = call_client.messages.create(**dict_request_kwargs, stream=True)
+            # Loop through stream events so long structured responses accumulate.
+            for event in stream:
+                str_event_type: str = getattr(event, "type", "")
+                if str_event_type == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if getattr(delta, "type", "") == "text_delta":
+                        list_text_parts.append(getattr(delta, "text", "") or "")
+                elif str_event_type == "message_start":
+                    usage = getattr(getattr(event, "message", None), "usage", None)
+                    int_input_tokens = getattr(usage, "input_tokens", None)
+                    int_cached_tokens = getattr(usage, "cache_read_input_tokens", None)
+                elif str_event_type == "message_delta":
+                    delta = getattr(event, "delta", None)
+                    raw_stop_reason = getattr(delta, "stop_reason", None)
+                    if raw_stop_reason is not None:
+                        str_stop_reason = str(raw_stop_reason)
+                    usage = getattr(event, "usage", None)
+                    raw_output_tokens = getattr(usage, "output_tokens", None)
+                    if raw_output_tokens is not None:
+                        int_output_tokens = raw_output_tokens
+        except Exception as exception:
+            self._raise_request_error(exception)
+            raise
+        int_prompt_tokens, _, _ = self._fold_anthropic_prompt_tokens(
+            int_input_tokens, int_cached_tokens
+        )
+        int_total_tokens: int | None = None
+        if int_prompt_tokens is not None or int_output_tokens is not None:
+            int_total_tokens = (int_prompt_tokens or 0) + (int_output_tokens or 0)
+        # Normal return with the accumulated structured response parts.
+        return (
+            "".join(list_text_parts),
+            str_stop_reason,
+            (int_prompt_tokens, int_output_tokens, int_total_tokens, int_cached_tokens),
+        )
+
+    async def _aexecute_structured_request(
+        self,
+        call_client: Any,
+        dict_request_kwargs: dict[str, Any],
+        *,
+        bool_stream: bool,
+    ) -> tuple[str, str | None, tuple[int | None, int | None, int | None, int | None]]:
+        """
+        Async twin of _execute_structured_request.
+        """
+        if not bool_stream:
+            try:
+                response = await call_client.messages.create(**dict_request_kwargs)
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            # Normal return with the non-streaming structured response parts.
+            return (
+                self._extract_response_text(response),
+                getattr(response, "stop_reason", None),
+                self._extract_anthropic_usage(response),
+            )
+
+        list_text_parts: list[str] = []
+        str_stop_reason: str | None = None
+        int_input_tokens: int | None = None
+        int_cached_tokens: int | None = None
+        int_output_tokens: int | None = None
+        try:
+            stream = await call_client.messages.create(
+                **dict_request_kwargs, stream=True
+            )
+            # Loop through stream events so long structured responses accumulate.
+            async for event in stream:
+                str_event_type: str = getattr(event, "type", "")
+                if str_event_type == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if getattr(delta, "type", "") == "text_delta":
+                        list_text_parts.append(getattr(delta, "text", "") or "")
+                elif str_event_type == "message_start":
+                    usage = getattr(getattr(event, "message", None), "usage", None)
+                    int_input_tokens = getattr(usage, "input_tokens", None)
+                    int_cached_tokens = getattr(usage, "cache_read_input_tokens", None)
+                elif str_event_type == "message_delta":
+                    delta = getattr(event, "delta", None)
+                    raw_stop_reason = getattr(delta, "stop_reason", None)
+                    if raw_stop_reason is not None:
+                        str_stop_reason = str(raw_stop_reason)
+                    usage = getattr(event, "usage", None)
+                    raw_output_tokens = getattr(usage, "output_tokens", None)
+                    if raw_output_tokens is not None:
+                        int_output_tokens = raw_output_tokens
+        except Exception as exception:
+            self._raise_request_error(exception)
+            raise
+        int_prompt_tokens, _, _ = self._fold_anthropic_prompt_tokens(
+            int_input_tokens, int_cached_tokens
+        )
+        int_total_tokens: int | None = None
+        if int_prompt_tokens is not None or int_output_tokens is not None:
+            int_total_tokens = (int_prompt_tokens or 0) + (int_output_tokens or 0)
+        # Normal return with the accumulated structured response parts.
+        return (
+            "".join(list_text_parts),
+            str_stop_reason,
+            (int_prompt_tokens, int_output_tokens, int_total_tokens, int_cached_tokens),
+        )
+
+    def _build_structured_output_result(
+        self,
+        *,
+        raw_output_text: str,
+        str_stop_reason: str | None,
+        tuple_usage: tuple[int | None, int | None, int | None, int | None],
+    ) -> AIStructuredOutputResult:
+        """
+        Maps one structured response onto the provider-neutral result model.
+
+        LENGTH and REFUSAL turns return data=None with the normalized finish
+        reason so the caller distinguishes retryable truncation from an abort
+        in code; COMPLETE turns parse the JSON body.
+        """
+        finish_reason: AIFinishReason = self._normalize_finish_reason(
+            str_stop_reason, self.DICT_FINISH_REASON_MAP
+        )
+        usage: AITokenUsage = self._usage_from_tuple(tuple_usage)
+        if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
+            # Early return so callers branch on finish_reason instead of parsing.
+            return AIStructuredOutputResult(
+                data=None,
+                finish_reason=finish_reason,
+                usage=usage,
+                raw_text=raw_output_text,
+            )
+        str_content: str = self.pii_middleware.process_output(raw_output_text)
+        if not str_content:
+            raise ValueError("Empty response from Anthropic Messages API")
+        try:
+            parsed_data: Any = json.loads(str_content)
+        except json.JSONDecodeError as json_error:
+            raise ValueError(f"Invalid JSON response: {json_error}") from json_error
+        if not isinstance(parsed_data, dict):
+            raise ValueError(
+                "Structured response was valid JSON but not a JSON object."
+            )
+        # Normal return with the parsed structured output result.
+        return AIStructuredOutputResult(
+            data=parsed_data,
+            finish_reason=finish_reason,
+            usage=usage,
+            raw_text=str_content,
+        )
+
+    def _build_structured_observability_metadata(
+        self,
+        *,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only observability fields for one structured call.
+        """
+        # Normal return with scalar structured-call metadata.
+        return {
+            "response_mode": self.RESPONSE_MODE_STRUCTURED,
+            "prompt_char_count": len(prompt) if prompt else 0,
+            "message_count": len(messages) if messages else 0,
+            "max_response_tokens": max_response_tokens,
+        }
+
+    def _send_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Generates structured output via the Messages API output_config format.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        call_client: Any = self._client_for_call(
+            request_timeout_seconds=request_timeout_seconds,
+            retry_policy_override=str_retry_override,
+        )
+        dict_request_kwargs: dict[str, Any] = self._build_structured_request_kwargs(
+            response_schema=response_schema,
+            system_prompt=system_prompt,
+            prompt=prompt,
+            messages=messages,
+            max_response_tokens=max_response_tokens,
+            dict_merge_options=dict_merge_options,
+        )
+        bool_stream: bool = max_response_tokens > self.NONSTREAMING_MAX_TOKENS_THRESHOLD
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_structured_observability_metadata(
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        def _execute_structured() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredOutputResult]
+        ):
+            raw_output_text, str_stop_reason, tuple_usage = (
+                self._execute_structured_request(
+                    call_client, dict_request_kwargs, bool_stream=bool_stream
+                )
+            )
+            structured_result: AIStructuredOutputResult = (
+                self._build_structured_output_result(
+                    raw_output_text=raw_output_text,
+                    str_stop_reason=(
+                        str(str_stop_reason) if str_stop_reason is not None else None
+                    ),
+                    tuple_usage=tuple_usage,
+                )
+            )
+            # Normal return with the observed structured output result.
+            return AiApiObservedCompletionsResultModel(
+                return_value=structured_result,
+                raw_output_text=structured_result.raw_text,
+                finish_reason=(
+                    str(str_stop_reason) if str_stop_reason is not None else None
+                ),
+                provider_prompt_tokens=tuple_usage[0],
+                provider_completion_tokens=tuple_usage[1],
+                provider_cached_input_tokens=tuple_usage[3],
+                provider_total_tokens=tuple_usage[2],
+            )
+
+        observed_result: AiApiObservedCompletionsResultModel[
+            AIStructuredOutputResult
+        ] = self._execute_provider_call_with_observability(
+            capability=self.CLIENT_TYPE_COMPLETIONS,
+            operation="send_structured_output",
+            dict_input_metadata=dict_input_metadata,
+            callable_execute=_execute_structured,
+            callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                observed_result=result,
+                provider_elapsed_ms=provider_elapsed_ms,
+            ),
+            legacy_caller_id=self.user,
+        )
+        # Normal return with the caller-facing structured output result.
+        return observed_result.return_value
+
+    async def _asend_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Async twin of _send_structured_output_provider.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        call_client: Any = self._async_client_for_call(
+            request_timeout_seconds=request_timeout_seconds,
+            retry_policy_override=str_retry_override,
+        )
+        dict_request_kwargs: dict[str, Any] = self._build_structured_request_kwargs(
+            response_schema=response_schema,
+            system_prompt=system_prompt,
+            prompt=prompt,
+            messages=messages,
+            max_response_tokens=max_response_tokens,
+            dict_merge_options=dict_merge_options,
+        )
+        bool_stream: bool = max_response_tokens > self.NONSTREAMING_MAX_TOKENS_THRESHOLD
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_structured_observability_metadata(
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _execute_structured() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredOutputResult]
+        ):
+            raw_output_text, str_stop_reason, tuple_usage = (
+                await self._aexecute_structured_request(
+                    call_client, dict_request_kwargs, bool_stream=bool_stream
+                )
+            )
+            structured_result: AIStructuredOutputResult = (
+                self._build_structured_output_result(
+                    raw_output_text=raw_output_text,
+                    str_stop_reason=(
+                        str(str_stop_reason) if str_stop_reason is not None else None
+                    ),
+                    tuple_usage=tuple_usage,
+                )
+            )
+            # Normal return with the observed structured output result.
+            return AiApiObservedCompletionsResultModel(
+                return_value=structured_result,
+                raw_output_text=structured_result.raw_text,
+                finish_reason=(
+                    str(str_stop_reason) if str_stop_reason is not None else None
+                ),
+                provider_prompt_tokens=tuple_usage[0],
+                provider_completion_tokens=tuple_usage[1],
+                provider_cached_input_tokens=tuple_usage[3],
+                provider_total_tokens=tuple_usage[2],
+            )
+
+        observed_result: AiApiObservedCompletionsResultModel[
+            AIStructuredOutputResult
+        ] = await self._execute_provider_acall_with_observability(
+            capability=self.CLIENT_TYPE_COMPLETIONS,
+            operation="asend_structured_output",
+            dict_input_metadata=dict_input_metadata,
+            callable_execute=_execute_structured,
+            callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                observed_result=result,
+                provider_elapsed_ms=provider_elapsed_ms,
+            ),
+            legacy_caller_id=self.user,
+        )
+        # Normal return with the caller-facing structured output result.
+        return observed_result.return_value
+
+    async def _asend_prompt_provider(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        other_params: AICompletionsPromptParamsBase | None,
+    ) -> str:
+        """
+        Async twin of send_prompt using the AsyncAnthropic client.
+        """
+        str_redacted_prompt: str = self.pii_middleware.process_input(prompt)
+        str_system_prompt: str = self._resolve_system_prompt(
+            system_prompt,
+            other_params,
+            AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT,
+        )
+        int_max_tokens: int = max_response_tokens or self.SEND_PROMPT_MAX_TOKENS
+        call_client: Any = self._async_client_for_call(
+            request_timeout_seconds=request_timeout_seconds
+        )
+        user_content = self._build_user_message_content(
+            str_redacted_prompt, other_params
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_completions_observability_input_metadata(
+                prompt=str_redacted_prompt,
+                system_prompt=str_system_prompt,
+                other_params=other_params,
+                response_mode=self.RESPONSE_MODE_TEXT,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _execute_text_prompt() -> AiApiObservedCompletionsResultModel[str]:
+            try:
+                response = await call_client.messages.create(
+                    model=self.completions_model,
+                    max_tokens=int_max_tokens,
+                    system=str_system_prompt,
+                    messages=[{"role": "user", "content": user_content}],
+                )
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            str_stop_reason: str = str(getattr(response, "stop_reason", "") or "")
+            if str_stop_reason == self.STOP_REASON_REFUSAL:
+                raise RuntimeError(
+                    f"Anthropic declined the request for model "
+                    f"'{self.completions_model}' (stop_reason=refusal)."
+                )
+            raw_output_text: str = self._extract_response_text(response)
+            prompt_tokens, completion_tokens, total_tokens, cached_tokens = (
+                self._extract_anthropic_usage(response)
+            )
+            # Normal return with the Messages text output and usage metadata.
+            return AiApiObservedCompletionsResultModel(
+                return_value=raw_output_text,
+                raw_output_text=raw_output_text,
+                finish_reason=str_stop_reason,
+                provider_prompt_tokens=prompt_tokens,
+                provider_completion_tokens=completion_tokens,
+                provider_cached_input_tokens=cached_tokens,
+                provider_total_tokens=total_tokens,
+            )
+
+        observed_result: AiApiObservedCompletionsResultModel[str] = (
+            await self._execute_provider_acall_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="asend_prompt",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_text_prompt,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+                legacy_caller_id=self.user,
+            )
+        )
+        # Normal return with sanitized Messages text after observability wrapping.
+        return self.pii_middleware.process_output(observed_result.return_value)
 
     def _send_prompt_streaming_provider(
         self,

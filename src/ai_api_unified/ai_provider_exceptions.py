@@ -39,3 +39,29 @@ class AiProviderCapabilityUnsupportedError(AiProviderError):
     Raised when a caller requests an operation or input modality that the
     configured provider model does not support, per its capabilities descriptor.
     """
+
+
+class AiProviderRequestError(AiProviderRuntimeError):
+    """
+    Raised when a provider API request fails with an HTTP-level error.
+
+    Carries the provider HTTP status code so caller-owned backoff logic can
+    classify 429/5xx/529 responses uniformly across engines.
+
+    Attributes:
+        status_code: HTTP status code reported by the provider, or None when
+            the failure happened before a status was available (for example a
+            connection error or client-side timeout).
+        provider_engine: Engine selector token of the provider that failed.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        provider_engine: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code: int | None = status_code
+        self.provider_engine: str | None = provider_engine

@@ -34,17 +34,28 @@ from .ai_base import (
     AICompletionsPromptParamsBase,
     AIEmbeddingsCapabilitiesBase,
     AIEmbeddingsMultimodalParams,
+    AIFinishReason,
     AIIncludedMediaParamsBase,
     AIMediaReference,
+    AIStructuredOutputResult,
+    AITokenUsage,
+    AITool,
+    AIToolCall,
+    AITurnResult,
     AIVideoArtifact,
     AIVideoGenerationJob,
     AIVideoGenerationResult,
     AIVideoGenerationStatus,
     AIStructuredPrompt,
+    RETRY_POLICY_DEFAULT,
+    RETRY_POLICY_NONE,
     SupportedDataType,
 )
 from .ai_completions_exceptions import StructuredResponseTokenLimitError
-from .ai_provider_exceptions import AiProviderCapabilityUnsupportedError
+from .ai_provider_exceptions import (
+    AiProviderCapabilityUnsupportedError,
+    AiProviderRequestError,
+)
 from .ai_factory import AIFactory
 from .pricing import (
     AIModelInfo,
@@ -84,8 +95,17 @@ __all__: list[str] = [
     "AICompletionsPromptParamsBase",
     "AIEmbeddingsCapabilitiesBase",
     "AIEmbeddingsMultimodalParams",
+    "AIFinishReason",
     "AIIncludedMediaParamsBase",
+    "AIStructuredOutputResult",
+    "AITokenUsage",
+    "AITool",
+    "AIToolCall",
+    "AITurnResult",
     "AiProviderCapabilityUnsupportedError",
+    "AiProviderRequestError",
+    "RETRY_POLICY_DEFAULT",
+    "RETRY_POLICY_NONE",
     "StructuredResponseTokenLimitError",
     "SupportedDataType",
     "AIModelPricing",

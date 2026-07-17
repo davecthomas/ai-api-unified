@@ -356,8 +356,15 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         self,
         prompt: str,
         *,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> str:
+        self._reject_unsupported_send_prompt_params(
+            max_response_tokens=max_response_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+        )
         prompt = self.pii_middleware.process_input(prompt)
         # AWS Bedrock expects messages in this format for the Converse API
         user_content: list[dict[str, Any]] = self._build_user_content(
@@ -365,10 +372,10 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         )
         messages = [{"role": "user", "content": user_content}]
 
-        system_prompt: str = (
-            other_params.system_prompt
-            if other_params is not None and other_params.system_prompt is not None
-            else AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT
+        system_prompt = self._resolve_system_prompt(
+            system_prompt,
+            other_params,
+            AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT,
         )
 
         inference_config = {"temperature": 0.2, "topP": 0.85, "maxTokens": 256}

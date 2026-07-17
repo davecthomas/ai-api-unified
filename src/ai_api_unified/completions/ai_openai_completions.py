@@ -481,25 +481,41 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         return observed_result.return_value
 
     def send_prompt(
-        self, prompt: str, *, other_params: AICompletionsPromptParamsBase | None = None
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
+        other_params: AICompletionsPromptParamsBase | None = None,
     ) -> str:
         """
         Sends a prompt to the latest version of the OpenAI API for chat and returns the completion result.
 
         Args:
             prompt (str): The prompt string to send.
+            system_prompt: Optional persistent instructions; overrides
+                other_params.system_prompt when both are supplied.
+            max_response_tokens: Not yet mapped on this engine; raises
+                AiProviderCapabilityUnsupportedError when supplied.
+            request_timeout_seconds: Not yet mapped on this engine; raises
+                AiProviderCapabilityUnsupportedError when supplied.
             other_params: Optional provider-specific parameters (not used for OpenAI currently)
 
         Returns:
             str: The completion result as a string.
         """
+        self._reject_unsupported_send_prompt_params(
+            max_response_tokens=max_response_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+        )
         try:
             prompt = self.pii_middleware.process_input(prompt)
 
-            system_prompt: str = (
-                other_params.system_prompt
-                if other_params is not None and other_params.system_prompt is not None
-                else AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT
+            system_prompt = self._resolve_system_prompt(
+                system_prompt,
+                other_params,
+                AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT,
             )
 
             user_content = self._build_user_message_content(prompt, other_params)

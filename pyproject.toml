@@ -36,7 +36,7 @@
 [project]
 name = "ai_api_unified"
 
-version = "2.13.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
+version = "2.14.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
 description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
@@ -80,7 +80,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.4.0,<9.0.0", "ruff>=0.4.4,<1.0.0", "black>=24.4.2,<25.0.0"]
+dev = ["pytest>=8.4.0,<9.0.0", "pytest-asyncio>=0.24.0,<1.0.0", "ruff>=0.4.4,<1.0.0", "black>=24.4.2,<25.0.0"]
 openai = ["openai>=2.0.0,<3.0.0"]
 anthropic = ["anthropic>=0.116.0,<1.0.0"]
 azure_tts = ["azure-cognitiveservices-speech>=1.37.0,<2.0.0"]
@@ -143,6 +143,7 @@ requires-poetry = ">=2.0,<2.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
+pytest-asyncio = ">=0.24.0,<1.0.0"
 
 # ─── Tell Poetry where your package lives ────────────────────────────────────
 [[tool.poetry.packages]]

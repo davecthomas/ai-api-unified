@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, TypeVar
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 
 if TYPE_CHECKING:
     from ai_api_unified.middleware.observability import (
@@ -47,11 +47,24 @@ class ObservabilityContextModel:
         caller_id: Optional stable, non-sensitive caller identifier for correlation.
         session_id: Optional session identifier supplied by application code.
         workflow_id: Optional workflow identifier supplied by application code.
+        tags: Arbitrary string tags supplied by application code (for example
+            run_id, node_id, or a workflow name) that are emitted on every
+            observability event, including cost-topic events.
     """
 
     caller_id: str | None = None
     session_id: str | None = None
     workflow_id: str | None = None
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """
+        Freezes caller-supplied tags so the context object remains effectively immutable.
+        """
+        frozen_tags: Mapping[str, str] = MappingProxyType(dict(self.tags))
+        object.__setattr__(self, "tags", frozen_tags)
+        # Normal return after replacing tags with an immutable mapping copy.
+        return None
 
 
 DEFAULT_OBSERVABILITY_CONTEXT: ObservabilityContextModel = ObservabilityContextModel()
@@ -95,6 +108,7 @@ class AiApiCallContextModel:
     dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(
         default_factory=dict
     )
+    dict_tags: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """
@@ -110,6 +124,8 @@ class AiApiCallContextModel:
             dict(self.dict_metadata)
         )
         object.__setattr__(self, "dict_metadata", frozen_metadata)
+        frozen_tags: Mapping[str, str] = MappingProxyType(dict(self.dict_tags))
+        object.__setattr__(self, "dict_tags", frozen_tags)
         # Normal return after replacing metadata with an immutable mapping copy.
         return None
 
@@ -206,11 +222,39 @@ def _normalize_observability_identifier(value: str | None) -> str | None:
     return normalized_value
 
 
+def _normalize_observability_tags(
+    tags: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """
+    Trims and validates caller-supplied observability tags.
+
+    Args:
+        tags: Optional mapping of arbitrary string tag names to string values.
+
+    Returns:
+        Dictionary containing only tags whose trimmed key and value are non-blank.
+    """
+    if not tags:
+        # Early return because no tags were provided.
+        return {}
+    dict_normalized_tags: dict[str, str] = {}
+    # Loop over supplied tags so blank keys or values never reach emitted events.
+    for str_key, str_value in tags.items():
+        normalized_key: str | None = _normalize_observability_identifier(str_key)
+        normalized_value: str | None = _normalize_observability_identifier(str_value)
+        if normalized_key is None or normalized_value is None:
+            continue
+        dict_normalized_tags[normalized_key] = normalized_value
+    # Normal return with the normalized tag mapping.
+    return dict_normalized_tags
+
+
 def set_observability_context(
     *,
     caller_id: str | None = None,
     session_id: str | None = None,
     workflow_id: str | None = None,
+    tags: Mapping[str, str] | None = None,
 ) -> Token[ObservabilityContextModel]:
     """
     Stores request-scoped observability correlation identifiers using `contextvars`.
@@ -219,6 +263,9 @@ def set_observability_context(
         caller_id: Optional stable, non-sensitive caller identifier for log correlation.
         session_id: Optional session identifier for request correlation.
         workflow_id: Optional workflow identifier for request correlation.
+        tags: Optional arbitrary string tags (for example run_id, node_id, or a
+            workflow name) emitted on every observability event, including
+            cost-topic events, as `tag_<name>` fields.
 
     Returns:
         ContextVar token that can be passed to `reset_observability_context`.
@@ -227,6 +274,7 @@ def set_observability_context(
         caller_id=_normalize_observability_identifier(caller_id),
         session_id=_normalize_observability_identifier(session_id),
         workflow_id=_normalize_observability_identifier(workflow_id),
+        tags=_normalize_observability_tags(tags),
     )
     context_token: Token[ObservabilityContextModel] = OBSERVABILITY_CONTEXT.set(
         observability_context
@@ -353,6 +401,101 @@ def execute_observed_call(
     float_started_at: float = time.perf_counter()
     try:
         provider_result: ProviderCallReturnType = callable_execute()
+    except Exception as exception:
+        caught_exception: Exception = exception
+        provider_elapsed_ms: float = (time.perf_counter() - float_started_at) * 1000.0
+        _safe_emit_observability_hook(
+            stage="on_error",
+            callable_emit=lambda: observability_middleware.on_error(
+                call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_ERROR),
+                exception=caught_exception,
+                float_elapsed_ms=provider_elapsed_ms,
+            ),
+        )
+        # Early return via re-raise because provider exception behavior must remain unchanged.
+        raise
+
+    provider_elapsed_ms = (time.perf_counter() - float_started_at) * 1000.0
+    try:
+        call_result_summary: AiApiCallResultSummaryModel = (
+            callable_build_result_summary(
+                provider_result,
+                provider_elapsed_ms,
+            )
+        )
+    except Exception as exception:
+        _LOGGER.warning(
+            OBSERVABILITY_CONTEXT_HOOK_FAILURE_LOG_MESSAGE,
+            "build_result_summary",
+            exception.__class__.__name__,
+        )
+        # Normal return because result-summary construction failed and observability must fail open.
+        return provider_result
+    _safe_emit_observability_hook(
+        stage="after_call",
+        callable_emit=lambda: observability_middleware.after_call(
+            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_OUTPUT),
+            call_result_summary=call_result_summary,
+        ),
+    )
+    # Normal return with the original provider result after observability emission.
+    return provider_result
+
+
+async def execute_observed_async_call(
+    *,
+    observability_middleware: AiApiObservabilityMiddleware,
+    callable_build_call_context: Callable[[], AiApiCallContextModel],
+    callable_execute: Callable[[], Awaitable[ProviderCallReturnType]],
+    callable_build_result_summary: Callable[
+        [ProviderCallReturnType, float], AiApiCallResultSummaryModel
+    ],
+) -> ProviderCallReturnType:
+    """
+    Wraps one awaitable provider call with shared observability lifecycle emission.
+
+    Mirrors execute_observed_call for coroutine-shaped provider calls. Hook
+    emission itself stays synchronous (logging-backed), so only the provider
+    call is awaited.
+
+    Args:
+        observability_middleware: Effective observability middleware implementation for the call.
+        callable_build_call_context: Zero-argument callable that builds the shared call context
+            only when observability is enabled.
+        callable_execute: Zero-argument callable returning the awaitable provider call.
+        callable_build_result_summary: Callable that summarizes provider output using the
+            provider return value and elapsed milliseconds.
+
+    Returns:
+        Original provider return value from awaiting `callable_execute`.
+
+    Raises:
+        Propagates the original provider exception unchanged when the awaited call fails.
+    """
+    if not observability_middleware.bool_enabled:
+        # Normal return because observability is disabled and the provider result is unchanged.
+        return await callable_execute()
+
+    try:
+        call_context: AiApiCallContextModel = callable_build_call_context()
+    except Exception as exception:
+        _LOGGER.warning(
+            OBSERVABILITY_CONTEXT_HOOK_FAILURE_LOG_MESSAGE,
+            "build_call_context",
+            exception.__class__.__name__,
+        )
+        # Normal return because call-context construction failed and observability must fail open.
+        return await callable_execute()
+    _safe_emit_observability_hook(
+        stage="before_call",
+        callable_emit=lambda: observability_middleware.before_call(
+            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_INPUT)
+        ),
+    )
+
+    float_started_at: float = time.perf_counter()
+    try:
+        provider_result: ProviderCallReturnType = await callable_execute()
     except Exception as exception:
         caught_exception: Exception = exception
         provider_elapsed_ms: float = (time.perf_counter() - float_started_at) * 1000.0
