@@ -81,11 +81,71 @@ def configure_presidio_test_log_noise_filter() -> None:
 configure_presidio_test_log_noise_filter()
 
 
+# ============================================================================
+# AI AGENT REMINDER — TEST SELECTION POLICY
+#
+# 483+ tests is too many to run on every edit. During development, run only
+# the areas impacted by your change:
+#
+#     poetry run python scripts/run_impacted_tests.py        # auto from git diff
+#     poetry run pytest -m "area_engine_openai and not nonmock"   # by hand
+#
+# The FULL mocked regression suite (poetry run pytest -q -m "not nonmock")
+# is REQUIRED before tagging or publishing a release; publish.sh enforces it.
+# Area markers are applied automatically from tests/area_map.py — every new
+# test file MUST be mapped there or collection fails below.
+# ============================================================================
+tests_dir: str = os.path.dirname(__file__)
+if tests_dir not in sys.path:
+    sys.path.insert(0, tests_dir)
+
+from area_map import (  # noqa: E402
+    AREA_MARKER_PREFIX,
+    AREAS,
+    areas_for_test_file,
+)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "nonmock: tests that call live provider APIs and require credentials",
     )
+    # Loop over areas so every area marker is registered for strict marker use.
+    for str_area in AREAS:
+        config.addinivalue_line(
+            "markers",
+            f"{AREA_MARKER_PREFIX}{str_area}: tests exercising the "
+            f"'{str_area}' code area (auto-applied from tests/area_map.py)",
+        )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """
+    Auto-applies area markers from tests/area_map.py to every collected test.
+
+    Fails collection for unmapped test files so impact-based selection can
+    never silently skip a new test file.
+    """
+    list_unmapped_files: list[str] = []
+    # Loop over collected items so each carries its file's area markers.
+    for item in items:
+        str_basename: str = os.path.basename(str(item.fspath))
+        tuple_areas = areas_for_test_file(str_basename)
+        if tuple_areas is None:
+            if str_basename not in list_unmapped_files:
+                list_unmapped_files.append(str_basename)
+            continue
+        for str_area in tuple_areas:
+            item.add_marker(getattr(pytest.mark, f"{AREA_MARKER_PREFIX}{str_area}"))
+    if list_unmapped_files:
+        raise pytest.UsageError(
+            "Test files missing from tests/area_map.py DICT_TEST_FILE_AREAS: "
+            f"{', '.join(sorted(list_unmapped_files))}. Add each file to the "
+            "map (this keeps impact-based test selection complete)."
+        )
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
