@@ -1,8 +1,9 @@
 ########################################################################
 #   CORE ENGINE SELECTION
 ########################################################################
-# Which embedding model family?   openai | titan | google-gemini
+# Which embedding model family?   openai | titan | google-gemini | voyage
 # EMBEDDING_ENGINE=titan
+# EMBEDDING_ENGINE=voyage
 EMBEDDING_ENGINE=google-gemini
 
 
@@ -15,13 +16,15 @@ OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 # Geo-residency constraint (optional: US | USA | United States)
 AI_API_GEO_RESIDENCY=
+# --- Voyage AI (embeddings; used by EMBEDDING_ENGINE=voyage) ---
+VOYAGE_API_KEY=
 GOOGLE_GEMINI_API_KEY=
 GOOGLE_AUTH_METHOD=api_key
 # Completions engine (openai | openai-responses | claude | google-gemini | nova | anthropic | ...)
 COMPLETIONS_ENGINE=google-gemini
 
 # Generic AI settings
-# Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001)
+# Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001 | voyage-3)
 EMBEDDING_MODEL_NAME=gemini-embedding-001
 # EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
 # Completions model name (gpt-4o-mini | claude-opus-4-8 | amazon.nova-micro-v1:0 | amazon.nova-lite-v1:0 | gemini-2.5-flash)

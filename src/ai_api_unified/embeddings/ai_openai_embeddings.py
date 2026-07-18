@@ -135,7 +135,11 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
         """
         return self.compute_embedding_cost(input_tokens=num_tokens)
 
-    def generate_embeddings(self, text: str) -> dict[str, Any]:
+    # input_type is a provider-neutral retrieval hint honored by the
+    # voyage engine; this engine has no equivalent and ignores it.
+    def generate_embeddings(
+        self, text: str, *, input_type: str | None = None
+    ) -> dict[str, Any]:
         """
         Generates embeddings for a given text using OpenAI's embeddings API.
 
@@ -261,7 +265,9 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
         # Normal return with the caller-facing single embedding payload.
         return observed_result.return_value
 
-    def generate_embeddings_batch(self, texts: list[str]) -> list[dict[str, Any]]:
+    def generate_embeddings_batch(
+        self, texts: list[str], *, input_type: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Generates embeddings for a batch of texts using OpenAI's embeddings API.
 

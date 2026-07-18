@@ -462,6 +462,7 @@ class AIEmbeddingsCapabilitiesBase(BaseModel):
     max_images_per_request: int | None = None
     max_video_seconds: int | None = None
     max_audio_seconds: int | None = None
+    supports_async: bool = False
     pricing: AIModelPricing | None = None
 
 
@@ -517,8 +518,10 @@ class AIBase(ABC):
     PROVIDER_VENDOR_AZURE = "azure"
     PROVIDER_VENDOR_ELEVENLABS = "elevenlabs"
     PROVIDER_VENDOR_ANTHROPIC = "anthropic"
+    PROVIDER_VENDOR_VOYAGE = "voyage"
     PROVIDER_ENGINE_GOOGLE_GEMINI = "google-gemini"
     PROVIDER_ENGINE_CLAUDE = "claude"
+    PROVIDER_ENGINE_VOYAGE = "voyage"
     _observability_middleware: AiApiObservabilityMiddleware | None = None
 
     def __init__(self, model: str | None = None, **kwargs):
@@ -718,6 +721,9 @@ class AIBase(ABC):
             Best-effort provider vendor label derived from the concrete client module or class.
         """
         lower_module_name: str = self.__class__.__module__.lower()
+        if "voyage" in lower_module_name:
+            # Early return for Voyage AI embeddings clients.
+            return self.PROVIDER_VENDOR_VOYAGE
         if "anthropic" in lower_module_name:
             # Early return for native Anthropic API clients.
             return self.PROVIDER_VENDOR_ANTHROPIC
@@ -750,6 +756,9 @@ class AIBase(ABC):
             Best-effort provider engine label derived from the concrete client module or class.
         """
         lower_module_name: str = self.__class__.__module__.lower()
+        if "voyage" in lower_module_name:
+            # Early return for Voyage AI embeddings clients.
+            return self.PROVIDER_ENGINE_VOYAGE
         if "anthropic" in lower_module_name:
             # Early return for native Anthropic API clients (the claude engine).
             return self.PROVIDER_ENGINE_CLAUDE
@@ -1370,16 +1379,86 @@ class AIBaseEmbeddings(AIBase):
         return dict_input_metadata
 
     @abstractmethod
-    def generate_embeddings(self, text: str) -> dict[str, Any]:
+    def generate_embeddings(
+        self, text: str, *, input_type: str | None = None
+    ) -> dict[str, Any]:
         """
         Generates embeddings for a single piece of text.
+
+        Args:
+            text: Text to embed.
+            input_type: Optional retrieval hint ("query" or "document") that
+                improves retrieval quality on engines that support it (the
+                voyage engine); engines without the concept ignore it.
         """
 
     @abstractmethod
-    def generate_embeddings_batch(self, texts: list[str]) -> list[dict[str, Any]]:
+    def generate_embeddings_batch(
+        self, texts: list[str], *, input_type: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Generates embeddings for multiple pieces of text in a single API call.
+
+        Args:
+            texts: Texts to embed.
+            input_type: Optional retrieval hint ("query" or "document"); see
+                generate_embeddings.
         """
+
+    async def agenerate_embeddings(
+        self, text: str, *, input_type: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Async variant of generate_embeddings for engines whose SDK has an
+        async client.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the configured model
+                does not support async embeddings.
+        """
+        if not self.capabilities.supports_async:
+            self._raise_capability_unsupported("async embeddings")
+        # Normal return with the provider-implemented async embedding.
+        return await self._agenerate_embeddings_provider(text, input_type=input_type)
+
+    async def _agenerate_embeddings_provider(
+        self, text: str, *, input_type: str | None
+    ) -> dict[str, Any]:
+        """
+        Provider hook for async single-text embedding generation.
+
+        The base implementation raises: a provider whose capabilities declare
+        async support must implement this hook.
+        """
+        self._raise_capability_unsupported("async embeddings")
+
+    async def agenerate_embeddings_batch(
+        self, texts: list[str], *, input_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """
+        Async variant of generate_embeddings_batch.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the configured model
+                does not support async embeddings.
+        """
+        if not self.capabilities.supports_async:
+            self._raise_capability_unsupported("async embeddings")
+        # Normal return with the provider-implemented async batch embeddings.
+        return await self._agenerate_embeddings_batch_provider(
+            texts, input_type=input_type
+        )
+
+    async def _agenerate_embeddings_batch_provider(
+        self, texts: list[str], *, input_type: str | None
+    ) -> list[dict[str, Any]]:
+        """
+        Provider hook for async batch embedding generation.
+
+        The base implementation raises: a provider whose capabilities declare
+        async support must implement this hook.
+        """
+        self._raise_capability_unsupported("async embeddings")
 
     def generate_embeddings_multimodal(
         self,

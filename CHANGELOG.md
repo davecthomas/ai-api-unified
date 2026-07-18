@@ -4,6 +4,27 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.17.0
+
+- New `voyage` embeddings engine (extra: `voyage`, auth: `VOYAGE_API_KEY`)
+  serving Voyage AI's models: `voyage-3` (default), `voyage-3-lite`,
+  `voyage-3-large`, `voyage-code-3`, `voyage-finance-2`, `voyage-law-2` —
+  with per-model dimensions, input-token limits, and registry pricing so
+  cost events work like completions. Identical public surface to the other
+  embeddings engines (same signatures and `{"embedding", "text",
+  "dimensions"}` return shape); a consumer swaps providers by changing only
+  the engine name. Batch calls chunk internally at Voyage's 128-text cap.
+- Provider-neutral `input_type` retrieval hint ("query" | "document") added
+  to `generate_embeddings` / `generate_embeddings_batch`; the `voyage`
+  engine forwards it, other engines accept and ignore it.
+- Async embeddings variants `agenerate_embeddings` /
+  `agenerate_embeddings_batch`, gated by the new
+  `AIEmbeddingsCapabilitiesBase.supports_async` flag (currently `voyage`).
+- The `voyage` engine honors `retry_policy="none"` and wraps provider
+  failures in `AiProviderRequestError` with `status_code`, matching the
+  completions clients. Missing SDK raises the typed dependency error naming
+  the `voyage` extra.
+
 ## 2.16.0
 
 - Audio dependencies (`pydub`; `audioop-lts` on Python 3.13+) moved out of

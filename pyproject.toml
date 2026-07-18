@@ -36,7 +36,7 @@
 [project]
 name = "ai_api_unified"
 
-version = "2.16.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
+version = "2.17.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
 description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
@@ -90,6 +90,8 @@ azure_tts = [
   "audioop-lts>=0.2.0; python_version >= '3.13'",
 ]
 bedrock = ["boto3>=1.34.0,<2.0.0"]
+# Voyage AI embeddings (the voyage embeddings engine); VOYAGE_API_KEY auth.
+voyage = ["voyageai>=0.3.2,<1.0.0"]
 elevenlabs = [
   "elevenlabs>=2.3.0,<3.0.0",
   "pydub>=0.25.1,<0.26.0",

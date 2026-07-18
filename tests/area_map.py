@@ -122,6 +122,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_observability_tts_phase_f.py": ("middleware", "voice"),
     # Embeddings
     "test_embeddings_capabilities.py": ("embeddings",),
+    "test_voyage_embeddings.py": ("embeddings",),
     # Images
     "test_image_generation_files.py": ("images",),
     "test_nova_canvas_image.py": ("images", "engine_bedrock"),

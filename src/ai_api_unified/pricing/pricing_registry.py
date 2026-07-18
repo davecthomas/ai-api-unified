@@ -43,12 +43,14 @@ _SRC_GOOGLE: str = "https://ai.google.dev/gemini-api/docs/pricing"
 _SRC_GOOGLE_DEP: str = "https://ai.google.dev/gemini-api/docs/deprecations"
 _SRC_BEDROCK: str = "https://aws.amazon.com/bedrock/pricing/"
 _SRC_ANTHROPIC: str = "https://platform.claude.com/docs/en/about-claude/models/overview"
+_SRC_VOYAGE: str = "https://docs.voyageai.com/docs/pricing"
 
 # Provider labels used as the first half of registry keys.
 PROVIDER_OPENAI: str = "openai"
 PROVIDER_GOOGLE: str = "google"
 PROVIDER_BEDROCK: str = "bedrock"
 PROVIDER_ANTHROPIC: str = "anthropic"
+PROVIDER_VOYAGE: str = "voyage"
 
 
 def _tok(
@@ -149,6 +151,37 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             PROVIDER_OPENAI,
             "text-embedding-ada-002",
             _tok("0.10", None, None, _SRC_OPENAI),
+        ),
+        # ── Voyage AI embeddings (input only) ───────────────────────────────
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-3-lite",
+            _tok("0.02", None, None, _SRC_VOYAGE),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-3",
+            _tok("0.06", None, None, _SRC_VOYAGE),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-3-large",
+            _tok("0.18", None, None, _SRC_VOYAGE),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-code-3",
+            _tok("0.18", None, None, _SRC_VOYAGE),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-finance-2",
+            _tok("0.12", None, None, _SRC_VOYAGE),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-law-2",
+            _tok("0.12", None, None, _SRC_VOYAGE),
         ),
         # ── Google completions (active) ─────────────────────────────────────
         _info(
