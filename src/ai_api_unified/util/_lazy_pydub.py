@@ -76,7 +76,9 @@ def _load_pydub() -> types.ModuleType:
             )
             try:
                 _pydub_module = importlib.import_module("pydub")
-            except ModuleNotFoundError as exception:
+            except ImportError as exception:
+                # ImportError (not just ModuleNotFoundError) so a broken or
+                # partial pydub install also surfaces the install hint.
                 raise AiProviderDependencyUnavailableError(
                     VOICE_EXTRA_INSTALL_HINT
                 ) from exception
