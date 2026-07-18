@@ -82,10 +82,10 @@ trio = ["trio (>=0.26.1)"]
 name = "audioop-lts"
 version = "0.2.2"
 description = "LTS Port of Python audioop"
-optional = false
+optional = true
 python-versions = ">=3.13"
 groups = ["main"]
-markers = "python_version == \"3.13\""
+markers = "python_version == \"3.13\" and (extra == \"azure-tts\" or extra == \"elevenlabs\" or extra == \"voice\")"
 files = [
     {file = "audioop_lts-0.2.2-cp313-abi3-macosx_10_13_universal2.whl", hash = "sha256:fd3d4602dc64914d462924a08c1a9816435a2155d74f325853c1f1ac3b2d9800"},
     {file = "audioop_lts-0.2.2-cp313-abi3-macosx_10_13_x86_64.whl", hash = "sha256:550c114a8df0aafe9a05442a1162dfc8fec37e9af1d625ae6060fed6e756f303"},
@@ -943,7 +943,7 @@ google-auth = ">=2.14.1,<2.24.0 || >2.24.0,<2.25.0 || >2.25.0,<3.0.0"
 grpcio = ">=1.33.2,<2.0.0"
 proto-plus = [
     {version = ">=1.25.0,<2.0.0", markers = "python_version >= \"3.13\""},
-    {version = ">=1.22.3,<2.0.0", markers = "python_version < \"3.13\""},
+    {version = ">=1.22.3,<2.0.0"},
 ]
 protobuf = ">=3.20.2,<4.21.0 || >4.21.0,<4.21.1 || >4.21.1,<4.21.2 || >4.21.2,<4.21.3 || >4.21.3,<4.21.4 || >4.21.4,<4.21.5 || >4.21.5,<7.0.0"
 
@@ -2261,9 +2261,10 @@ yaml = ["pyyaml (>=6.0.1)"]
 name = "pydub"
 version = "0.25.1"
 description = "Manipulate audio with an simple and easy high level interface"
-optional = false
+optional = true
 python-versions = "*"
 groups = ["main"]
+markers = "extra == \"azure-tts\" or extra == \"elevenlabs\" or extra == \"voice\""
 files = [
     {file = "pydub-0.25.1-py2.py3-none-any.whl", hash = "sha256:65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6"},
     {file = "pydub-0.25.1.tar.gz", hash = "sha256:980a33ce9949cab2a569606b65674d748ecbca4f0796887fd6f46173a7b0d30f"},
@@ -3465,10 +3466,10 @@ dev = ["pytest", "setuptools"]
 
 [extras]
 anthropic = ["anthropic"]
-azure-tts = ["azure-cognitiveservices-speech"]
+azure-tts = ["audioop-lts", "azure-cognitiveservices-speech", "pydub"]
 bedrock = ["boto3"]
 dev = ["black", "pytest", "pytest-asyncio", "ruff"]
-elevenlabs = ["elevenlabs"]
+elevenlabs = ["audioop-lts", "elevenlabs", "pydub"]
 google-gemini = ["google-cloud-speech", "google-cloud-texttospeech", "google-genai", "googleapis-common-protos", "protobuf"]
 middleware-pii-redaction = ["presidio-analyzer", "presidio-anonymizer", "spacy", "usaddress"]
 middleware-pii-redaction-large = ["presidio-analyzer", "presidio-anonymizer", "spacy", "usaddress"]
@@ -3476,8 +3477,9 @@ middleware-pii-redaction-small = ["presidio-analyzer", "presidio-anonymizer", "s
 openai = ["openai"]
 similarity-score = ["numpy"]
 video-frames = ["Pillow", "imageio", "imageio-ffmpeg"]
+voice = ["audioop-lts", "pydub"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "e27788016e171fd43427e87eaf64e87eb2f9b0d81b5c7633e548ac6ca8974f92"
+content-hash = "7fbb34f5f097b4dafb1bf96b02b8186bbda39b9713be3e567fb7c9e6daec62d8"

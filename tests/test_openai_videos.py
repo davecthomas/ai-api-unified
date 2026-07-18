@@ -82,7 +82,9 @@ def test_openai_video_submit_passes_reference_image_as_input_reference() -> None
     provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
     provider.client.videos.create.return_value = _fake_video()
     properties: AIOpenAIVideoProperties = AIOpenAIVideoProperties(
-        reference_image=AIMediaReference(bytes_data=b"png-bytes", mime_type="image/png"),
+        reference_image=AIMediaReference(
+            bytes_data=b"png-bytes", mime_type="image/png"
+        ),
         output_dir=Path("/tmp/openai-videos"),
     )
 

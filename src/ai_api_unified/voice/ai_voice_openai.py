@@ -14,7 +14,7 @@ from openai.types.audio import (
 )
 from pydantic import Field
 from ai_api_unified.ai_openai_base import AIOpenAIBase
-from ai_api_unified.util._lazy_pydub import AudioSegment, CouldntDecodeError
+from ai_api_unified.util._lazy_pydub import AudioSegment, get_CouldntDecodeError
 
 from .ai_voice_base import (
     AiApiObservedTtsResultModel,
@@ -389,7 +389,9 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
         # Load audio into a time-addressable segment
         try:
             audio = AudioSegment.from_file(BytesIO(audio_bytes))
-        except CouldntDecodeError as exc:
+        # get_CouldntDecodeError() is evaluated only while handling the
+        # exception, so importing this module never pulls in pydub.
+        except get_CouldntDecodeError() as exc:
             logger.error("Failed to decode audio: %s", exc)
             raise ValueError(f"Could not decode audio: {exc}") from exc
         except Exception as exc:

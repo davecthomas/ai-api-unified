@@ -36,7 +36,7 @@
 [project]
 name = "ai_api_unified"
 
-version = "2.15.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
+version = "2.16.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
 description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
@@ -72,8 +72,9 @@ dependencies = [
   "pydantic-settings>=2,<3",
   "httpx>=0.27.0,<1.0.0",
   "PyYAML>=6.0.1,<7.0.0",
-  "pydub>=0.25.1,<0.26.0",
-  "audioop-lts>=0.2.0; python_version >= '3.13'",
+  # Audio dependencies (pydub, audioop-lts) moved to the `voice` extra in
+  # 2.16.0 so text-only installs never pay for them or see pydub's import
+  # warnings. See [project.optional-dependencies] voice below.
   # Optional provider and middleware dependencies are installed via
   # [project.optional-dependencies] below (for example
   # using poetry add 'ai-api-unified[google_gemini]').
@@ -83,9 +84,24 @@ dependencies = [
 dev = ["pytest>=8.4.0,<9.0.0", "pytest-asyncio>=0.24.0,<1.0.0", "ruff>=0.4.4,<1.0.0", "black>=24.4.2,<25.0.0"]
 openai = ["openai>=2.0.0,<3.0.0"]
 anthropic = ["anthropic>=0.116.0,<1.0.0"]
-azure_tts = ["azure-cognitiveservices-speech>=1.37.0,<2.0.0"]
+azure_tts = [
+  "azure-cognitiveservices-speech>=1.37.0,<2.0.0",
+  "pydub>=0.25.1,<0.26.0",
+  "audioop-lts>=0.2.0; python_version >= '3.13'",
+]
 bedrock = ["boto3>=1.34.0,<2.0.0"]
-elevenlabs = ["elevenlabs>=2.3.0,<3.0.0"]
+elevenlabs = [
+  "elevenlabs>=2.3.0,<3.0.0",
+  "pydub>=0.25.1,<0.26.0",
+  "audioop-lts>=0.2.0; python_version >= '3.13'",
+]
+# Shared audio-processing dependencies for voice/TTS/STT flows. Pair with a
+# provider extra, e.g. ai-api-unified[google_gemini,voice] or
+# ai-api-unified[openai,voice]. azure_tts and elevenlabs include these.
+voice = [
+  "pydub>=0.25.1,<0.26.0",
+  "audioop-lts>=0.2.0; python_version >= '3.13'",
+]
 google_gemini = [
   "google-cloud-speech>=2.25.0,<3.0.0",
   "protobuf>=3.20.2,<5.0.0dev",
