@@ -225,6 +225,10 @@ def classify_changed_path(str_path: str) -> tuple[str, ...] | str | None:
     path for a changed test file (run it directly), or None when the path has
     no test impact (docs, scripts, CI, ADRs).
     """
+    if str_path.startswith("tests/input/"):
+        # Shared test fixtures: no per-fixture consumer map exists, so run
+        # everything rather than silently skip the tests that read them.
+        return ALL_AREAS
     if str_path.startswith("tests/") and str_path.endswith(".py"):
         str_basename: str = str_path.rsplit("/", 1)[-1]
         if str_basename in ("conftest.py", "area_map.py", "__init__.py"):
