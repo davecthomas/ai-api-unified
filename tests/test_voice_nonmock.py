@@ -28,6 +28,20 @@ VOICE_ENGINE_BY_PROVIDER: dict[str, str] = {
 GOOGLE_TTS_HOSTNAME: str = "texttospeech.googleapis.com"
 
 
+def _audition(ai_voice_client: AIVoiceBase, audio_bytes: bytes) -> None:
+    """
+    Play generated audio when the environment supports it.
+
+    Playback is an audition convenience, not what this test asserts, so a
+    missing `voice` extra (pydub lives there as of 2.16.0) or an engine
+    without playback support skips the audition instead of failing the test.
+    """
+    try:
+        ai_voice_client.play(audio_bytes)
+    except (AiProviderDependencyUnavailableError, NotImplementedError) as exc:
+        pytest.skip(f"Audio playback unavailable in this environment: {exc}")
+
+
 def _skip_if_dns_unavailable(hostname: str) -> None:
     """Skip live provider tests quickly when DNS/network prerequisites are unavailable."""
     try:
@@ -145,7 +159,7 @@ def test_voice_nonmock(
         fmt_key: str = audio_format.key
         assert fmt_key != ""
 
-    ai_voice_client.play(audio_bytes)
+    _audition(ai_voice_client, audio_bytes)
     # ai_voice_client.save_generated_audio(audio_bytes, "test_voice_nonmock.wav")
 
     # test deprecated voice name format with bullets
@@ -175,7 +189,7 @@ def test_voice_nonmock(
             fmt_key: str = audio_format.key
             assert fmt_key != ""
 
-        ai_voice_client.play(audio_bytes)
+        _audition(ai_voice_client, audio_bytes)
 
         # testing deprecated voice format in spanish
         test_text2: str = "Probando el formato de voz obsoleto con viñetas"
@@ -194,7 +208,7 @@ def test_voice_nonmock(
 
         assert isinstance(audio_bytes, (bytes, bytearray))
         assert len(audio_bytes) > 256, "Audio output is unexpectedly small"
-        ai_voice_client.play(audio_bytes)
+        _audition(ai_voice_client, audio_bytes)
 
         # Testing ability to use deprecated voice format with emotion prompt
         try:
@@ -210,7 +224,7 @@ def test_voice_nonmock(
 
         assert isinstance(audio_bytes, (bytes, bytearray))
         assert len(audio_bytes) > 256, "Audio output is unexpectedly small"
-        ai_voice_client.play(audio_bytes)
+        _audition(ai_voice_client, audio_bytes)
 
     # Verify that the voice seletion prioritizes embedded locale over the passed locale
     if "gemini" in ai_voice_client.selected_model.name.lower():
@@ -239,7 +253,7 @@ def test_voice_nonmock(
             fmt_key: str = audio_format.key
             assert fmt_key != ""
 
-        ai_voice_client.play(audio_bytes)
+        _audition(ai_voice_client, audio_bytes)
         # ai_voice_client.save_generated_audio(audio_bytes, "test_voice_nonmock.wav")
 
         try:
@@ -256,7 +270,7 @@ def test_voice_nonmock(
             raise
         assert isinstance(audio_bytes2, (bytes, bytearray))
         assert len(audio_bytes2) > 256, "Audio output is unexpectedly small"
-        ai_voice_client.play(audio_bytes2)
+        _audition(ai_voice_client, audio_bytes2)
 
     try:
         audio_bytes2: bytes = ai_voice_client.text_to_voice_with_emotion_prompt(
@@ -269,7 +283,7 @@ def test_voice_nonmock(
         )
         assert isinstance(audio_bytes2, (bytes, bytearray))
         assert len(audio_bytes2) > 256, "Audio output is unexpectedly small"
-        ai_voice_client.play(audio_bytes2)
+        _audition(ai_voice_client, audio_bytes2)
         # ai_voice_client.save_generated_audio(
         #     audio_bytes2, "test_voice_nonmock_google_emotion_prompt.wav"
         # )
