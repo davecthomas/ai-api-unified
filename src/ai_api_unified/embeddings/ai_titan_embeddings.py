@@ -124,7 +124,11 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
         """
         return self.compute_embedding_cost(input_tokens=num_tokens)
 
-    def generate_embeddings(self, text: str) -> dict[str, Any]:
+    # input_type is a provider-neutral retrieval hint honored by the
+    # voyage engine; this engine has no equivalent and ignores it.
+    def generate_embeddings(
+        self, text: str, *, input_type: str | None = None
+    ) -> dict[str, Any]:
         """
         Generates an embedding for a single text string using Titan v2.
         """
@@ -258,7 +262,9 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
 
         raise RuntimeError("Titan embedding retries exhausted unexpectedly.")
 
-    def generate_embeddings_batch(self, texts: list[str]) -> list[dict[str, Any]]:
+    def generate_embeddings_batch(
+        self, texts: list[str], *, input_type: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         This isn't really a batch call; We'd need to use S2 to make that work and this POC isn't
         designed for that."""

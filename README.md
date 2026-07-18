@@ -1,4 +1,4 @@
-# ai-api-unified 2.16.0
+# ai-api-unified 2.17.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -38,7 +38,7 @@ The public entry points are the stable base interfaces and factories:
 | Capability  | Stable interface    | Engines                                                                                                                       | Required extra(s)                                    |
 | ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | Completions | `AIBaseCompletions` | `openai`, `openai-responses`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `anthropic`, `google_gemini`, `bedrock`    |
-| Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`                                                                                            | `openai`, `bedrock`, `google_gemini`                 |
+| Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`, `voyage`                                                                                  | `openai`, `bedrock`, `google_gemini`, `voyage`       |
 | Images      | `AIBaseImages`      | `openai`, `google-gemini`, `nova-canvas` and Bedrock image aliases                                                            | `openai`, `google_gemini`, `bedrock`                 |
 | Videos      | `AIBaseVideos`      | `openai`, `google-gemini`, `nova-reel` and Bedrock video aliases                                                              | `openai`, `google_gemini`, `bedrock`                 |
 | Voice TTS   | `AIVoiceBase`       | `openai`, `google`, `azure`, `elevenlabs`                                                                                     | `openai`, `google_gemini`, `azure_tts`, `elevenlabs` |
@@ -115,6 +115,7 @@ poetry install --all-extras --with dev
 | `anthropic`                      | Anthropic Claude completions via the native Anthropic API (`claude` engine) |
 | `google_gemini`                  | Google Gemini completions, embeddings, images, and Google voice        |
 | `bedrock`                        | AWS Bedrock completions, Titan embeddings, Bedrock image providers, and Bedrock video providers |
+| `voyage`                         | Voyage AI embeddings (the `voyage` embeddings engine; `VOYAGE_API_KEY`) |
 | `video_frames`                   | Optional frame extraction helpers backed by ImageIO + Pillow           |
 | `azure_tts`                      | Azure Cognitive Services TTS (includes the `voice` audio deps)         |
 | `elevenlabs`                     | ElevenLabs TTS and STT (includes the `voice` audio deps)               |
@@ -534,14 +535,44 @@ deprecated models to the same construction-time error (useful in CI).
 
 ### Embeddings
 
+Providers are interchangeable: the code below is identical for every
+embeddings engine — only the engine name (and the vector dimensionality,
+reported by `capabilities.default_dimensions`) differs.
+
 ```python
 from ai_api_unified import AIFactory, AIBaseEmbeddings
 
-client: AIBaseEmbeddings = AIFactory.get_ai_embedding_client()
+client: AIBaseEmbeddings = AIFactory.get_ai_embedding_client()  # engine from env
 result: dict[str, object] = client.generate_embeddings("hello world")
 embedding = result.get("embedding")
 print(len(embedding) if embedding else None)
+
+# Same call, explicit engines — identical signatures and return shapes:
+openai_client = AIFactory.get_ai_embedding_client(embedding_engine="openai")
+voyage_client = AIFactory.get_ai_embedding_client(embedding_engine="voyage")
+for client in (openai_client, voyage_client):
+    result = client.generate_embeddings("hello world", input_type="document")
+    print(client.model_name, result["dimensions"])
 ```
+
+The `voyage` engine (extra: `voyage`, auth: `VOYAGE_API_KEY`) serves Voyage
+AI's embeddings specialist models — `voyage-3` (default), `voyage-3-lite`,
+`voyage-3-large`, and the domain variants `voyage-code-3`,
+`voyage-finance-2`, `voyage-law-2` — with registry pricing so cost events
+work like completions. Anthropic recommends Voyage for embeddings since
+Anthropic serves none.
+
+- `input_type` ("query" | "document") is a provider-neutral retrieval hint:
+  the `voyage` engine forwards it to the API; other engines ignore it.
+- Batching: `generate_embeddings_batch(texts)` accepts any list length; the
+  `voyage` engine chunks internally at the provider's 128-text request cap.
+- Async: `agenerate_embeddings` / `agenerate_embeddings_batch` on engines
+  whose capabilities declare `supports_async` (currently `voyage`); others
+  raise `AiProviderCapabilityUnsupportedError`.
+- The `voyage` engine honors `retry_policy="none"` (constructor or
+  `COMPLETIONS_RETRY_POLICY=none`) and wraps provider failures in
+  `AiProviderRequestError` carrying `status_code`, matching the completions
+  clients.
 
 ### Multimodal Embeddings
 

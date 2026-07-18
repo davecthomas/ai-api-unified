@@ -223,7 +223,11 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
         """Return capabilities for the configured Gemini embedding model."""
         return AIEmbeddingsCapabilitiesGoogle.for_model(self.embedding_model)
 
-    def generate_embeddings(self, text: str) -> dict[str, Any]:
+    # input_type is a provider-neutral retrieval hint honored by the
+    # voyage engine; this engine has no equivalent and ignores it.
+    def generate_embeddings(
+        self, text: str, *, input_type: str | None = None
+    ) -> dict[str, Any]:
         """
         Generate embeddings for a single text string.
 
@@ -264,7 +268,9 @@ class GoogleGeminiEmbeddings(AIBaseEmbeddings, AIGoogleBase):
         # Normal return with the caller-facing single embedding payload.
         return observed_result.return_value
 
-    def generate_embeddings_batch(self, texts: list[str]) -> list[dict[str, Any]]:
+    def generate_embeddings_batch(
+        self, texts: list[str], *, input_type: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Generate embeddings for multiple text strings in batch.
 

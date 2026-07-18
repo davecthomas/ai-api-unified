@@ -273,6 +273,19 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         set_str_dependency_roots={"google", "google.genai", "google.api_core"},
     ),
     (
+        AI_PROVIDER_CAPABILITY_EMBEDDINGS,
+        "voyage",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_EMBEDDINGS,
+        str_engine="voyage",
+        str_module_path=("ai_api_unified.embeddings.ai_voyage_embeddings"),
+        str_class_name="AiVoyageEmbeddings",
+        str_required_extra="voyage",
+        str_consumer_install_command=("poetry add 'ai-api-unified[voyage]'"),
+        str_local_install_command='poetry install --extras "voyage"',
+        set_str_dependency_roots={"voyageai"},
+    ),
+    (
         AI_PROVIDER_CAPABILITY_IMAGES,
         "openai",
     ): AiProviderSpec(
