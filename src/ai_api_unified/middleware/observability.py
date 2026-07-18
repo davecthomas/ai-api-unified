@@ -407,6 +407,10 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             "pricing_source": pricing.source,
             "pricing_confidence": pricing.confidence,
         }
+        self._merge_context_tag_fields(
+            dict_event_fields=dict_cost_fields,
+            call_context=call_context,
+        )
         self.cost_logger.log(
             self.int_log_level,
             OBSERVABILITY_EVENT_LOG_MESSAGE,
@@ -630,12 +634,41 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             dict_event_fields["originating_caller_id_source"] = (
                 call_context.originating_caller_id_source
             )
+        self._merge_context_tag_fields(
+            dict_event_fields=dict_event_fields,
+            call_context=call_context,
+        )
         self._merge_safe_metadata_fields(
             dict_event_fields=dict_event_fields,
             dict_metadata=call_context.dict_metadata,
         )
         # Normal return with the shared event-field payload.
         return dict_event_fields
+
+    @staticmethod
+    def _merge_context_tag_fields(
+        *,
+        dict_event_fields: dict[str, object],
+        call_context: AiApiCallContextModel,
+    ) -> None:
+        """
+        Merges application-supplied context tags into one event payload.
+
+        Tags are emitted as `tag_<name>` fields so arbitrary correlation values
+        (run_id, node_id, workflow name) never collide with stable event keys.
+
+        Args:
+            dict_event_fields: Mutable event payload receiving the tag fields.
+            call_context: Immutable provider-boundary call metadata carrying tags.
+
+        Returns:
+            None after tag fields have been merged.
+        """
+        # Loop over context tags so every emitted event carries caller correlation values.
+        for str_tag_name, str_tag_value in call_context.dict_tags.items():
+            dict_event_fields[f"tag_{str_tag_name}"] = str_tag_value
+        # Normal return after merging tag fields.
+        return None
 
     def _merge_result_summary_fields(
         self,

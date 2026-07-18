@@ -1,4 +1,4 @@
-# ai-api-unified 2.13.0
+# ai-api-unified 2.14.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -213,11 +213,13 @@ Claude models are reachable through two completions engines:
 - `anthropic` — Claude on Amazon Bedrock via the Converse API. Requires the
   `bedrock` extra and AWS credentials.
 
-The two engines expose the same caller-facing API (`send_prompt`,
+The two engines expose the same core caller-facing API (`send_prompt`,
 `strict_schema_prompt`, `send_prompt_streaming`, `count_tokens`); switching
-between them is a configuration change. Use `claude` for the current model
-lineup on Anthropic's own endpoint; use `anthropic` when your Claude access is
-provisioned through AWS.
+between them is a configuration change. The `claude` engine additionally
+implements the capability-gated surface added in 2.14.0 —
+`send_structured_output`, `send_conversation`, the async variants, and batch
+completions. Use `claude` for the current model lineup on Anthropic's own
+endpoint; use `anthropic` when your Claude access is provisioned through AWS.
 
 ```dotenv
 COMPLETIONS_ENGINE=claude
@@ -236,6 +238,172 @@ so `strict_schema_prompt` works on every catalogued model. On
 pass a `max_response_tokens` well above the 2048 default so the budget covers
 thinking plus the JSON body. Image attachments are capped at Anthropic's 5MB
 per-image limit.
+
+### Send prompt options
+
+`send_prompt` accepts three optional parameters. Omitting them leaves prior
+behavior unchanged.
+
+```python
+from ai_api_unified import AIFactory
+
+client = AIFactory.get_ai_completions_client()
+text = client.send_prompt(
+    "Generate a workflow document from this instruction: ...",
+    system_prompt="You write workflow documents.",
+    max_response_tokens=9000,
+    request_timeout_seconds=30.0,
+)
+```
+
+The `claude` engine maps these to the Messages API `system`, `max_tokens`, and
+SDK request-timeout fields. Engines that have not yet mapped
+`max_response_tokens` or `request_timeout_seconds` raise
+`AiProviderCapabilityUnsupportedError` when those are supplied;
+`system_prompt` works on every engine.
+
+### Structured output extraction (send_structured_output)
+
+`send_structured_output` is the single-shot extraction call: prose in, a parsed
+JSON object out. It accepts either an `AIStructuredPrompt` subclass
+(`response_model`) or a raw JSON Schema (`response_schema`) — for example a
+hand-written schema with `anyOf` variants per node type. Engines declare
+support via `capabilities.supports_structured_output`; the `claude` engine
+implements it via the Messages API JSON-schema response format.
+
+```python
+result = client.send_structured_output(
+    "Compile this prose into a workflow graph: ...",
+    response_schema=GRAPH_SCHEMA,          # raw JSON Schema owned by the caller
+    system_prompt="You are a workflow compiler.",
+    max_response_tokens=32_000,            # up to the model context limit
+    request_timeout_seconds=120.0,
+)
+if result.finish_reason == "complete":
+    graph = result.data                     # parsed dict
+elif result.finish_reason == "length":
+    ...                                     # truncated: retry with a larger budget
+elif result.finish_reason == "refusal":
+    ...                                     # model declined: abort
+print(result.usage.input_tokens, result.usage.output_tokens)
+```
+
+Every result carries a normalized `finish_reason`
+(`complete | length | tool_use | refusal`, one enum across engines) and token
+usage, so truncation and refusal are distinguishable in code. `data` is `None`
+on `length` and `refusal`. Multi-turn correction is supported through
+`messages`: replay a prior model output plus feedback as extra
+`{role, content}` turns, and `prompt` may then be omitted.
+
+```python
+result = client.send_structured_output(
+    "The kind 'bogus' is invalid; use 'task' or 'gate'.",
+    response_schema=GRAPH_SCHEMA,
+    messages=[
+        {"role": "user", "content": original_prompt},
+        {"role": "assistant", "content": previous_bad_output},
+    ],
+)
+```
+
+Budgets above the engine's non-streaming request limit are handled inside the
+engine (the `claude` engine streams and accumulates); the caller sees one
+blocking call either way. `provider_options` is a per-engine escape hatch
+merged into the underlying request; the `claude` engine honors the reserved key
+`retry_policy` and merges every other key verbatim into the Messages request.
+
+### Tool-use conversations (send_conversation)
+
+`send_conversation` sends one conversation turn and returns the model's turn;
+the caller owns the tool loop. Engines declare support via
+`capabilities.supports_tool_use`.
+
+```python
+from ai_api_unified import AITool
+
+tools = [
+    AITool(
+        name="lookup_ticket",
+        description="Fetch a ticket by id.",
+        input_schema={
+            "type": "object",
+            "properties": {"ticket_id": {"type": "string"}},
+            "required": ["ticket_id"],
+        },
+        strict=True,               # schema-exact tool inputs where supported
+    )
+]
+
+messages = [{"role": "user", "content": "Summarize ticket VL-123."}]
+for _ in range(MAX_ITERATIONS):
+    turn = client.send_conversation(
+        "You are a support agent.",
+        messages,
+        tools=tools,
+        # tool_choice="lookup_ticket",   # force a named tool for this turn
+        max_response_tokens=4096,
+        request_timeout_seconds=60.0,
+    )
+    if turn.finish_reason != "tool_use":
+        break
+    messages.append({"role": "assistant", "content": turn.raw_content})
+    for tool_call in turn.tool_calls:
+        output = execute_tool(tool_call.name, tool_call.input)   # caller-side (e.g. MCP)
+        messages.append(
+            client.build_tool_result_message(
+                tool_call_id=tool_call.id, result=output, is_error=False
+            )
+        )
+```
+
+Each `AITurnResult` carries `text`, `tool_calls` (`id`, `name`, `input`), the
+normalized `finish_reason`, `usage` for that turn, and `raw_content` —
+engine-specific content blocks replayable verbatim as the next assistant
+message. `build_tool_result_message` produces the engine's tool-result wire
+shape, so callers never touch provider block formats except as the opaque
+`raw_content`.
+
+### Async variants
+
+Engines whose SDK has an async client expose `a`-prefixed variants with the
+same signatures: `asend_prompt`, `asend_structured_output`, and
+`asend_conversation`. Support is declared via `capabilities.supports_async`;
+the `claude` engine implements all three on a lazily created `AsyncAnthropic`
+client. Sync methods are unchanged.
+
+```python
+turn = await client.asend_conversation("system", messages, tools=tools)
+```
+
+### Retry policy and typed request errors
+
+Engine retry behavior:
+
+- `claude` — the Anthropic SDK retries transient failures (408, 409, 429, 5xx)
+  twice by default with exponential backoff.
+- `openai` / `openai-responses` — the engine retries `send_prompt` and
+  `strict_schema_prompt` up to 3 attempts in-method.
+- `google-gemini` and Bedrock-routed engines — in-method retry loops with
+  backoff.
+
+Callers that run their own backoff can disable the `claude` engine's SDK
+retries at the constructor (`retry_policy="none"`), through configuration
+(`COMPLETIONS_RETRY_POLICY=none`), or per call
+(`provider_options={"retry_policy": "none"}`). HTTP-level failures raise
+`AiProviderRequestError`, whose `status_code` attribute lets caller backoff
+classify 429/5xx/529 uniformly across engines; it is `None` when the failure
+happened before a status was available (connection error or client-side
+timeout).
+
+```python
+from ai_api_unified import AiProviderRequestError
+
+try:
+    turn = client.send_conversation("system", messages, tools=tools)
+except AiProviderRequestError as error:
+    if error.status_code in (429, 529):
+        backoff_and_retry()
+```
 
 ### Batch completions (Anthropic)
 
@@ -720,6 +888,44 @@ middleware:
   - name: 'observability'
     enabled: true
 ```
+
+#### Request-scoped context and tags
+
+`set_observability_context` stores request-scoped correlation values in a
+`contextvars.ContextVar`, so they apply to every library call made in that
+context (including across `await` boundaries) without threading parameters
+through application code. It accepts:
+
+- `caller_id` — stable caller identifier; emitted as `originating_caller_id`
+  on lifecycle events and `caller_id` on cost events
+- `session_id` / `workflow_id` — emitted in event metadata when set
+- `tags` — arbitrary string-to-string mapping (for example `run_id`,
+  `node_id`, or a workflow name); each tag is emitted as a `tag_<name>` field
+  on every event, including cost-topic events
+
+The function returns a token; pass it to `reset_observability_context` to
+restore the prior context (for example in a request-handler `finally` block).
+Blank keys and values are dropped.
+
+```python
+from ai_api_unified.middleware import (
+    set_observability_context,
+    reset_observability_context,
+)
+
+token = set_observability_context(
+    caller_id="workflow-service",
+    tags={"run_id": run_id, "node_id": node_id, "workflow": workflow_name},
+)
+try:
+    turn = client.send_conversation(system_prompt, messages, tools=tools)
+finally:
+    reset_observability_context(token)
+```
+
+Token usage is also available on every result object — `AITurnResult.usage`
+per conversation turn and `AIStructuredOutputResult.usage` per structured call
+— so billing attribution does not require parsing logs.
 
 See [`docs/observability_middleware_example.yaml`](docs/observability_middleware_example.yaml) and [`docs/observability_middleware_design.md`](docs/observability_middleware_design.md).
 

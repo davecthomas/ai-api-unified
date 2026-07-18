@@ -195,6 +195,9 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         self,
         prompt: str,
         *,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> str:
         """
@@ -202,6 +205,12 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
 
         Args:
             prompt: Text prompt to send
+            system_prompt: Optional persistent instructions; overrides
+                other_params.system_prompt when both are supplied.
+            max_response_tokens: Not yet mapped on this engine; raises
+                AiProviderCapabilityUnsupportedError when supplied.
+            request_timeout_seconds: Not yet mapped on this engine; raises
+                AiProviderCapabilityUnsupportedError when supplied.
             other_params: Optional Google-specific parameters (AICompletionsPromptParamsGoogle)
 
         Returns:
@@ -209,13 +218,19 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         """
         if not prompt or not prompt.strip():
             raise ValueError("Prompt cannot be empty or None")
+        self._reject_unsupported_send_prompt_params(
+            max_response_tokens=max_response_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+        )
 
         prompt = self.pii_middleware.process_input(prompt)
 
         # Use provided params or create default ones
         params = self._coerce_params(other_params)
+        if system_prompt is not None and system_prompt.strip():
+            params.system_prompt = system_prompt
 
-        system_prompt: str | None = params.system_prompt
+        system_prompt = params.system_prompt
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_completions_observability_input_metadata(
                 prompt=prompt,

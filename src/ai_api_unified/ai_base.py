@@ -40,6 +40,7 @@ from ai_api_unified.middleware.observability_runtime import (
     ObservabilityMetadataValue,
     TOKEN_COUNT_SOURCE_NONE,
     TOKEN_COUNT_SOURCE_PROVIDER,
+    execute_observed_async_call,
     execute_observed_call,
     execute_observed_streaming_call,
     get_observability_context,
@@ -79,6 +80,9 @@ class AICompletionsCapabilitiesBase(BaseModel):
     supports_streaming: bool = False
     supports_token_counting: bool = False
     supports_batch: bool = False
+    supports_tool_use: bool = False
+    supports_structured_output: bool = False
+    supports_async: bool = False
     pricing: AIModelPricing | None = None
 
 
@@ -299,6 +303,121 @@ class AIBatchResultItem(BaseModel):
     provider_metadata: dict[str, Any] = {}
 
 
+RETRY_POLICY_DEFAULT: str = "default"
+RETRY_POLICY_NONE: str = "none"
+
+
+class AIFinishReason(str, Enum):
+    """
+    Normalized reason a completions turn stopped, uniform across engines.
+
+    COMPLETE: The model finished its turn normally.
+    LENGTH: Output was truncated by the max-response-token limit; callers
+        typically retry with a larger budget.
+    TOOL_USE: The model stopped to request one or more tool invocations.
+    REFUSAL: The model declined to answer; callers typically abort.
+    """
+
+    COMPLETE = "complete"
+    LENGTH = "length"
+    TOOL_USE = "tool_use"
+    REFUSAL = "refusal"
+
+
+class AITool(BaseModel):
+    """
+    Provider-neutral tool definition offered to the model for one turn.
+
+    Attributes:
+        name: Tool name the model uses to request an invocation.
+        description: Natural-language description of what the tool does.
+        input_schema: JSON Schema describing the tool's input payload.
+        strict: When True, engines that support it enforce schema-exact tool
+            inputs; engines without strict support ignore the flag.
+    """
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    strict: bool = False
+
+
+class AIToolCall(BaseModel):
+    """
+    One tool invocation requested by the model during a conversation turn.
+
+    Attributes:
+        id: Provider-assigned identifier used to correlate the tool result.
+        name: Name of the tool the model wants invoked.
+        input: Parsed tool input arguments.
+    """
+
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+class AITokenUsage(BaseModel):
+    """
+    Provider-reported token usage for one call or conversation turn.
+
+    Attributes:
+        input_tokens: Prompt-side tokens, including cached input as a subset.
+        output_tokens: Completion-side tokens.
+        cached_input_tokens: Cached prompt tokens billed at the cached rate.
+        total_tokens: Provider-reported or derived total token count.
+    """
+
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+class AITurnResult(BaseModel):
+    """
+    The model's turn returned by send_conversation.
+
+    The caller executes any requested tools, appends the results to its own
+    message history (replaying raw_content verbatim as the assistant turn),
+    and calls send_conversation again; the library sends one turn at a time.
+
+    Attributes:
+        text: Concatenated text content of the turn, or None when the model
+            produced no text.
+        tool_calls: Tool invocations the model requested this turn.
+        finish_reason: Normalized stop reason (see AIFinishReason).
+        raw_content: Engine-specific content blocks for this turn, replayable
+            verbatim as the next assistant message. Opaque to callers.
+        usage: Provider-reported token usage for this turn.
+    """
+
+    text: str | None = None
+    tool_calls: list[AIToolCall] = Field(default_factory=list)
+    finish_reason: AIFinishReason
+    raw_content: Any = None
+    usage: AITokenUsage = Field(default_factory=AITokenUsage)
+
+
+class AIStructuredOutputResult(BaseModel):
+    """
+    Result of send_structured_output: parsed structured data plus turn metadata.
+
+    Attributes:
+        data: Parsed JSON object when finish_reason is COMPLETE; None when the
+            turn ended in LENGTH truncation or REFUSAL, so callers distinguish
+            retryable truncation from an abort in code.
+        finish_reason: Normalized stop reason (see AIFinishReason).
+        usage: Provider-reported token usage for the call.
+        raw_text: Raw model output text before JSON parsing (empty on refusal).
+    """
+
+    data: dict[str, Any] | None = None
+    finish_reason: AIFinishReason
+    usage: AITokenUsage = Field(default_factory=AITokenUsage)
+    raw_text: str = ""
+
+
 class AIEmbeddingsCapabilitiesBase(BaseModel):
     """
     Base class for capturing important attributes of embeddings models.
@@ -474,6 +593,7 @@ class AIBase(ABC):
             originating_caller_id=resolved_caller_id,
             originating_caller_id_source=caller_id_source,
             dict_metadata=dict_context_metadata,
+            dict_tags=observability_context.tags,
         )
         # Normal return with immutable provider-boundary call metadata.
         return ai_api_call_context
@@ -508,6 +628,49 @@ class AIBase(ABC):
             self._get_observability_middleware()
         )
         provider_result: ProviderCallReturnType = execute_observed_call(
+            observability_middleware=observability_middleware,
+            callable_build_call_context=lambda: self._build_observability_call_context(
+                capability=capability,
+                operation=operation,
+                dict_metadata=dict_input_metadata,
+                legacy_caller_id=legacy_caller_id,
+            ),
+            callable_execute=callable_execute,
+            callable_build_result_summary=callable_build_result_summary,
+        )
+        # Normal return with the original provider result after optional observability wrapping.
+        return provider_result
+
+    async def _execute_provider_acall_with_observability(
+        self,
+        *,
+        capability: str,
+        operation: str,
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] | None,
+        callable_execute: Callable[[], Any],
+        callable_build_result_summary: Callable[
+            [Any, float], AiApiCallResultSummaryModel
+        ],
+        legacy_caller_id: str | None = None,
+    ) -> Any:
+        """
+        Async twin of _execute_provider_call_with_observability for awaitable calls.
+
+        Args:
+            capability: Capability label for the public API surface being invoked.
+            operation: Public operation name such as `asend_prompt`.
+            dict_input_metadata: Optional scalar request metadata safe for input-event logs.
+            callable_execute: Zero-argument callable returning the awaitable provider call.
+            callable_build_result_summary: Callable that summarizes provider output and elapsed time.
+            legacy_caller_id: Optional explicit legacy caller hint supplied by existing config.
+
+        Returns:
+            Original provider return value from awaiting `callable_execute`.
+        """
+        observability_middleware: AiApiObservabilityMiddleware = (
+            self._get_observability_middleware()
+        )
+        provider_result: Any = await execute_observed_async_call(
             observability_middleware=observability_middleware,
             callable_build_call_context=lambda: self._build_observability_call_context(
                 capability=capability,
@@ -1735,14 +1898,30 @@ class AIBaseCompletions(AIBase):
 
     @abstractmethod
     def send_prompt(
-        self, prompt: str, *, other_params: AICompletionsPromptParamsBase | None = None
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
+        other_params: AICompletionsPromptParamsBase | None = None,
     ) -> str:
         """
         Sends a prompt to the completions engine and returns the result as a string.
 
+        Omitting the optional parameters leaves historical behavior unchanged.
+        Engines map them to their provider's native fields; an engine that has
+        not yet mapped max_response_tokens or request_timeout_seconds raises
+        AiProviderCapabilityUnsupportedError when they are supplied.
+
         Args:
-            prompt: The text prompt to send
-            other_params: Optional provider-specific parameters
+            prompt: The text prompt to send.
+            system_prompt: Optional persistent instructions, separate from the
+                user prompt. Overrides other_params.system_prompt when both are
+                supplied.
+            max_response_tokens: Optional response token budget override.
+            request_timeout_seconds: Optional per-call provider timeout.
+            other_params: Optional provider-specific parameters.
         """
 
     @property
@@ -2076,6 +2255,675 @@ class AIBaseCompletions(AIBase):
         """Provider hook for batch cancellation. Base implementation raises."""
         raise AiProviderCapabilityUnsupportedError(
             f"{type(self).__name__} does not implement batch completions."
+        )
+
+    # ------------------------------------------------------------------
+    # Conversation turns, structured output, and async variants
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_system_prompt(
+        system_prompt: str | None,
+        other_params: AICompletionsPromptParamsBase | None,
+        default_system_prompt: str,
+    ) -> str:
+        """
+        Resolves the effective system prompt for one completions call.
+
+        Args:
+            system_prompt: Optional explicit per-call system prompt override.
+            other_params: Optional provider params that may carry a system prompt.
+            default_system_prompt: Engine default when neither source is set.
+
+        Returns:
+            Effective system prompt string for the provider request.
+        """
+        if system_prompt is not None and system_prompt.strip():
+            # Early return because the explicit per-call override wins.
+            return system_prompt
+        if other_params is not None and other_params.system_prompt:
+            # Early return with the params-supplied system prompt.
+            return other_params.system_prompt
+        # Normal return with the engine default system prompt.
+        return default_system_prompt
+
+    def _reject_unsupported_send_prompt_params(
+        self,
+        *,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+    ) -> None:
+        """
+        Rejects extended send_prompt parameters on engines that have not mapped them.
+
+        Args:
+            max_response_tokens: Optional response token budget override.
+            request_timeout_seconds: Optional per-call provider timeout.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When either parameter is supplied.
+        """
+        if max_response_tokens is None and request_timeout_seconds is None:
+            # Normal return because no unsupported parameter was supplied.
+            return None
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not yet map "
+            "max_response_tokens or request_timeout_seconds on send_prompt. "
+            "Use the claude engine, or omit these parameters."
+        )
+
+    def _require_tool_use_capability(self) -> None:
+        """
+        Raises the typed capability error unless this model supports tool use.
+        """
+        if self.capabilities.supports_tool_use:
+            # Normal return because tool use is supported.
+            return None
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not support "
+            "tool-use conversations. Configure an engine whose capabilities "
+            "include supports_tool_use."
+        )
+
+    def _require_structured_output_capability(self) -> None:
+        """
+        Raises the typed capability error unless this model supports structured output.
+        """
+        if self.capabilities.supports_structured_output:
+            # Normal return because structured output is supported.
+            return None
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not support "
+            "send_structured_output. Configure an engine whose capabilities "
+            "include supports_structured_output, or use strict_schema_prompt."
+        )
+
+    def _require_async_capability(self) -> None:
+        """
+        Raises the typed capability error unless this engine offers async variants.
+        """
+        if self.capabilities.supports_async:
+            # Normal return because async variants are supported.
+            return None
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not support "
+            "async calls. Configure an engine whose capabilities include "
+            "supports_async, or use the synchronous methods."
+        )
+
+    @staticmethod
+    def _normalize_finish_reason(
+        provider_finish_reason: str | None,
+        dict_finish_reason_map: Mapping[str, AIFinishReason],
+    ) -> AIFinishReason:
+        """
+        Maps one provider-specific stop reason onto the normalized enum.
+
+        Unknown or missing provider reasons normalize to COMPLETE so callers
+        branch only on the defined enum values.
+
+        Args:
+            provider_finish_reason: Raw provider stop/finish reason token.
+            dict_finish_reason_map: Engine-supplied provider-token-to-enum map.
+
+        Returns:
+            Normalized AIFinishReason value.
+        """
+        if provider_finish_reason is None:
+            # Early return because a missing reason means a normally completed turn.
+            return AIFinishReason.COMPLETE
+        # Normal return with the mapped reason, defaulting unknown tokens to COMPLETE.
+        return dict_finish_reason_map.get(
+            provider_finish_reason, AIFinishReason.COMPLETE
+        )
+
+    def _validate_structured_output_request(
+        self,
+        *,
+        prompt: str | None,
+        response_model: Type[AIStructuredPrompt] | None,
+        response_schema: dict[str, Any] | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+    ) -> dict[str, Any]:
+        """
+        Validates one send_structured_output request and resolves the JSON schema.
+
+        Args:
+            prompt: Optional single-shot user prompt.
+            response_model: Optional AIStructuredPrompt subclass supplying the schema.
+            response_schema: Optional raw JSON Schema supplied directly.
+            messages: Optional caller-managed multi-turn input.
+            max_response_tokens: Requested response token budget.
+
+        Returns:
+            Effective JSON schema dictionary for the provider request.
+
+        Raises:
+            ValueError: When the request shape is invalid.
+            AiProviderConfigurationError: When PII redaction is enabled with
+                caller-managed messages, whose opaque content cannot be redacted.
+        """
+        if (response_model is None) == (response_schema is None):
+            raise ValueError(
+                "Provide exactly one of response_model or response_schema."
+            )
+        if response_model is not None and not issubclass(
+            response_model, AIStructuredPrompt
+        ):
+            raise ValueError("response_model must be a subclass of AIStructuredPrompt.")
+        bool_has_prompt: bool = prompt is not None and bool(prompt.strip())
+        bool_has_messages: bool = bool(messages)
+        if not bool_has_prompt and not bool_has_messages:
+            raise ValueError("Provide prompt, messages, or both.")
+        if bool_has_messages and self.pii_middleware.bool_enabled:
+            raise AiProviderConfigurationError(
+                "send_structured_output with caller-managed messages is "
+                "unavailable while PII redaction middleware is enabled: "
+                "replayed message content is opaque and cannot be redacted. "
+                "Use the prompt parameter, or disable the PII redaction profile."
+            )
+        int_context_window: int = self.capabilities.context_window_length
+        if int_context_window > 0 and max_response_tokens > int_context_window:
+            raise ValueError(
+                f"max_response_tokens ({max_response_tokens}) exceeds the "
+                f"model context window ({int_context_window})."
+            )
+        if response_schema is not None:
+            # Normal return with the caller-supplied raw JSON schema.
+            return response_schema
+        # Normal return with the schema derived from the pydantic response model.
+        return response_model.model_json_schema()
+
+    def _validate_conversation_request(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[AITool] | None,
+        tool_choice: str | None,
+    ) -> list[AITool]:
+        """
+        Validates one send_conversation request.
+
+        Args:
+            messages: Caller-managed conversation history for this turn.
+            tools: Optional tool definitions offered to the model.
+            tool_choice: Optional name of a tool the model must use.
+
+        Returns:
+            Normalized (possibly empty) tool definition list.
+
+        Raises:
+            ValueError: When the request shape is invalid.
+            AiProviderConfigurationError: When PII redaction is enabled;
+                conversation replay content is opaque and cannot be redacted.
+        """
+        if not messages:
+            raise ValueError("messages cannot be empty.")
+        if self.pii_middleware.bool_enabled:
+            raise AiProviderConfigurationError(
+                "send_conversation is unavailable while PII redaction "
+                "middleware is enabled: replayed assistant turns and tool "
+                "results are opaque and cannot be redacted. Disable the PII "
+                "redaction middleware profile to use conversation turns."
+            )
+        list_tools: list[AITool] = list(tools or [])
+        if tool_choice is not None:
+            set_tool_names: set[str] = {ai_tool.name for ai_tool in list_tools}
+            if tool_choice not in set_tool_names:
+                raise ValueError(
+                    f"tool_choice {tool_choice!r} does not name a supplied tool."
+                )
+        # Normal return with the normalized tool list.
+        return list_tools
+
+    def send_structured_output(
+        self,
+        prompt: str | None = None,
+        *,
+        response_model: Type[AIStructuredPrompt] | None = None,
+        response_schema: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        max_response_tokens: int = STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS,
+        request_timeout_seconds: float | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> AIStructuredOutputResult:
+        """
+        Generates schema-constrained structured output and returns the parsed result.
+
+        Template method: capability and request-shape gating happen here so
+        providers cannot skip them. Providers whose capabilities declare
+        structured-output support implement _send_structured_output_provider.
+
+        The result's finish_reason lets callers distinguish LENGTH truncation
+        (retry with a larger budget) from REFUSAL (abort) in code; data is None
+        in both of those cases.
+
+        Args:
+            prompt: Optional single-shot user prompt. May be omitted when
+                messages is provided.
+            response_model: AIStructuredPrompt subclass supplying the schema.
+                Mutually exclusive with response_schema. When supplied, the
+                parsed data is also validated against the model.
+            response_schema: Raw JSON Schema supplied directly (for example a
+                hand-written schema with anyOf variants). Mutually exclusive
+                with response_model.
+            system_prompt: Optional persistent instructions, separate from the
+                user prompt.
+            messages: Optional caller-managed multi-turn input of
+                {role, content} dictionaries, replayed ahead of prompt.
+            max_response_tokens: Response token budget, up to the engine's
+                context limit. Engines handle provider non-streaming request
+                limits internally; the caller sees one blocking call.
+            request_timeout_seconds: Optional per-call provider timeout.
+            provider_options: Engine-specific escape hatch merged into the
+                underlying request; engines ignore keys they do not understand.
+
+        Returns:
+            AIStructuredOutputResult carrying parsed data, the normalized
+            finish reason, and token usage.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the configured model
+                does not support structured output.
+            ValueError: When the request shape is invalid or the provider
+                returned unparseable JSON on a COMPLETE turn.
+        """
+        self._require_structured_output_capability()
+        dict_effective_schema: dict[str, Any] = (
+            self._validate_structured_output_request(
+                prompt=prompt,
+                response_model=response_model,
+                response_schema=response_schema,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+        structured_result: AIStructuredOutputResult = (
+            self._send_structured_output_provider(
+                response_schema=dict_effective_schema,
+                system_prompt=system_prompt,
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+                request_timeout_seconds=request_timeout_seconds,
+                provider_options=provider_options,
+            )
+        )
+        # Normal return after optional pydantic validation of the parsed data.
+        return self._validate_structured_output_result(
+            structured_result=structured_result,
+            response_model=response_model,
+        )
+
+    @staticmethod
+    def _validate_structured_output_result(
+        *,
+        structured_result: AIStructuredOutputResult,
+        response_model: Type[AIStructuredPrompt] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Validates parsed structured data against the optional response model.
+
+        Args:
+            structured_result: Provider-built structured output result.
+            response_model: Optional AIStructuredPrompt subclass for validation.
+
+        Returns:
+            The structured result unchanged after successful validation.
+
+        Raises:
+            ValueError: When COMPLETE data fails response-model validation.
+        """
+        if (
+            response_model is None
+            or structured_result.data is None
+            or structured_result.finish_reason is not AIFinishReason.COMPLETE
+        ):
+            # Early return because there is nothing to validate.
+            return structured_result
+        try:
+            response_model.model_validate(structured_result.data)
+        except ValidationError as exception:
+            raise ValueError(
+                f"Response validation failed with {exception.error_count()} "
+                "validation errors."
+            ) from exception
+        # Normal return with the validated structured result.
+        return structured_result
+
+    def _send_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Provider hook for structured output generation.
+
+        The base implementation raises: a provider whose capabilities declare
+        structured-output support must implement this hook.
+        """
+        self._raise_completions_capability_unsupported("structured output")
+
+    def send_conversation(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[AITool] | None = None,
+        tool_choice: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> AITurnResult:
+        """
+        Sends one conversation turn and returns the model's turn.
+
+        The caller owns the loop: it executes any requested tools, appends the
+        results (via build_tool_result_message) and the assistant turn's
+        raw_content to its message history, and calls send_conversation again
+        up to its own iteration bound.
+
+        Template method: capability and request-shape gating happen here so
+        providers cannot skip them. Providers whose capabilities declare
+        tool-use support implement _send_conversation_provider.
+
+        Args:
+            system_prompt: Persistent instructions for the conversation.
+            messages: Caller-managed history of {role, content} dictionaries,
+                including prior raw_content assistant turns and tool-result
+                entries.
+            tools: Optional provider-neutral tool definitions for this turn.
+            tool_choice: Optional name of a tool the model must use this turn.
+            max_response_tokens: Optional response token budget for the turn.
+            request_timeout_seconds: Optional per-call provider timeout.
+            provider_options: Engine-specific escape hatch merged into the
+                underlying request; engines ignore keys they do not understand.
+
+        Returns:
+            AITurnResult carrying text, requested tool calls, the normalized
+            finish reason, replayable raw_content, and token usage.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the configured model
+                does not support tool-use conversations.
+            ValueError: When the request shape is invalid.
+        """
+        self._require_tool_use_capability()
+        list_tools: list[AITool] = self._validate_conversation_request(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        # Normal return with the provider-implemented conversation turn.
+        return self._send_conversation_provider(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=list_tools,
+            tool_choice=tool_choice,
+            max_response_tokens=max_response_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+            provider_options=provider_options,
+        )
+
+    def _send_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Provider hook for one conversation turn.
+
+        The base implementation raises: a provider whose capabilities declare
+        tool-use support must implement this hook.
+        """
+        self._raise_completions_capability_unsupported("tool-use conversations")
+
+    def build_tool_result_message(
+        self,
+        *,
+        tool_call_id: str,
+        result: dict[str, Any],
+        is_error: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Builds one tool-result message in the engine's expected wire shape.
+
+        Callers append the returned dictionary to their message history after
+        executing a requested tool, so they never touch provider block formats
+        except as the opaque raw_content.
+
+        Args:
+            tool_call_id: The id from the AIToolCall being answered.
+            result: JSON-serializable tool execution result.
+            is_error: True when the tool execution failed.
+
+        Returns:
+            Engine-shaped {role, content} message dictionary.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the configured model
+                does not support tool-use conversations.
+        """
+        self._require_tool_use_capability()
+        # Normal return with the engine-shaped tool-result message.
+        return self._build_tool_result_message_provider(
+            tool_call_id=tool_call_id,
+            result=result,
+            is_error=is_error,
+        )
+
+    def _build_tool_result_message_provider(
+        self,
+        *,
+        tool_call_id: str,
+        result: dict[str, Any],
+        is_error: bool,
+    ) -> dict[str, Any]:
+        """
+        Provider hook for building one engine-shaped tool-result message.
+
+        The base implementation raises: a provider whose capabilities declare
+        tool-use support must implement this hook.
+        """
+        self._raise_completions_capability_unsupported("tool-use conversations")
+
+    async def asend_prompt(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> str:
+        """
+        Async variant of send_prompt for engines whose SDK has an async client.
+
+        Args:
+            prompt: The text prompt to send.
+            system_prompt: Optional persistent instructions.
+            max_response_tokens: Optional response token budget override.
+            request_timeout_seconds: Optional per-call provider timeout.
+            other_params: Optional provider-specific parameters.
+
+        Returns:
+            Model response text.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the engine has no async
+                support.
+        """
+        if not prompt or not prompt.strip():
+            raise ValueError("Prompt cannot be empty or None")
+        self._require_async_capability()
+        # Normal return with the provider-implemented async response.
+        return await self._asend_prompt_provider(
+            prompt,
+            system_prompt=system_prompt,
+            max_response_tokens=max_response_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+            other_params=other_params,
+        )
+
+    async def _asend_prompt_provider(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        other_params: AICompletionsPromptParamsBase | None,
+    ) -> str:
+        """
+        Provider hook for async prompt generation.
+
+        The base implementation raises: a provider whose capabilities declare
+        async support must implement this hook.
+        """
+        self._raise_completions_capability_unsupported("async completions")
+
+    async def asend_structured_output(
+        self,
+        prompt: str | None = None,
+        *,
+        response_model: Type[AIStructuredPrompt] | None = None,
+        response_schema: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        max_response_tokens: int = STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS,
+        request_timeout_seconds: float | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> AIStructuredOutputResult:
+        """
+        Async variant of send_structured_output. See send_structured_output.
+        """
+        self._require_async_capability()
+        self._require_structured_output_capability()
+        dict_effective_schema: dict[str, Any] = (
+            self._validate_structured_output_request(
+                prompt=prompt,
+                response_model=response_model,
+                response_schema=response_schema,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+        structured_result: AIStructuredOutputResult = (
+            await self._asend_structured_output_provider(
+                response_schema=dict_effective_schema,
+                system_prompt=system_prompt,
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+                request_timeout_seconds=request_timeout_seconds,
+                provider_options=provider_options,
+            )
+        )
+        # Normal return after optional pydantic validation of the parsed data.
+        return self._validate_structured_output_result(
+            structured_result=structured_result,
+            response_model=response_model,
+        )
+
+    async def _asend_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Provider hook for async structured output generation.
+
+        The base implementation raises: a provider whose capabilities declare
+        async support must implement this hook.
+        """
+        self._raise_completions_capability_unsupported("async structured output")
+
+    async def asend_conversation(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[AITool] | None = None,
+        tool_choice: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> AITurnResult:
+        """
+        Async variant of send_conversation. See send_conversation.
+        """
+        self._require_async_capability()
+        self._require_tool_use_capability()
+        list_tools: list[AITool] = self._validate_conversation_request(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        # Normal return with the provider-implemented async conversation turn.
+        return await self._asend_conversation_provider(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=list_tools,
+            tool_choice=tool_choice,
+            max_response_tokens=max_response_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+            provider_options=provider_options,
+        )
+
+    async def _asend_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Provider hook for one async conversation turn.
+
+        The base implementation raises: a provider whose capabilities declare
+        async support must implement this hook.
+        """
+        self._raise_completions_capability_unsupported("async tool-use conversations")
+
+    def _raise_completions_capability_unsupported(
+        self, str_requested_feature: str
+    ) -> NoReturn:
+        """
+        Raises the shared typed capability error for one unsupported feature.
+
+        Args:
+            str_requested_feature: Human-readable feature label for the message.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: Always.
+        """
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not support "
+            f"{str_requested_feature}."
         )
 
     def _execute_streaming_provider_call_with_observability(
