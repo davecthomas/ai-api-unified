@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from datetime import date
 from typing import Any, ClassVar, Type
 
+from openai import APIConnectionError, APIStatusError, APITimeoutError
 from pydantic import ValidationError, model_validator
 
 from ai_api_unified.ai_completions_exceptions import (
@@ -18,11 +19,19 @@ from ai_api_unified.ai_openai_base import AIOpenAIBase
 from ..ai_base import (
     AIBaseCompletions,
     AiApiObservedCompletionsResultModel,
+    AIFinishReason,
+    AIStructuredOutputResult,
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
+    AITokenUsage,
+    AITool,
+    AIToolCall,
+    AITurnResult,
+    RETRY_POLICY_NONE,
     SupportedDataType,
 )
+from ..ai_provider_exceptions import AiProviderRequestError
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
@@ -55,6 +64,11 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
         "supports_data_residency_constraint": True,
         # All supported chat models stream via chat.completions stream=True.
         "supports_streaming": True,
+        # All catalogued chat models accept tools/tool_choice and the
+        # json_schema response_format, and the SDK ships AsyncOpenAI.
+        "supports_tool_use": True,
+        "supports_structured_output": True,
+        "supports_async": True,
     }
 
     # Context window sizes (max tokens each model can handle)
@@ -262,6 +276,799 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         return AICompletionsCapabilitiesOpenAI.DICT_OPENAI_CONTEXT_WINDOWS.get(
             self.completions_model, 0
         )
+
+    # ── Conversation, structured output, async, retries (2.15.0) ────────────
+
+    # Engine token carried on typed request errors.
+    PROVIDER_ENGINE_TOKEN: ClassVar[str] = "openai"
+
+    DICT_FINISH_REASON_MAP: ClassVar[dict[str, AIFinishReason]] = {
+        "stop": AIFinishReason.COMPLETE,
+        "length": AIFinishReason.LENGTH,
+        "tool_calls": AIFinishReason.TOOL_USE,
+        "function_call": AIFinishReason.TOOL_USE,
+        "content_filter": AIFinishReason.REFUSAL,
+    }
+
+    def _client_for_call(
+        self,
+        *,
+        request_timeout_seconds: float | None = None,
+        retry_policy_override: str | None = None,
+    ) -> Any:
+        """
+        Returns the sync client, applying per-call timeout and retry options.
+        """
+        dict_options: dict[str, Any] = {}
+        if request_timeout_seconds is not None:
+            dict_options["timeout"] = request_timeout_seconds
+        if retry_policy_override is not None:
+            if retry_policy_override.strip().lower() == RETRY_POLICY_NONE:
+                dict_options["max_retries"] = 0
+        if not dict_options:
+            # Early return with the shared client when no per-call options apply.
+            return self.client
+        # Normal return with a per-call options view of the shared client.
+        return self.client.with_options(**dict_options)
+
+    def _async_client_for_call(
+        self,
+        *,
+        request_timeout_seconds: float | None = None,
+        retry_policy_override: str | None = None,
+    ) -> Any:
+        """
+        Async twin of _client_for_call.
+        """
+        dict_options: dict[str, Any] = {}
+        if request_timeout_seconds is not None:
+            dict_options["timeout"] = request_timeout_seconds
+        if retry_policy_override is not None:
+            if retry_policy_override.strip().lower() == RETRY_POLICY_NONE:
+                dict_options["max_retries"] = 0
+        if not dict_options:
+            # Early return with the shared async client when no per-call options apply.
+            return self.async_client
+        # Normal return with a per-call options view of the shared async client.
+        return self.async_client.with_options(**dict_options)
+
+    def _raise_request_error(self, exception: Exception) -> None:
+        """
+        Re-raises one OpenAI SDK transport error as the typed request error.
+
+        Carries the HTTP status code (when available) so caller-owned backoff
+        can classify 429/5xx uniformly across engines. Non-transport
+        exceptions propagate unchanged.
+        """
+        if isinstance(exception, APIStatusError):
+            raise AiProviderRequestError(
+                f"OpenAI request failed with status "
+                f"{exception.status_code}: {exception.message}",
+                status_code=exception.status_code,
+                provider_engine=self.PROVIDER_ENGINE_TOKEN,
+            ) from exception
+        if isinstance(exception, (APITimeoutError, APIConnectionError)):
+            raise AiProviderRequestError(
+                f"OpenAI request failed before a status was available: " f"{exception}",
+                status_code=None,
+                provider_engine=self.PROVIDER_ENGINE_TOKEN,
+            ) from exception
+        # Normal return so non-transport exceptions propagate unchanged.
+        return None
+
+    @staticmethod
+    def _build_chat_provider_tools(list_tools: list[AITool]) -> list[dict[str, Any]]:
+        """
+        Maps provider-neutral AITool definitions onto Chat Completions tools.
+        """
+        list_provider_tools: list[dict[str, Any]] = []
+        # Loop over tool definitions so each maps to the chat function shape.
+        for ai_tool in list_tools:
+            dict_function: dict[str, Any] = {
+                "name": ai_tool.name,
+                "description": ai_tool.description,
+                "parameters": ai_tool.input_schema,
+            }
+            if ai_tool.strict:
+                dict_function["strict"] = True
+            list_provider_tools.append({"type": "function", "function": dict_function})
+        # Normal return with the chat-shaped tool list.
+        return list_provider_tools
+
+    def _usage_from_chat_response(self, response: Any) -> AITokenUsage:
+        """
+        Builds the provider-neutral usage model from one chat completion.
+        """
+        # Normal return with the provider-neutral token usage model.
+        return AITokenUsage(
+            input_tokens=self._extract_openai_prompt_tokens(response),
+            output_tokens=self._extract_openai_completion_tokens(response),
+            cached_input_tokens=self._extract_openai_cached_tokens(response),
+            total_tokens=self._extract_openai_total_tokens(response),
+        )
+
+    @staticmethod
+    def _serialize_chat_assistant_message(message: Any) -> dict[str, Any]:
+        """
+        Serializes one chat assistant message into a replayable dictionary.
+
+        Uses the SDK model_dump when available; otherwise reconstructs the
+        message from typed attributes so raw_content stays replayable as the
+        next assistant message.
+        """
+        model_dump = getattr(message, "model_dump", None)
+        if callable(model_dump):
+            try:
+                dict_message: Any = model_dump(exclude_none=True)
+                if isinstance(dict_message, dict):
+                    # Early return with the SDK-serialized assistant message.
+                    return dict_message
+            except TypeError:
+                # Fall through to attribute-based reconstruction (test doubles).
+                pass
+        dict_rebuilt: dict[str, Any] = {"role": "assistant"}
+        str_content: Any = getattr(message, "content", None)
+        if str_content is not None:
+            dict_rebuilt["content"] = str_content
+        list_tool_calls: list[dict[str, Any]] = []
+        # Loop over tool calls so replayed messages carry the full call shape.
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            function = getattr(tool_call, "function", None)
+            list_tool_calls.append(
+                {
+                    "id": str(getattr(tool_call, "id", "") or ""),
+                    "type": "function",
+                    "function": {
+                        "name": str(getattr(function, "name", "") or ""),
+                        "arguments": str(getattr(function, "arguments", "") or "{}"),
+                    },
+                }
+            )
+        if list_tool_calls:
+            dict_rebuilt["tool_calls"] = list_tool_calls
+        # Normal return with the reconstructed assistant message.
+        return dict_rebuilt
+
+    def _build_turn_result_from_chat(self, response: Any) -> AITurnResult:
+        """
+        Maps one Chat Completions response onto the provider-neutral turn.
+        """
+        choice = response.choices[0]
+        message = choice.message
+        list_tool_calls: list[AIToolCall] = []
+        # Loop over tool calls so callers receive parsed inputs per call.
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            function = getattr(tool_call, "function", None)
+            str_arguments: str = str(getattr(function, "arguments", "") or "{}")
+            try:
+                dict_input: dict[str, Any] = json.loads(str_arguments)
+            except json.JSONDecodeError as json_error:
+                raise ValueError(
+                    f"Tool call arguments were not valid JSON: {json_error}"
+                ) from json_error
+            list_tool_calls.append(
+                AIToolCall(
+                    id=str(getattr(tool_call, "id", "") or ""),
+                    name=str(getattr(function, "name", "") or ""),
+                    input=dict_input,
+                )
+            )
+        str_finish_reason: str | None = getattr(choice, "finish_reason", None)
+        finish_reason: AIFinishReason = self._normalize_finish_reason(
+            str(str_finish_reason) if str_finish_reason is not None else None,
+            self.DICT_FINISH_REASON_MAP,
+        )
+        # Present tool calls are authoritative: a forced tool_choice reports
+        # finish_reason "stop" even though the message carries tool_calls.
+        if list_tool_calls:
+            finish_reason = AIFinishReason.TOOL_USE
+        # The refusal field is authoritative even when finish_reason is stop.
+        if getattr(message, "refusal", None):
+            finish_reason = AIFinishReason.REFUSAL
+        str_text: str | None = getattr(message, "content", None) or None
+        # Normal return with the provider-neutral turn result.
+        return AITurnResult(
+            text=str_text,
+            tool_calls=list_tool_calls,
+            finish_reason=finish_reason,
+            raw_content=self._serialize_chat_assistant_message(message),
+            usage=self._usage_from_chat_response(response),
+        )
+
+    def _observed_chat_turn_result(
+        self, response: Any
+    ) -> AiApiObservedCompletionsResultModel[AITurnResult]:
+        """
+        Wraps one chat response as an observed conversation-turn result.
+        """
+        turn_result: AITurnResult = self._build_turn_result_from_chat(response)
+        str_finish_reason: Any = getattr(response.choices[0], "finish_reason", None)
+        # Normal return with the observed turn result and usage metadata.
+        return AiApiObservedCompletionsResultModel(
+            return_value=turn_result,
+            raw_output_text=turn_result.text or "",
+            finish_reason=str(str_finish_reason) if str_finish_reason else None,
+            provider_prompt_tokens=turn_result.usage.input_tokens,
+            provider_completion_tokens=turn_result.usage.output_tokens,
+            provider_cached_input_tokens=turn_result.usage.cached_input_tokens,
+            provider_total_tokens=turn_result.usage.total_tokens,
+            dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
+        )
+
+    def _build_chat_conversation_request_kwargs(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        dict_merge_options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Builds the Chat Completions request kwargs for one conversation turn.
+        """
+        dict_request_kwargs: dict[str, Any] = {
+            "model": self.completions_model,
+            "messages": [{"role": "system", "content": system_prompt}, *messages],
+        }
+        if max_response_tokens is not None:
+            dict_request_kwargs["max_completion_tokens"] = max_response_tokens
+        if tools:
+            dict_request_kwargs["tools"] = self._build_chat_provider_tools(tools)
+        if tool_choice is not None:
+            dict_request_kwargs["tool_choice"] = {
+                "type": "function",
+                "function": {"name": tool_choice},
+            }
+        # provider_options merge last so callers can extend the raw request.
+        dict_request_kwargs.update(dict_merge_options)
+        # Normal return with the chat-shaped conversation request.
+        return dict_request_kwargs
+
+    def _build_conversation_observability_metadata(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only observability fields for one conversation turn.
+        """
+        dict_metadata: dict[str, ObservabilityMetadataValue] = {
+            "response_mode": self.RESPONSE_MODE_TEXT,
+            "message_count": len(messages),
+            "tool_count": len(tools),
+            "system_prompt_char_count": len(system_prompt),
+        }
+        if tool_choice is not None:
+            dict_metadata["forced_tool"] = tool_choice
+        if max_response_tokens is not None:
+            dict_metadata["max_response_tokens"] = max_response_tokens
+        # Normal return with scalar conversation metadata.
+        return dict_metadata
+
+    def _send_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Sends one conversation turn to the Chat Completions API.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        call_client: Any = self._client_for_call(
+            request_timeout_seconds=request_timeout_seconds,
+            retry_policy_override=str_retry_override,
+        )
+        dict_request_kwargs: dict[str, Any] = (
+            self._build_chat_conversation_request_kwargs(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+                dict_merge_options=dict_merge_options,
+            )
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_conversation_observability_metadata(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        def _execute_turn() -> AiApiObservedCompletionsResultModel[AITurnResult]:
+            try:
+                response = call_client.chat.completions.create(**dict_request_kwargs)
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            # Normal return with the observed conversation turn.
+            return self._observed_chat_turn_result(response)
+
+        observed_result: AiApiObservedCompletionsResultModel[AITurnResult] = (
+            self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="send_conversation",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_turn,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+                legacy_caller_id=self.user,
+            )
+        )
+        # Normal return with the caller-facing conversation turn.
+        return observed_result.return_value
+
+    async def _asend_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Async twin of _send_conversation_provider using AsyncOpenAI.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        call_client: Any = self._async_client_for_call(
+            request_timeout_seconds=request_timeout_seconds,
+            retry_policy_override=str_retry_override,
+        )
+        dict_request_kwargs: dict[str, Any] = (
+            self._build_chat_conversation_request_kwargs(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+                dict_merge_options=dict_merge_options,
+            )
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_conversation_observability_metadata(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _execute_turn() -> AiApiObservedCompletionsResultModel[AITurnResult]:
+            try:
+                response = await call_client.chat.completions.create(
+                    **dict_request_kwargs
+                )
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            # Normal return with the observed conversation turn.
+            return self._observed_chat_turn_result(response)
+
+        observed_result: AiApiObservedCompletionsResultModel[AITurnResult] = (
+            await self._execute_provider_acall_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="asend_conversation",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_turn,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+                legacy_caller_id=self.user,
+            )
+        )
+        # Normal return with the caller-facing conversation turn.
+        return observed_result.return_value
+
+    def _build_tool_result_message_provider(
+        self,
+        *,
+        tool_call_id: str,
+        result: dict[str, Any],
+        is_error: bool,
+    ) -> dict[str, Any]:
+        """
+        Builds one Chat Completions tool-role result message.
+
+        The chat wire format has no error flag on tool messages, so failures
+        are encoded inside the JSON payload under an "error" key.
+        """
+        dict_payload: dict[str, Any] = {"error": result} if is_error else result
+        # Normal return with the chat-shaped tool-result entry.
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": json.dumps(dict_payload),
+        }
+
+    def _extend_messages_with_turn_provider(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        turn: AITurnResult,
+    ) -> None:
+        """
+        Appends one chat assistant message; raw_content is the full message.
+        """
+        messages.append(turn.raw_content)
+        # Normal return after appending the assistant turn.
+        return None
+
+    def _build_structured_observability_metadata(
+        self,
+        *,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only observability fields for one structured call.
+        """
+        # Normal return with scalar structured-call metadata.
+        return {
+            "response_mode": self.RESPONSE_MODE_STRUCTURED,
+            "prompt_char_count": len(prompt) if prompt else 0,
+            "message_count": len(messages) if messages else 0,
+            "max_response_tokens": max_response_tokens,
+        }
+
+    def _build_structured_output_result_from_parts(
+        self,
+        *,
+        raw_output_text: str,
+        finish_reason: AIFinishReason,
+        usage: AITokenUsage,
+    ) -> AIStructuredOutputResult:
+        """
+        Maps structured response parts onto the provider-neutral result model.
+        """
+        if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
+            # Early return so callers branch on finish_reason instead of parsing.
+            return AIStructuredOutputResult(
+                data=None,
+                finish_reason=finish_reason,
+                usage=usage,
+                raw_text=self.pii_middleware.process_output(raw_output_text),
+            )
+        str_content: str = self.pii_middleware.process_output(raw_output_text)
+        if not str_content:
+            raise ValueError("Empty response from OpenAI API")
+        try:
+            parsed_data: Any = json.loads(str_content)
+        except json.JSONDecodeError as json_error:
+            raise ValueError(f"Invalid JSON response: {json_error}") from json_error
+        if not isinstance(parsed_data, dict):
+            raise ValueError(
+                "Structured response was valid JSON but not a JSON object."
+            )
+        # Normal return with the parsed structured output result.
+        return AIStructuredOutputResult(
+            data=parsed_data,
+            finish_reason=finish_reason,
+            usage=usage,
+            raw_text=str_content,
+        )
+
+    def _send_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Generates structured output via the chat json_schema response format.
+
+        Runs in schema-guided mode (strict: false), matching the engine's
+        existing strict_schema_prompt behavior; parsed output is validated
+        client-side by the base template.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        call_client: Any = self._client_for_call(
+            request_timeout_seconds=request_timeout_seconds,
+            retry_policy_override=str_retry_override,
+        )
+        dict_request_kwargs: dict[str, Any] = (
+            self._build_chat_structured_request_kwargs(
+                response_schema=response_schema,
+                system_prompt=system_prompt,
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+                dict_merge_options=dict_merge_options,
+            )
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_structured_observability_metadata(
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        def _execute_structured() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredOutputResult]
+        ):
+            try:
+                response = call_client.chat.completions.create(**dict_request_kwargs)
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            # Normal return with the observed structured output result.
+            return self._observed_chat_structured_result(response)
+
+        observed_result: AiApiObservedCompletionsResultModel[
+            AIStructuredOutputResult
+        ] = self._execute_provider_call_with_observability(
+            capability=self.CLIENT_TYPE_COMPLETIONS,
+            operation="send_structured_output",
+            dict_input_metadata=dict_input_metadata,
+            callable_execute=_execute_structured,
+            callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                observed_result=result,
+                provider_elapsed_ms=provider_elapsed_ms,
+            ),
+            legacy_caller_id=self.user,
+        )
+        # Normal return with the caller-facing structured output result.
+        return observed_result.return_value
+
+    async def _asend_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Async twin of _send_structured_output_provider.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        call_client: Any = self._async_client_for_call(
+            request_timeout_seconds=request_timeout_seconds,
+            retry_policy_override=str_retry_override,
+        )
+        dict_request_kwargs: dict[str, Any] = (
+            self._build_chat_structured_request_kwargs(
+                response_schema=response_schema,
+                system_prompt=system_prompt,
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+                dict_merge_options=dict_merge_options,
+            )
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_structured_observability_metadata(
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _execute_structured() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredOutputResult]
+        ):
+            try:
+                response = await call_client.chat.completions.create(
+                    **dict_request_kwargs
+                )
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            # Normal return with the observed structured output result.
+            return self._observed_chat_structured_result(response)
+
+        observed_result: AiApiObservedCompletionsResultModel[
+            AIStructuredOutputResult
+        ] = await self._execute_provider_acall_with_observability(
+            capability=self.CLIENT_TYPE_COMPLETIONS,
+            operation="asend_structured_output",
+            dict_input_metadata=dict_input_metadata,
+            callable_execute=_execute_structured,
+            callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                observed_result=result,
+                provider_elapsed_ms=provider_elapsed_ms,
+            ),
+            legacy_caller_id=self.user,
+        )
+        # Normal return with the caller-facing structured output result.
+        return observed_result.return_value
+
+    def _build_chat_structured_request_kwargs(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        dict_merge_options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Builds the Chat Completions request kwargs for one structured call.
+        """
+        str_system_prompt: str = self._resolve_system_prompt(
+            system_prompt,
+            None,
+            AICompletionsPromptParamsBase.DEFAULT_STRICT_SCHEMA_SYSTEM_PROMPT,
+        )
+        list_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": str_system_prompt},
+            *(messages or []),
+        ]
+        if prompt is not None and prompt.strip():
+            str_redacted_prompt: str = self.pii_middleware.process_input(prompt)
+            list_messages.append({"role": "user", "content": str_redacted_prompt})
+        dict_request_kwargs: dict[str, Any] = {
+            "model": self.completions_model,
+            "messages": list_messages,
+            "max_completion_tokens": max_response_tokens,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": response_schema,
+                    "strict": False,
+                },
+            },
+        }
+        dict_request_kwargs.update(dict_merge_options)
+        # Normal return with the chat-shaped structured request.
+        return dict_request_kwargs
+
+    def _observed_chat_structured_result(
+        self, response: Any
+    ) -> AiApiObservedCompletionsResultModel[AIStructuredOutputResult]:
+        """
+        Wraps one chat structured response as an observed result.
+        """
+        choice = response.choices[0]
+        str_finish_reason: Any = getattr(choice, "finish_reason", None)
+        finish_reason: AIFinishReason = self._normalize_finish_reason(
+            str(str_finish_reason) if str_finish_reason is not None else None,
+            self.DICT_FINISH_REASON_MAP,
+        )
+        if getattr(choice.message, "refusal", None):
+            finish_reason = AIFinishReason.REFUSAL
+        structured_result: AIStructuredOutputResult = (
+            self._build_structured_output_result_from_parts(
+                raw_output_text=getattr(choice.message, "content", None) or "",
+                finish_reason=finish_reason,
+                usage=self._usage_from_chat_response(response),
+            )
+        )
+        # Normal return with the observed structured output result.
+        return AiApiObservedCompletionsResultModel(
+            return_value=structured_result,
+            raw_output_text=structured_result.raw_text,
+            finish_reason=str(str_finish_reason) if str_finish_reason else None,
+            provider_prompt_tokens=structured_result.usage.input_tokens,
+            provider_completion_tokens=structured_result.usage.output_tokens,
+            provider_cached_input_tokens=structured_result.usage.cached_input_tokens,
+            provider_total_tokens=structured_result.usage.total_tokens,
+        )
+
+    async def _asend_prompt_provider(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        other_params: AICompletionsPromptParamsBase | None,
+    ) -> str:
+        """
+        Async twin of send_prompt using AsyncOpenAI (single-shot, no
+        auto-continue loop).
+        """
+        str_redacted_prompt: str = self.pii_middleware.process_input(prompt)
+        str_system_prompt: str = self._resolve_system_prompt(
+            system_prompt,
+            other_params,
+            AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT,
+        )
+        call_client: Any = self._async_client_for_call(
+            request_timeout_seconds=request_timeout_seconds
+        )
+        user_content = self._build_user_message_content(
+            str_redacted_prompt, other_params
+        )
+        dict_request_kwargs: dict[str, Any] = {
+            "model": self.completions_model,
+            "messages": [
+                {"role": "system", "content": str_system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+        }
+        if max_response_tokens is not None:
+            dict_request_kwargs["max_completion_tokens"] = max_response_tokens
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_completions_observability_input_metadata(
+                prompt=str_redacted_prompt,
+                system_prompt=str_system_prompt,
+                other_params=other_params,
+                response_mode=self.RESPONSE_MODE_TEXT,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _execute_text_prompt() -> AiApiObservedCompletionsResultModel[str]:
+            try:
+                response = await call_client.chat.completions.create(
+                    **dict_request_kwargs
+                )
+            except Exception as exception:
+                self._raise_request_error(exception)
+                raise
+            raw_output_text: str = response.choices[0].message.content or ""
+            # Normal return with the chat text output and usage metadata.
+            return AiApiObservedCompletionsResultModel(
+                return_value=raw_output_text,
+                raw_output_text=raw_output_text,
+                finish_reason=str(response.choices[0].finish_reason or ""),
+                provider_prompt_tokens=self._extract_openai_prompt_tokens(response),
+                provider_completion_tokens=self._extract_openai_completion_tokens(
+                    response
+                ),
+                provider_cached_input_tokens=self._extract_openai_cached_tokens(
+                    response
+                ),
+                provider_total_tokens=self._extract_openai_total_tokens(response),
+            )
+
+        observed_result: AiApiObservedCompletionsResultModel[str] = (
+            await self._execute_provider_acall_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="asend_prompt",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_text_prompt,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+                legacy_caller_id=self.user,
+            )
+        )
+        # Normal return with sanitized chat text after observability wrapping.
+        return self.pii_middleware.process_output(observed_result.return_value)
 
     def _build_user_message_content(
         self,
@@ -496,18 +1303,23 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             prompt (str): The prompt string to send.
             system_prompt: Optional persistent instructions; overrides
                 other_params.system_prompt when both are supplied.
-            max_response_tokens: Not yet mapped on this engine; raises
-                AiProviderCapabilityUnsupportedError when supplied.
-            request_timeout_seconds: Not yet mapped on this engine; raises
-                AiProviderCapabilityUnsupportedError when supplied.
+            max_response_tokens: Optional response token budget; maps to the
+                chat max_completion_tokens field. Supplying it also disables
+                the legacy auto-continue-on-length loop so the budget holds.
+            request_timeout_seconds: Optional per-call timeout; maps to the
+                OpenAI SDK request timeout.
             other_params: Optional provider-specific parameters (not used for OpenAI currently)
 
         Returns:
             str: The completion result as a string.
         """
-        self._reject_unsupported_send_prompt_params(
-            max_response_tokens=max_response_tokens,
-            request_timeout_seconds=request_timeout_seconds,
+        call_client: Any = self._client_for_call(
+            request_timeout_seconds=request_timeout_seconds
+        )
+        dict_token_kwargs: dict[str, Any] = (
+            {"max_completion_tokens": max_response_tokens}
+            if max_response_tokens is not None
+            else {}
         )
         try:
             prompt = self.pii_middleware.process_input(prompt)
@@ -525,20 +1337,26 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                     system_prompt=system_prompt,
                     other_params=other_params,
                     response_mode=self.RESPONSE_MODE_TEXT,
+                    max_response_tokens=max_response_tokens,
                 )
             )
 
             def _execute_text_prompt() -> AiApiObservedCompletionsResultModel[str]:
-                response = self.client.chat.completions.create(
-                    model=self.completions_model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": system_prompt,
-                        },
-                        {"role": "user", "content": user_content},
-                    ],
-                )
+                try:
+                    response = call_client.chat.completions.create(
+                        model=self.completions_model,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": system_prompt,
+                            },
+                            {"role": "user", "content": user_content},
+                        ],
+                        **dict_token_kwargs,
+                    )
+                except Exception as exception:
+                    self._raise_request_error(exception)
+                    raise
 
                 raw_output_text: str = response.choices[0].message.content or ""
                 int_provider_prompt_tokens: int | None = (
@@ -555,9 +1373,14 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 )
                 bool_continued_response: bool = False
 
-                while response.choices[0].finish_reason == "length":
+                # An explicit caller budget disables the legacy auto-continue
+                # loop; continuing past "length" would defeat the budget.
+                while (
+                    max_response_tokens is None
+                    and response.choices[0].finish_reason == "length"
+                ):
                     bool_continued_response = True
-                    response = self.client.chat.completions.create(
+                    response = call_client.chat.completions.create(
                         model=self.completions_model,
                         messages=[
                             {"role": "system", "content": "Continue."},

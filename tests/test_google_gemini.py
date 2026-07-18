@@ -378,7 +378,7 @@ class TestGoogleGeminiModules:
                     with patch.object(
                         client,
                         "_retry_with_exponential_backoff",
-                        side_effect=lambda func: func(),
+                        side_effect=lambda func, **kwargs: func(),
                     ):
                         result = client.generate_embeddings("test text")
 
@@ -420,7 +420,7 @@ class TestGoogleGeminiModules:
                     with patch.object(
                         client,
                         "_retry_with_exponential_backoff",
-                        side_effect=lambda func: func(),
+                        side_effect=lambda func, **kwargs: func(),
                     ):
                         result = client.send_prompt("What is the capital of France?")
                         assert result == "This is a test response"
@@ -528,7 +528,7 @@ class TestGoogleGeminiModules:
                     with patch.object(
                         client,
                         "_retry_with_exponential_backoff",
-                        side_effect=lambda func: func(),
+                        side_effect=lambda func, **kwargs: func(),
                     ):
                         result = client.send_prompt(
                             "What is the capital of France?", other_params=custom_params
@@ -576,7 +576,7 @@ class TestGoogleGeminiModules:
                     with patch.object(
                         client,
                         "_retry_with_exponential_backoff",
-                        side_effect=lambda func: func(),
+                        side_effect=lambda func, **kwargs: func(),
                     ):
                         result = client.strict_schema_prompt(
                             "Describe a person", ExampleStructuredPrompt
@@ -632,7 +632,7 @@ class TestGoogleGeminiModules:
                     with patch.object(
                         client,
                         "_retry_with_exponential_backoff",
-                        side_effect=lambda func: func(),
+                        side_effect=lambda func, **kwargs: func(),
                     ):
                         with pytest.raises(
                             completions_module.StructuredResponseTokenLimitError,

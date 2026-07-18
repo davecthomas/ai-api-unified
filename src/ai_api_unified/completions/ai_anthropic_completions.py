@@ -131,11 +131,6 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     # SDK's long-request guard, so structured calls stream and accumulate
     # internally; the caller still sees one blocking call.
     NONSTREAMING_MAX_TOKENS_THRESHOLD: ClassVar[int] = 16_000
-    # Reserved provider_options key honored by this engine: "retry_policy"
-    # ("none" disables SDK retries for that call). All other keys are merged
-    # verbatim into the Messages API request.
-    PROVIDER_OPTION_RETRY_POLICY: ClassVar[str] = "retry_policy"
-
     DICT_FINISH_REASON_MAP: ClassVar[dict[str, AIFinishReason]] = {
         "end_turn": AIFinishReason.COMPLETE,
         "stop_sequence": AIFinishReason.COMPLETE,
@@ -340,30 +335,8 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         return dict_schema
 
     # ── Shared helpers for conversation, structured output, and async ───────
-
-    def _split_provider_options(
-        self, provider_options: dict[str, Any] | None
-    ) -> tuple[dict[str, Any], str | None]:
-        """
-        Splits provider_options into request-merge keys and reserved keys.
-
-        Args:
-            provider_options: Optional engine-specific escape hatch supplied
-                per call.
-
-        Returns:
-            Tuple of (kwargs merged verbatim into the Messages request,
-            optional per-call retry policy override).
-        """
-        if not provider_options:
-            # Early return because there is nothing to split.
-            return {}, None
-        dict_merge_options: dict[str, Any] = dict(provider_options)
-        str_retry_policy: str | None = dict_merge_options.pop(
-            self.PROVIDER_OPTION_RETRY_POLICY, None
-        )
-        # Normal return with merge options and the reserved retry override.
-        return dict_merge_options, str_retry_policy
+    # provider_options splitting (reserved "retry_policy" key) lives on
+    # AIBaseCompletions._split_provider_options, shared across engines.
 
     def _client_for_call(
         self,
@@ -1034,6 +1007,19 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 }
             ],
         }
+
+    def _extend_messages_with_turn_provider(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        turn: AITurnResult,
+    ) -> None:
+        """
+        Appends one Messages API assistant turn wrapping the raw content blocks.
+        """
+        messages.append({"role": "assistant", "content": turn.raw_content})
+        # Normal return after appending the assistant turn.
+        return None
 
     # ── Structured output (send_structured_output) ──────────────────────────
 

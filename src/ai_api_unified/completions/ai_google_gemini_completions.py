@@ -48,10 +48,20 @@ from ai_api_unified.ai_google_base import AIGoogleBase
 from ..ai_base import (
     AIBaseCompletions,
     AiApiObservedCompletionsResultModel,
+    AIFinishReason,
+    AIStructuredOutputResult,
     AIStructuredPrompt,
     AICompletionsPromptParamsBase,
+    AITokenUsage,
+    AITool,
+    AIToolCall,
+    AITurnResult,
+    RETRY_POLICY_DEFAULT,
+    RETRY_POLICY_NONE,
     SupportedDataType,
+    normalize_retry_policy,
 )
+from ..ai_provider_exceptions import AiProviderRequestError
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
@@ -117,16 +127,30 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
     and schema-based generation.
     """
 
-    def __init__(self, model: str = "", **kwargs: Any) -> None:
+    def __init__(
+        self, model: str = "", *, retry_policy: str | None = None, **kwargs: Any
+    ) -> None:
         """
         Initialize Google Gemini completions client.
 
         Args:
             model: Completions model name, defaults to DEFAULT_COMPLETIONS_MODEL
+            retry_policy: "default" keeps the engine's exponential-backoff
+                retries; "none" disables them (single attempt). Falls back to
+                the COMPLETIONS_RETRY_POLICY environment setting, then
+                "default".
             dimensions: Not used for completions but kept for interface compatibility
         """
         AIGoogleBase.__init__(self, **kwargs)
         self.env: EnvSettings = EnvSettings()
+        str_retry_candidate: str = (
+            retry_policy
+            if retry_policy is not None
+            else str(
+                self.env.get_setting("COMPLETIONS_RETRY_POLICY", RETRY_POLICY_DEFAULT)
+            )
+        )
+        self.retry_policy: str = normalize_retry_policy(str_retry_candidate)
         self.geo_residency: str | None = self.env.get_geo_residency()
         if self.geo_residency:
             _LOGGER.warning(
@@ -207,10 +231,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             prompt: Text prompt to send
             system_prompt: Optional persistent instructions; overrides
                 other_params.system_prompt when both are supplied.
-            max_response_tokens: Not yet mapped on this engine; raises
-                AiProviderCapabilityUnsupportedError when supplied.
-            request_timeout_seconds: Not yet mapped on this engine; raises
-                AiProviderCapabilityUnsupportedError when supplied.
+            max_response_tokens: Optional response token budget; maps to the
+                GenerateContentConfig max_output_tokens field and overrides
+                params.max_output_tokens when both are supplied.
+            request_timeout_seconds: Optional per-call timeout; maps to
+                per-request http_options (SDK milliseconds).
             other_params: Optional Google-specific parameters (AICompletionsPromptParamsGoogle)
 
         Returns:
@@ -218,10 +243,6 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         """
         if not prompt or not prompt.strip():
             raise ValueError("Prompt cannot be empty or None")
-        self._reject_unsupported_send_prompt_params(
-            max_response_tokens=max_response_tokens,
-            request_timeout_seconds=request_timeout_seconds,
-        )
 
         prompt = self.pii_middleware.process_input(prompt)
 
@@ -231,12 +252,14 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             params.system_prompt = system_prompt
 
         system_prompt = params.system_prompt
+        int_max_output_tokens: int = max_response_tokens or params.max_output_tokens
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_completions_observability_input_metadata(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 other_params=params,
                 response_mode=self.RESPONSE_MODE_TEXT,
+                max_response_tokens=max_response_tokens,
             )
         )
 
@@ -248,7 +271,8 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 config: genai.types.GenerateContentConfig = self._build_config(
                     params=params,
                     system_prompt=system_prompt,
-                    max_output_tokens=params.max_output_tokens,
+                    max_output_tokens=int_max_output_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
                 )
                 response: GenerateContentResponse = self.client.models.generate_content(
                     model=self.completions_model,
@@ -301,7 +325,8 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 operation="send_prompt",
                 dict_input_metadata=dict_input_metadata,
                 callable_execute=lambda: self._retry_with_exponential_backoff(
-                    _generate_text
+                    _generate_text,
+                    max_retries=self._effective_max_retries(),
                 ),
                 callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
                     observed_result=result,
@@ -581,7 +606,8 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 operation="strict_schema_prompt",
                 dict_input_metadata=dict_input_metadata,
                 callable_execute=lambda: self._retry_with_exponential_backoff(
-                    _generate_structured
+                    _generate_structured,
+                    max_retries=self._effective_max_retries(),
                 ),
                 callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
                     observed_result=result,
@@ -680,9 +706,17 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         system_prompt: str | None,
         max_output_tokens: int,
         response_schema: Type[AIStructuredPrompt] | None = None,
+        *,
+        response_json_schema: dict[str, Any] | None = None,
+        request_timeout_seconds: float | None = None,
     ) -> genai.types.GenerateContentConfig:
         """
         Construct GenerateContentConfig, including optional system instruction.
+
+        response_schema carries a pydantic class (legacy strict_schema_prompt
+        path); response_json_schema carries a raw JSON Schema for
+        send_structured_output. request_timeout_seconds maps to per-request
+        http_options (the SDK timeout unit is milliseconds).
         """
 
         config_kwargs: dict[str, Any] = {
@@ -695,9 +729,12 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         if system_prompt is not None:
             config_kwargs["system_instruction"] = system_prompt
 
-        if response_schema is not None:
+        if response_schema is not None or response_json_schema is not None:
             config_kwargs["response_mime_type"] = "application/json"
-            config_kwargs["response_schema"] = response_schema
+            if response_schema is not None:
+                config_kwargs["response_schema"] = response_schema
+            else:
+                config_kwargs["response_json_schema"] = response_json_schema
             default_temperature: float = AICompletionsPromptParamsGoogle.model_fields[
                 "temperature"
             ].default
@@ -708,6 +745,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             ].default
             if params.top_p == default_top_p:
                 config_kwargs["top_p"] = STRUCTURED_DEFAULT_TOP_P
+
+        if request_timeout_seconds is not None:
+            config_kwargs["http_options"] = genai.types.HttpOptions(
+                timeout=int(request_timeout_seconds * 1000)
+            )
 
         return genai.types.GenerateContentConfig(**config_kwargs)
 
@@ -819,3 +861,788 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         except AttributeError:
             # Early return because the SDK response did not expose usage metadata as expected.
             return None
+
+    # ── Conversation, structured output, async, retries (2.15.0) ────────────
+
+    PROVIDER_ENGINE_TOKEN = "google-gemini"
+
+    # Finish-reason markers matched as substrings of str(finish_reason), which
+    # renders as e.g. "FinishReason.MAX_TOKENS" on the real SDK.
+    TUPLE_LENGTH_FINISH_MARKERS = ("MAX_TOKENS",)
+    TUPLE_REFUSAL_FINISH_MARKERS = (
+        "SAFETY",
+        "RECITATION",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+    )
+
+    def _effective_max_retries(self, retry_override: str | None = None) -> int | None:
+        """
+        Resolves the retry budget for one call from policy and override.
+
+        Returns:
+            0 when retries are disabled (single attempt), otherwise None so
+            the backoff helper uses the engine default.
+        """
+        # getattr with a default keeps init-bypassing test doubles working.
+        str_policy: str = getattr(self, "retry_policy", RETRY_POLICY_DEFAULT)
+        if retry_override is not None:
+            str_policy = normalize_retry_policy(retry_override)
+        if str_policy == RETRY_POLICY_NONE:
+            # Early return with a single-attempt budget.
+            return 0
+        # Normal return deferring to the engine default retry budget.
+        return None
+
+    def _raise_gemini_request_error(self, exception: Exception) -> None:
+        """
+        Re-raises one Google SDK transport error as the typed request error.
+
+        Probes the exception and its cause chain (the retry helper wraps
+        exhausted errors in RuntimeError "from" the original) for Google API
+        errors and their status codes. Non-Google exceptions propagate
+        unchanged.
+        """
+
+        def _probe_status_code(error: Any) -> int | None:
+            for str_attr in ("code", "status"):
+                raw_value = getattr(error, str_attr, None)
+                raw_value = getattr(raw_value, "value", raw_value)
+                if isinstance(raw_value, int):
+                    return raw_value
+                if isinstance(raw_value, str) and raw_value.isdigit():
+                    return int(raw_value)
+            response = getattr(error, "response", None)
+            raw_status = getattr(response, "status_code", None)
+            if isinstance(raw_status, int):
+                return raw_status
+            return None
+
+        # Loop over the exception and its cause so wrapped errors still map.
+        for candidate in (exception, getattr(exception, "__cause__", None)):
+            if candidate is None:
+                continue
+            str_module: str = type(candidate).__module__ or ""
+            if str_module.startswith("google"):
+                raise AiProviderRequestError(
+                    f"Google Gemini request failed: {candidate}",
+                    status_code=_probe_status_code(candidate),
+                    provider_engine=self.PROVIDER_ENGINE_TOKEN,
+                ) from exception
+        # Normal return so non-Google exceptions propagate unchanged.
+        return None
+
+    def _normalize_gemini_finish_reason(
+        self,
+        str_finish_reason: str | None,
+        *,
+        bool_has_tool_calls: bool,
+    ) -> AIFinishReason:
+        """
+        Maps one Gemini finish-reason string onto the normalized enum.
+        """
+        if bool_has_tool_calls:
+            # Early return because requested tool calls define the turn.
+            return AIFinishReason.TOOL_USE
+        str_upper: str = (str_finish_reason or "").upper()
+        if any(marker in str_upper for marker in self.TUPLE_LENGTH_FINISH_MARKERS):
+            # Early return because output was truncated at the budget.
+            return AIFinishReason.LENGTH
+        if any(marker in str_upper for marker in self.TUPLE_REFUSAL_FINISH_MARKERS):
+            # Early return because the response was blocked or declined.
+            return AIFinishReason.REFUSAL
+        # Normal return because the turn completed normally.
+        return AIFinishReason.COMPLETE
+
+    def _usage_from_gemini(self, response: Any) -> AITokenUsage:
+        """
+        Builds the provider-neutral usage model from one Gemini response.
+        """
+        # Normal return with the provider-neutral token usage model.
+        return AITokenUsage(
+            input_tokens=self._extract_gemini_prompt_tokens(response),
+            output_tokens=self._extract_gemini_completion_tokens(response),
+            cached_input_tokens=self._extract_gemini_cached_tokens(response),
+            total_tokens=self._extract_gemini_total_tokens(response),
+        )
+
+    @staticmethod
+    def _serialize_gemini_part(part: Any) -> dict[str, Any]:
+        """
+        Serializes one candidate content part into a replayable dictionary.
+        """
+        model_dump = getattr(part, "model_dump", None)
+        if callable(model_dump):
+            try:
+                dict_part: Any = model_dump(exclude_none=True)
+                if isinstance(dict_part, dict):
+                    # Early return with the SDK-serialized part.
+                    return dict_part
+            except TypeError:
+                # Fall through to attribute-based reconstruction (test doubles).
+                pass
+        function_call = getattr(part, "function_call", None)
+        if function_call is not None:
+            dict_function_call: dict[str, Any] = {
+                "name": str(getattr(function_call, "name", "") or ""),
+                "args": dict(getattr(function_call, "args", None) or {}),
+            }
+            return {"function_call": dict_function_call}
+        str_text: Any = getattr(part, "text", None)
+        if str_text:
+            return {"text": str_text}
+        # Normal return with an empty part placeholder for unknown shapes.
+        return {}
+
+    def _build_turn_result_from_gemini(self, response: Any) -> AITurnResult:
+        """
+        Maps one Gemini response onto the provider-neutral turn.
+
+        Gemini function calls carry no stable call id, so AIToolCall.id is
+        the function name; build_tool_result_message expects that name back.
+        """
+        list_text_parts: list[str] = []
+        list_tool_calls: list[AIToolCall] = []
+        list_raw_parts: list[dict[str, Any]] = []
+        candidates = getattr(response, "candidates", None) or []
+        content = getattr(candidates[0], "content", None) if candidates else None
+        # Loop over content parts so text, tool calls, and replay parts align.
+        for part in getattr(content, "parts", None) or []:
+            list_raw_parts.append(self._serialize_gemini_part(part))
+            function_call = getattr(part, "function_call", None)
+            if function_call is not None:
+                str_name: str = str(getattr(function_call, "name", "") or "")
+                list_tool_calls.append(
+                    AIToolCall(
+                        id=str_name,
+                        name=str_name,
+                        input=dict(getattr(function_call, "args", None) or {}),
+                    )
+                )
+                continue
+            str_part_text: Any = getattr(part, "text", None)
+            if str_part_text:
+                list_text_parts.append(str_part_text)
+        str_finish_reason: str | None = self._extract_gemini_finish_reason(response)
+        finish_reason: AIFinishReason = self._normalize_gemini_finish_reason(
+            str_finish_reason,
+            bool_has_tool_calls=bool(list_tool_calls),
+        )
+        str_text: str = "".join(list_text_parts)
+        # Normal return with the provider-neutral turn result.
+        return AITurnResult(
+            text=str_text if str_text else None,
+            tool_calls=list_tool_calls,
+            finish_reason=finish_reason,
+            raw_content=list_raw_parts,
+            usage=self._usage_from_gemini(response),
+        )
+
+    def _build_gemini_conversation_config_kwargs(
+        self,
+        *,
+        system_prompt: str,
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        dict_merge_options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Builds GenerateContentConfig kwargs for one conversation turn.
+
+        provider_options keys merge into the config kwargs, so callers can set
+        any GenerateContentConfig field the engine has not mapped.
+        """
+        dict_config_kwargs: dict[str, Any] = {"system_instruction": system_prompt}
+        if max_response_tokens is not None:
+            dict_config_kwargs["max_output_tokens"] = max_response_tokens
+        if tools:
+            list_declarations: list[Any] = []
+            # Loop over tool definitions so each maps to a function declaration.
+            for ai_tool in tools:
+                list_declarations.append(
+                    genai.types.FunctionDeclaration(
+                        name=ai_tool.name,
+                        description=ai_tool.description,
+                        parameters_json_schema=ai_tool.input_schema,
+                    )
+                )
+            dict_config_kwargs["tools"] = [
+                genai.types.Tool(function_declarations=list_declarations)
+            ]
+        if tool_choice is not None:
+            dict_config_kwargs["tool_config"] = genai.types.ToolConfig(
+                function_calling_config=genai.types.FunctionCallingConfig(
+                    mode="ANY",
+                    allowed_function_names=[tool_choice],
+                )
+            )
+        if request_timeout_seconds is not None:
+            dict_config_kwargs["http_options"] = genai.types.HttpOptions(
+                timeout=int(request_timeout_seconds * 1000)
+            )
+        dict_config_kwargs.update(dict_merge_options)
+        # Normal return with the conversation config kwargs.
+        return dict_config_kwargs
+
+    def _observed_gemini_turn_result(
+        self, response: Any
+    ) -> AiApiObservedCompletionsResultModel[AITurnResult]:
+        """
+        Wraps one Gemini response as an observed conversation-turn result.
+        """
+        turn_result: AITurnResult = self._build_turn_result_from_gemini(response)
+        # Normal return with the observed turn result and usage metadata.
+        return AiApiObservedCompletionsResultModel(
+            return_value=turn_result,
+            raw_output_text=turn_result.text or "",
+            finish_reason=self._extract_gemini_finish_reason(response),
+            provider_prompt_tokens=turn_result.usage.input_tokens,
+            provider_completion_tokens=turn_result.usage.output_tokens,
+            provider_cached_input_tokens=turn_result.usage.cached_input_tokens,
+            provider_total_tokens=turn_result.usage.total_tokens,
+            dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
+        )
+
+    def _build_conversation_observability_metadata(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only observability fields for one conversation turn.
+        """
+        dict_metadata: dict[str, ObservabilityMetadataValue] = {
+            "response_mode": self.RESPONSE_MODE_TEXT,
+            "message_count": len(messages),
+            "tool_count": len(tools),
+            "system_prompt_char_count": len(system_prompt),
+        }
+        if tool_choice is not None:
+            dict_metadata["forced_tool"] = tool_choice
+        if max_response_tokens is not None:
+            dict_metadata["max_response_tokens"] = max_response_tokens
+        # Normal return with scalar conversation metadata.
+        return dict_metadata
+
+    def _send_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Sends one conversation turn via generate_content with function tools.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        dict_config_kwargs: dict[str, Any] = (
+            self._build_gemini_conversation_config_kwargs(
+                system_prompt=system_prompt,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+                request_timeout_seconds=request_timeout_seconds,
+                dict_merge_options=dict_merge_options,
+            )
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_conversation_observability_metadata(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        def _generate_turn() -> AiApiObservedCompletionsResultModel[AITurnResult]:
+            response = self.client.models.generate_content(
+                model=self.completions_model,
+                contents=messages,
+                config=genai.types.GenerateContentConfig(**dict_config_kwargs),
+            )
+            # Normal return with the observed conversation turn.
+            return self._observed_gemini_turn_result(response)
+
+        def _execute_with_policy() -> AiApiObservedCompletionsResultModel[AITurnResult]:
+            try:
+                return self._retry_with_exponential_backoff(
+                    _generate_turn,
+                    max_retries=self._effective_max_retries(str_retry_override),
+                )
+            except Exception as exception:
+                self._raise_gemini_request_error(exception)
+                raise
+
+        observed_result: AiApiObservedCompletionsResultModel[AITurnResult] = (
+            self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="send_conversation",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_with_policy,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
+        )
+        # Normal return with the caller-facing conversation turn.
+        return observed_result.return_value
+
+    async def _asend_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Async twin of _send_conversation_provider via client.aio.
+
+        Async variants perform a single attempt (the engine backoff helper is
+        synchronous); transport failures surface as typed request errors for
+        caller-owned backoff.
+        """
+        dict_merge_options, _ = self._split_provider_options(provider_options)
+        dict_config_kwargs: dict[str, Any] = (
+            self._build_gemini_conversation_config_kwargs(
+                system_prompt=system_prompt,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+                request_timeout_seconds=request_timeout_seconds,
+                dict_merge_options=dict_merge_options,
+            )
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_conversation_observability_metadata(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _generate_turn() -> AiApiObservedCompletionsResultModel[AITurnResult]:
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.completions_model,
+                    contents=messages,
+                    config=genai.types.GenerateContentConfig(**dict_config_kwargs),
+                )
+            except Exception as exception:
+                self._raise_gemini_request_error(exception)
+                raise
+            # Normal return with the observed conversation turn.
+            return self._observed_gemini_turn_result(response)
+
+        observed_result: AiApiObservedCompletionsResultModel[AITurnResult] = (
+            await self._execute_provider_acall_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="asend_conversation",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_generate_turn,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
+        )
+        # Normal return with the caller-facing conversation turn.
+        return observed_result.return_value
+
+    def _build_tool_result_message_provider(
+        self,
+        *,
+        tool_call_id: str,
+        result: dict[str, Any],
+        is_error: bool,
+    ) -> dict[str, Any]:
+        """
+        Builds one Gemini function-response user message.
+
+        tool_call_id is the function name (Gemini function calls carry no
+        stable id; AIToolCall.id is set to the name). Errors are encoded in
+        the response payload under an "error" key.
+        """
+        dict_payload: dict[str, Any] = {"error": result} if is_error else result
+        # Normal return with the Gemini-shaped function response entry.
+        return {
+            "role": "user",
+            "parts": [
+                {
+                    "function_response": {
+                        "name": tool_call_id,
+                        "response": dict_payload,
+                    }
+                }
+            ],
+        }
+
+    def _extend_messages_with_turn_provider(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        turn: AITurnResult,
+    ) -> None:
+        """
+        Appends one Gemini model turn wrapping the raw content parts.
+        """
+        messages.append({"role": "model", "parts": turn.raw_content})
+        # Normal return after appending the model turn.
+        return None
+
+    def _build_gemini_structured_request(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        dict_merge_options: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """
+        Builds (contents, config kwargs) for one structured-output call.
+        """
+        str_system_prompt: str = self._resolve_system_prompt(
+            system_prompt,
+            None,
+            AICompletionsPromptParamsBase.DEFAULT_STRICT_SCHEMA_SYSTEM_PROMPT,
+        )
+        list_contents: list[dict[str, Any]] = list(messages or [])
+        if prompt is not None and prompt.strip():
+            str_redacted_prompt: str = self.pii_middleware.process_input(prompt)
+            list_contents.append(
+                {"role": "user", "parts": [{"text": str_redacted_prompt}]}
+            )
+        dict_config_kwargs: dict[str, Any] = {
+            "system_instruction": str_system_prompt,
+            "max_output_tokens": max_response_tokens,
+            "temperature": STRUCTURED_DEFAULT_TEMPERATURE,
+            "top_p": STRUCTURED_DEFAULT_TOP_P,
+            "response_mime_type": "application/json",
+            "response_json_schema": response_schema,
+        }
+        if request_timeout_seconds is not None:
+            dict_config_kwargs["http_options"] = genai.types.HttpOptions(
+                timeout=int(request_timeout_seconds * 1000)
+            )
+        dict_config_kwargs.update(dict_merge_options)
+        # Normal return with contents and config kwargs.
+        return list_contents, dict_config_kwargs
+
+    def _build_structured_output_result_from_gemini(
+        self, response: Any
+    ) -> AIStructuredOutputResult:
+        """
+        Maps one Gemini structured response onto the provider-neutral result.
+        """
+        str_finish_reason: str | None = self._extract_gemini_finish_reason(response)
+        finish_reason: AIFinishReason = self._normalize_gemini_finish_reason(
+            str_finish_reason,
+            bool_has_tool_calls=False,
+        )
+        usage: AITokenUsage = self._usage_from_gemini(response)
+        raw_output_text: str = str(getattr(response, "text", "") or "")
+        if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
+            # Early return so callers branch on finish_reason instead of parsing.
+            return AIStructuredOutputResult(
+                data=None,
+                finish_reason=finish_reason,
+                usage=usage,
+                raw_text=self.pii_middleware.process_output(raw_output_text),
+            )
+        str_content: str = self.pii_middleware.process_output(raw_output_text)
+        if not str_content:
+            raise ValueError("Empty response from Gemini API")
+        try:
+            parsed_data: Any = json.loads(str_content)
+        except json.JSONDecodeError as json_error:
+            raise ValueError(f"Invalid JSON response: {json_error}") from json_error
+        if not isinstance(parsed_data, dict):
+            raise ValueError(
+                "Structured response was valid JSON but not a JSON object."
+            )
+        # Normal return with the parsed structured output result.
+        return AIStructuredOutputResult(
+            data=parsed_data,
+            finish_reason=finish_reason,
+            usage=usage,
+            raw_text=str_content,
+        )
+
+    def _observed_gemini_structured_result(
+        self, response: Any
+    ) -> AiApiObservedCompletionsResultModel[AIStructuredOutputResult]:
+        """
+        Wraps one Gemini structured response as an observed result.
+        """
+        structured_result: AIStructuredOutputResult = (
+            self._build_structured_output_result_from_gemini(response)
+        )
+        # Normal return with the observed structured output result.
+        return AiApiObservedCompletionsResultModel(
+            return_value=structured_result,
+            raw_output_text=structured_result.raw_text,
+            finish_reason=self._extract_gemini_finish_reason(response),
+            provider_prompt_tokens=structured_result.usage.input_tokens,
+            provider_completion_tokens=structured_result.usage.output_tokens,
+            provider_cached_input_tokens=structured_result.usage.cached_input_tokens,
+            provider_total_tokens=structured_result.usage.total_tokens,
+        )
+
+    def _build_structured_observability_metadata(
+        self,
+        *,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only observability fields for one structured call.
+        """
+        # Normal return with scalar structured-call metadata.
+        return {
+            "response_mode": self.RESPONSE_MODE_STRUCTURED,
+            "prompt_char_count": len(prompt) if prompt else 0,
+            "message_count": len(messages) if messages else 0,
+            "max_response_tokens": max_response_tokens,
+        }
+
+    def _send_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Generates structured output via response_json_schema.
+        """
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        list_contents, dict_config_kwargs = self._build_gemini_structured_request(
+            response_schema=response_schema,
+            system_prompt=system_prompt,
+            prompt=prompt,
+            messages=messages,
+            max_response_tokens=max_response_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+            dict_merge_options=dict_merge_options,
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_structured_observability_metadata(
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        def _generate_structured() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredOutputResult]
+        ):
+            response = self.client.models.generate_content(
+                model=self.completions_model,
+                contents=list_contents,
+                config=genai.types.GenerateContentConfig(**dict_config_kwargs),
+            )
+            # Normal return with the observed structured output result.
+            return self._observed_gemini_structured_result(response)
+
+        def _execute_with_policy() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredOutputResult]
+        ):
+            try:
+                return self._retry_with_exponential_backoff(
+                    _generate_structured,
+                    max_retries=self._effective_max_retries(str_retry_override),
+                )
+            except (ValueError, ValidationError):
+                raise
+            except Exception as exception:
+                self._raise_gemini_request_error(exception)
+                raise
+
+        observed_result: AiApiObservedCompletionsResultModel[
+            AIStructuredOutputResult
+        ] = self._execute_provider_call_with_observability(
+            capability=self.CLIENT_TYPE_COMPLETIONS,
+            operation="send_structured_output",
+            dict_input_metadata=dict_input_metadata,
+            callable_execute=_execute_with_policy,
+            callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                observed_result=result,
+                provider_elapsed_ms=provider_elapsed_ms,
+            ),
+        )
+        # Normal return with the caller-facing structured output result.
+        return observed_result.return_value
+
+    async def _asend_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Async twin of _send_structured_output_provider via client.aio.
+
+        Single attempt; see _asend_conversation_provider.
+        """
+        dict_merge_options, _ = self._split_provider_options(provider_options)
+        list_contents, dict_config_kwargs = self._build_gemini_structured_request(
+            response_schema=response_schema,
+            system_prompt=system_prompt,
+            prompt=prompt,
+            messages=messages,
+            max_response_tokens=max_response_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+            dict_merge_options=dict_merge_options,
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_structured_observability_metadata(
+                prompt=prompt,
+                messages=messages,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _generate_structured() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredOutputResult]
+        ):
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.completions_model,
+                    contents=list_contents,
+                    config=genai.types.GenerateContentConfig(**dict_config_kwargs),
+                )
+            except Exception as exception:
+                self._raise_gemini_request_error(exception)
+                raise
+            # Normal return with the observed structured output result.
+            return self._observed_gemini_structured_result(response)
+
+        observed_result: AiApiObservedCompletionsResultModel[
+            AIStructuredOutputResult
+        ] = await self._execute_provider_acall_with_observability(
+            capability=self.CLIENT_TYPE_COMPLETIONS,
+            operation="asend_structured_output",
+            dict_input_metadata=dict_input_metadata,
+            callable_execute=_generate_structured,
+            callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                observed_result=result,
+                provider_elapsed_ms=provider_elapsed_ms,
+            ),
+        )
+        # Normal return with the caller-facing structured output result.
+        return observed_result.return_value
+
+    async def _asend_prompt_provider(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        other_params: AICompletionsPromptParamsBase | None,
+    ) -> str:
+        """
+        Async twin of send_prompt via client.aio.
+
+        Single attempt; see _asend_conversation_provider.
+        """
+        str_redacted_prompt: str = self.pii_middleware.process_input(prompt)
+        params = self._coerce_params(other_params)
+        if system_prompt is not None and system_prompt.strip():
+            params.system_prompt = system_prompt
+        str_system_prompt: str | None = params.system_prompt
+        int_max_output_tokens: int = max_response_tokens or params.max_output_tokens
+        list_contents: list[dict[str, Any]] = self._build_contents(
+            prompt=str_redacted_prompt, params=params
+        )
+        config: genai.types.GenerateContentConfig = self._build_config(
+            params=params,
+            system_prompt=str_system_prompt,
+            max_output_tokens=int_max_output_tokens,
+            request_timeout_seconds=request_timeout_seconds,
+        )
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_completions_observability_input_metadata(
+                prompt=str_redacted_prompt,
+                system_prompt=str_system_prompt,
+                other_params=params,
+                response_mode=self.RESPONSE_MODE_TEXT,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        async def _generate_text() -> AiApiObservedCompletionsResultModel[str]:
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.completions_model,
+                    contents=list_contents,
+                    config=config,
+                )
+            except Exception as exception:
+                self._raise_gemini_request_error(exception)
+                raise
+            raw_output_text: str = str(getattr(response, "text", "") or "")
+            # Normal return with the Gemini text output and usage metadata.
+            return AiApiObservedCompletionsResultModel(
+                return_value=raw_output_text,
+                raw_output_text=raw_output_text,
+                finish_reason=self._extract_gemini_finish_reason(response),
+                provider_prompt_tokens=self._extract_gemini_prompt_tokens(response),
+                provider_completion_tokens=self._extract_gemini_completion_tokens(
+                    response
+                ),
+                provider_cached_input_tokens=self._extract_gemini_cached_tokens(
+                    response
+                ),
+                provider_total_tokens=self._extract_gemini_total_tokens(response),
+            )
+
+        observed_result: AiApiObservedCompletionsResultModel[str] = (
+            await self._execute_provider_acall_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="asend_prompt",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_generate_text,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
+        )
+        # Normal return with sanitized Gemini text after observability wrapping.
+        return self.pii_middleware.process_output(observed_result.return_value)

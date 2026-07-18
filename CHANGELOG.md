@@ -4,6 +4,36 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.15.0
+
+The 2.14.0 capability-gated surface lands on every engine whose underlying
+API supports it; the remaining gaps stay unimplemented and raise the typed
+capability error.
+
+- `openai` (Chat Completions) and `openai-responses`: full support —
+  `send_conversation` tool loops (tools, forced `tool_choice`, strict
+  functions), `send_structured_output` via the `json_schema` response format
+  (schema-guided mode), async variants on a lazy `AsyncOpenAI`, extended
+  `send_prompt` parameters, `retry_policy` (SDK `max_retries=0`), and
+  status-coded `AiProviderRequestError`.
+- `google-gemini`: full support — function-declaration tools with forced
+  calling, raw-JSON-schema structured output via `response_json_schema`,
+  async variants on `client.aio` (single attempt; pair with caller backoff),
+  extended `send_prompt` parameters (per-request `http_options` timeout),
+  `retry_policy` gating the engine backoff loop, and typed request errors.
+  Gemini tool-call ids are the function name (the API carries no call ids).
+- Bedrock-routed engines: partial per underlying API support —
+  `send_conversation` via Converse `toolConfig` on Nova and Claude families,
+  `send_structured_output` via Converse `outputConfig` only on models AWS
+  lists (Claude 4.5+), `max_response_tokens` mapping, `retry_policy`
+  collapsing the engine schedule, and status-coded errors from `ClientError`.
+  Unimplemented (no underlying support): async variants (boto3 has no
+  official async client) and per-call timeouts.
+- New engine-agnostic replay helper `extend_messages_with_turn(messages,
+  turn)` appends a model turn in each engine's wire shape, so one tool loop
+  runs unchanged across engines (implemented on claude too).
+- README gains a feature-support-by-engine matrix.
+
 ## 2.14.0
 
 Engine-agnostic completions features for workflow-service call shapes, fully
