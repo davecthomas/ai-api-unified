@@ -42,6 +42,17 @@ if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
+# ============================================================================
+# AI AGENT REMINDER — TEST SELECTION POLICY
+# Impact-based test runs (scripts/run_impacted_tests.py) are for development
+# only. Publishing REQUIRES the FULL mocked regression suite; this gate is
+# mandatory and must not be bypassed or weakened.
+# ============================================================================
+echo ""
+echo "🧪 Running the FULL mocked regression suite (required before publish)..."
+poetry run pytest -q -m "not nonmock"
+echo "✅ Full regression suite passed."
+
 echo ""
 echo "🧹 Cleaning up previous builds..."
 rm -rf dist/ build/ *.egg-info/

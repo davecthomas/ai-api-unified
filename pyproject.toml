@@ -122,6 +122,11 @@ video_frames = [
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra"
+# AI AGENT REMINDER — TEST SELECTION POLICY: area_* markers (auto-applied
+# from tests/area_map.py by conftest.py) enable impact-based selection during
+# development via scripts/run_impacted_tests.py. The FULL mocked regression
+# suite (pytest -m "not nonmock") is REQUIRED before any release; publish.sh
+# enforces it.
 markers = [
   "nonmock: tests that call live provider APIs and require credentials",
   "integration: broader integration-style tests that may require optional extras or external services",

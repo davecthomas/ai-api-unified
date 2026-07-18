@@ -45,11 +45,27 @@ README release section.
 - Releases are cut on `main` after merge: tag `v<version>` and push the tag.
   Publishing to PyPI is a separate, explicit step via `./publish.sh`.
 
+## Test selection policy (AI agents: follow this)
+
+The suite is large (483+ tests). Do not run all of it on every edit.
+
+- **During development**, run only the impacted areas:
+  `poetry run python scripts/run_impacted_tests.py` (maps your git diff to
+  `area_*` pytest markers via `tests/area_map.py`), or select by hand, e.g.
+  `poetry run pytest -m "area_engine_openai and not nonmock"`.
+- **Every new test file must be mapped** in `tests/area_map.py`; collection
+  fails with instructions if it is not.
+- **Full mocked regression** (`poetry run pytest -q -m "not nonmock"`) is
+  REQUIRED before tagging or publishing any release. `publish.sh` runs it and
+  will not publish on failure. Load-bearing changes (`ai_base.py`, factory,
+  registry, `conftest.py`, `pyproject.toml`) also escalate to the full suite
+  automatically.
+
 ## Working conventions
 
 - Never commit directly to `main`; create a branch from the updated remote
   primary branch first.
-- Run the mocked suite before any commit: `poetry run pytest -q -m "not nonmock"`
-  (tests in `*_nonmock.py` files call live provider APIs when credentials are
-  present in `.env`).
+- Run impacted tests before any commit (see the test selection policy above);
+  run the full mocked suite before a release. Tests in `*_nonmock.py` files
+  call live provider APIs when credentials are present in `.env`.
 - Lint and format: `poetry run ruff check .` and `poetry run black .`.
