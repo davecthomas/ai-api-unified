@@ -4,6 +4,19 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.16.0
+
+- Audio dependencies (`pydub`; `audioop-lts` on Python 3.13+) moved out of
+  the base install into the `voice` extra. Text-only installs such as
+  `ai-api-unified[anthropic]` no longer pull audio packages, and importing
+  the library or constructing completions clients never triggers pydub's
+  import (or its SyntaxWarning/ffmpeg RuntimeWarning noise). The `azure_tts`
+  and `elevenlabs` extras include the audio dependencies; Google and OpenAI
+  voice consumers install `[<provider>,voice]`. Voice features without the
+  audio dependencies raise `AiProviderDependencyUnavailableError` naming the
+  extra. Migration: add `voice` to your extras if you use Google or OpenAI
+  voice/TTS/STT.
+
 ## 2.15.0
 
 The 2.14.0 capability-gated surface lands on every engine whose underlying

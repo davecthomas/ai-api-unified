@@ -25,7 +25,7 @@ from pydantic import PrivateAttr
 from ai_api_unified.ai_google_base import AIGoogleBase
 from ai_api_unified.util._lazy_pydub import (
     AudioSegment,
-    CouldntDecodeError,
+    get_CouldntDecodeError,
 )
 from ai_api_unified.util.env_settings import EnvSettings
 from ai_api_unified.voice.ai_voice_base import (
@@ -769,7 +769,9 @@ class AIVoiceGoogle(AIVoiceBase, AIGoogleBase):
 
         try:
             audio_master: AudioSegment = AudioSegment.from_file(BytesIO(audio_bytes))
-        except CouldntDecodeError as exc:
+        # get_CouldntDecodeError() is evaluated only while handling the
+        # exception, so importing this module never pulls in pydub.
+        except get_CouldntDecodeError() as exc:
             logger.error("Audio decode failed: %s", exc)
             raise ValueError(f"Could not decode audio: {exc}") from exc
 

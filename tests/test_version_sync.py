@@ -46,9 +46,7 @@ def _read_module_version() -> str:
 def _read_readme_title_version() -> str:
     """Returns the version embedded in README.md's title heading."""
     str_first_line: str = (
-        (PATH_REPO_ROOT / "README.md")
-        .read_text(encoding="utf-8")
-        .splitlines()[0]
+        (PATH_REPO_ROOT / "README.md").read_text(encoding="utf-8").splitlines()[0]
     )
     match_version = re.search(rf"^# ai-api-unified ({REGEX_SEMVER})$", str_first_line)
     assert match_version is not None, (

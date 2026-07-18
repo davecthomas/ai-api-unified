@@ -1,4 +1,4 @@
-# ai-api-unified 2.15.0
+# ai-api-unified 2.16.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -76,7 +76,17 @@ poetry add 'ai-api-unified[anthropic]'
 poetry add 'ai-api-unified[bedrock,google_gemini]'
 poetry add 'ai-api-unified[google_gemini,video_frames]'
 poetry add 'ai-api-unified[openai,video_frames]'
+poetry add 'ai-api-unified[google_gemini,voice]'   # Google voice/TTS/STT
+poetry add 'ai-api-unified[openai,voice]'          # OpenAI voice
 ```
+
+Audio dependencies (pydub and, on Python 3.13+, audioop-lts) ship in the
+`voice` extra as of 2.16.0, so text-only installs such as
+`ai-api-unified[anthropic]` carry no audio packages and importing the library
+never triggers pydub's warnings. The `azure_tts` and `elevenlabs` extras
+include the audio dependencies; Google and OpenAI voice pair their provider
+extra with `voice`. Using a voice feature without the audio dependencies
+raises `AiProviderDependencyUnavailableError` naming the extra to install.
 
 ### Install in a Local Clone
 
@@ -106,8 +116,9 @@ poetry install --all-extras --with dev
 | `google_gemini`                  | Google Gemini completions, embeddings, images, and Google voice        |
 | `bedrock`                        | AWS Bedrock completions, Titan embeddings, Bedrock image providers, and Bedrock video providers |
 | `video_frames`                   | Optional frame extraction helpers backed by ImageIO + Pillow           |
-| `azure_tts`                      | Azure Cognitive Services TTS                                           |
-| `elevenlabs`                     | ElevenLabs TTS and STT                                                 |
+| `azure_tts`                      | Azure Cognitive Services TTS (includes the `voice` audio deps)         |
+| `elevenlabs`                     | ElevenLabs TTS and STT (includes the `voice` audio deps)               |
+| `voice`                          | Shared audio processing (pydub; audioop-lts on Python 3.13+) for voice/TTS/STT; pair with a provider extra, e.g. `[google_gemini,voice]` or `[openai,voice]` |
 | `middleware-pii-redaction`       | Presidio + spaCy + `usaddress`; install the required spaCy model separately |
 | `middleware-pii-redaction-small` | Compatibility alias for PII redaction deps; pair with separate `en_core_web_sm` install |
 | `middleware-pii-redaction-large` | Compatibility alias for PII redaction deps; pair with separate `en_core_web_lg` install |
