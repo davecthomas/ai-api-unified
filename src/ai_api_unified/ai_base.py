@@ -307,6 +307,29 @@ RETRY_POLICY_DEFAULT: str = "default"
 RETRY_POLICY_NONE: str = "none"
 
 
+def normalize_retry_policy(retry_policy: str) -> str:
+    """
+    Normalizes and validates one retry-policy token shared by all engines.
+
+    Args:
+        retry_policy: Raw retry policy value from a constructor or environment.
+
+    Returns:
+        Normalized retry policy token ("default" or "none").
+
+    Raises:
+        ValueError: When an unrecognized retry policy value is supplied.
+    """
+    str_normalized: str = retry_policy.strip().lower()
+    if str_normalized not in (RETRY_POLICY_DEFAULT, RETRY_POLICY_NONE):
+        raise ValueError(
+            f"Unsupported retry policy {retry_policy!r}; "
+            f"expected '{RETRY_POLICY_DEFAULT}' or '{RETRY_POLICY_NONE}'."
+        )
+    # Normal return with the normalized retry policy token.
+    return str_normalized
+
+
 class AIFinishReason(str, Enum):
     """
     Normalized reason a completions turn stopped, uniform across engines.
@@ -2740,6 +2763,78 @@ class AIBaseCompletions(AIBase):
         tool-use support must implement this hook.
         """
         self._raise_completions_capability_unsupported("tool-use conversations")
+
+    def extend_messages_with_turn(
+        self,
+        messages: list[dict[str, Any]],
+        turn: AITurnResult,
+    ) -> list[dict[str, Any]]:
+        """
+        Appends one model turn to a caller-managed history in engine wire shape.
+
+        Engines shape assistant turns differently (a single message wrapping
+        content blocks, a message carrying tool_calls, or a list of output
+        items), so this helper keeps the caller's tool loop engine-agnostic:
+        append the turn, append tool results via build_tool_result_message,
+        and call send_conversation again.
+
+        Args:
+            messages: Caller-managed message history, mutated in place.
+            turn: The AITurnResult returned by send_conversation.
+
+        Returns:
+            The same messages list, for chaining.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the configured model
+                does not support tool-use conversations.
+        """
+        self._require_tool_use_capability()
+        self._extend_messages_with_turn_provider(messages=messages, turn=turn)
+        # Normal return with the extended caller-managed history.
+        return messages
+
+    def _extend_messages_with_turn_provider(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        turn: AITurnResult,
+    ) -> None:
+        """
+        Provider hook for appending one model turn in engine wire shape.
+
+        The base implementation raises: a provider whose capabilities declare
+        tool-use support must implement this hook.
+        """
+        self._raise_completions_capability_unsupported("tool-use conversations")
+
+    # Reserved provider_options key honored by engines that support per-call
+    # retry overrides; every other key merges into the provider request.
+    PROVIDER_OPTION_RETRY_POLICY: ClassVar[str] = "retry_policy"
+
+    def _split_provider_options(
+        self, provider_options: dict[str, Any] | None
+    ) -> tuple[dict[str, Any], str | None]:
+        """
+        Splits provider_options into request-merge keys and reserved keys.
+
+        Args:
+            provider_options: Optional engine-specific escape hatch supplied
+                per call.
+
+        Returns:
+            Tuple of (kwargs merged verbatim into the provider request,
+            optional per-call retry policy override).
+        """
+        if not provider_options:
+            # Early return because there is nothing to split.
+            return {}, None
+        dict_merge_options: dict[str, Any] = dict(provider_options)
+        str_retry_policy: str | None = dict_merge_options.pop(
+            self.PROVIDER_OPTION_RETRY_POLICY, None
+        )
+        # Normal return with merge options and the reserved retry override.
+        return dict_merge_options, str_retry_policy
 
     async def asend_prompt(
         self,

@@ -3,7 +3,7 @@
 import json
 import logging
 from collections.abc import Iterator
-from typing import Any, Type
+from typing import Any, ClassVar, Type
 
 from pydantic import ValidationError
 
@@ -11,12 +11,25 @@ from ..ai_completions_exceptions import StructuredResponseTokenLimitError
 from ..ai_base import (
     AIBaseCompletions,
     AiApiObservedCompletionsResultModel,
+    AIFinishReason,
+    AIStructuredOutputResult,
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
+    AITokenUsage,
+    AITool,
+    AIToolCall,
+    AITurnResult,
+    RETRY_POLICY_DEFAULT,
+    RETRY_POLICY_NONE,
     SupportedDataType,
+    normalize_retry_policy,
 )
-from ..ai_bedrock_base import AIBedrockBase, ClientError
+from ..ai_bedrock_base import AIBedrockBase, BotoCoreError, ClientError
+from ..ai_provider_exceptions import (
+    AiProviderCapabilityUnsupportedError,
+    AiProviderRequestError,
+)
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
@@ -38,6 +51,22 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
     Based on https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
     """
 
+    # Model families with Converse toolConfig support that this engine maps
+    # (Amazon Nova and Anthropic Claude on Bedrock).
+    TUPLE_TOOL_USE_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "nova",
+        "anthropic.claude",
+    )
+    # Models AWS lists as supporting native structured outputs
+    # (Converse outputConfig.textFormat); see
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
+    TUPLE_STRUCTURED_OUTPUT_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "claude-haiku-4-5",
+        "claude-sonnet-4-5",
+        "claude-opus-4-5",
+        "claude-opus-4-6",
+    )
+
     @classmethod
     def for_model(
         cls,
@@ -46,6 +75,18 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         context_window_length: int,
     ) -> "AICompletionsCapabilitiesBedrock":
         """Create capabilities instance for the requested Bedrock model."""
+        normalized_name: str = model_name.strip().lower()
+        # Tool use and structured output are per-model on Bedrock: toolConfig
+        # is mapped for Nova and Claude families; outputConfig structured
+        # output only for the models AWS supports. Async stays False — boto3
+        # has no official async client.
+        bool_supports_tool_use: bool = any(
+            marker in normalized_name for marker in cls.TUPLE_TOOL_USE_MODEL_MARKERS
+        )
+        bool_supports_structured_output: bool = any(
+            marker in normalized_name
+            for marker in cls.TUPLE_STRUCTURED_OUTPUT_MODEL_MARKERS
+        )
         # Normal return with Bedrock capabilities; every chat model this client
         # targets streams via the ConverseStream API and supports the
         # provider-side CountTokens operation.
@@ -54,6 +95,8 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
             supported_data_types=[SupportedDataType.TEXT, SupportedDataType.IMAGE],
             supports_streaming=True,
             supports_token_counting=True,
+            supports_tool_use=bool_supports_tool_use,
+            supports_structured_output=bool_supports_structured_output,
             pricing=get_model_pricing(PROVIDER_BEDROCK, model_name),
         )
 
@@ -64,7 +107,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
     structured-output prompts.
     """
 
-    def __init__(self, model: str = "", **kwargs: Any):
+    def __init__(
+        self, model: str = "", *, retry_policy: str | None = None, **kwargs: Any
+    ):
         settings = EnvSettings()
         resolved_model: str = (
             model
@@ -73,12 +118,23 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         )
         self.completions_model: str = resolved_model
         enforce_model_lifecycle(PROVIDER_BEDROCK, resolved_model)
+        str_retry_candidate: str = (
+            retry_policy
+            if retry_policy is not None
+            else str(settings.get("COMPLETIONS_RETRY_POLICY", RETRY_POLICY_DEFAULT))
+        )
+        self.retry_policy: str = normalize_retry_policy(str_retry_candidate)
         AIBedrockBase.__init__(self, model=resolved_model, **kwargs)
         AIBaseCompletions.__init__(self, model=resolved_model, **kwargs)
         # Reuse the existing retry schedule from the base but allow overrides via kwargs
         custom_backoff: list[float] | None = kwargs.get("backoff_delays")
         if custom_backoff is not None:
             self.backoff_delays = custom_backoff
+        if self.retry_policy == RETRY_POLICY_NONE:
+            # A single-entry schedule collapses every engine retry loop to one
+            # attempt. botocore's own retry config is client-level; set the
+            # standard AWS_MAX_ATTEMPTS=1 environment variable to disable it.
+            self.backoff_delays = [0.0]
 
     @property
     def max_context_tokens(self) -> int:
@@ -361,10 +417,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         request_timeout_seconds: float | None = None,
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> str:
-        self._reject_unsupported_send_prompt_params(
-            max_response_tokens=max_response_tokens,
-            request_timeout_seconds=request_timeout_seconds,
-        )
+        # boto3 has no per-call timeout; that parameter stays unimplemented on
+        # this engine and raises the typed capability error when supplied.
+        self._reject_bedrock_timeout(request_timeout_seconds)
         prompt = self.pii_middleware.process_input(prompt)
         # AWS Bedrock expects messages in this format for the Converse API
         user_content: list[dict[str, Any]] = self._build_user_content(
@@ -378,13 +433,18 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             AICompletionsPromptParamsBase.DEFAULT_SYSTEM_PROMPT,
         )
 
-        inference_config = {"temperature": 0.2, "topP": 0.85, "maxTokens": 256}
+        inference_config = {
+            "temperature": 0.2,
+            "topP": 0.85,
+            "maxTokens": max_response_tokens or 256,
+        }
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_completions_observability_input_metadata(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 other_params=other_params,
                 response_mode=self.RESPONSE_MODE_TEXT,
+                max_response_tokens=max_response_tokens,
             )
         )
 
@@ -781,3 +841,454 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
 
         return raw_json
+
+    # ── Conversation and structured output (Converse API, 2.15.0) ───────────
+    # Async variants and per-call timeouts stay unimplemented on this engine:
+    # boto3 has no official async client and no per-call timeout override.
+
+    DICT_FINISH_REASON_MAP: ClassVar[dict[str, AIFinishReason]] = {
+        "end_turn": AIFinishReason.COMPLETE,
+        "stop_sequence": AIFinishReason.COMPLETE,
+        "max_tokens": AIFinishReason.LENGTH,
+        "tool_use": AIFinishReason.TOOL_USE,
+        "guardrail_intervened": AIFinishReason.REFUSAL,
+        "content_filtered": AIFinishReason.REFUSAL,
+    }
+
+    PROVIDER_ENGINE_TOKEN: ClassVar[str] = "bedrock"
+
+    def _reject_bedrock_timeout(self, request_timeout_seconds: float | None) -> None:
+        """
+        Rejects per-call timeouts, which boto3 does not support.
+        """
+        if request_timeout_seconds is None:
+            # Normal return because no unsupported parameter was supplied.
+            return None
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not support "
+            "request_timeout_seconds: boto3 has no per-call timeout. Configure "
+            "botocore read_timeout at client construction instead."
+        )
+
+    def _raise_bedrock_request_error(self, exception: Exception) -> None:
+        """
+        Re-raises one botocore transport error as the typed request error.
+
+        Carries the HTTP status code from ClientError response metadata so
+        caller-owned backoff can classify 429/5xx uniformly across engines.
+        Non-transport exceptions propagate unchanged.
+        """
+        if isinstance(exception, ClientError):
+            dict_response: dict[str, Any] = getattr(exception, "response", None) or {}
+            raw_status = dict_response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            raise AiProviderRequestError(
+                f"Bedrock request failed: {exception}",
+                status_code=raw_status if isinstance(raw_status, int) else None,
+                provider_engine=self.PROVIDER_ENGINE_TOKEN,
+            ) from exception
+        if isinstance(exception, BotoCoreError):
+            raise AiProviderRequestError(
+                f"Bedrock request failed before a status was available: "
+                f"{exception}",
+                status_code=None,
+                provider_engine=self.PROVIDER_ENGINE_TOKEN,
+            ) from exception
+        # Normal return so non-transport exceptions propagate unchanged.
+        return None
+
+    def _is_retryable_client_error(self, exception: Exception) -> bool:
+        """
+        Classifies one exception as retryable per the base error-code policy.
+        """
+        if isinstance(exception, ClientError):
+            str_error_code: str = str(
+                (getattr(exception, "response", None) or {})
+                .get("Error", {})
+                .get("Code", "")
+            )
+            # Normal return based on the shared non-retryable code set.
+            return str_error_code not in self.NON_RETRYABLE_ERROR_CODES
+        # Normal return treating other transport errors as retryable.
+        return isinstance(exception, BotoCoreError)
+
+    def _execute_converse_with_retries(
+        self,
+        callable_converse: Any,
+        *,
+        retry_override: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Runs one Converse call through the engine retry schedule.
+
+        retry_override "none" (from provider_options) collapses the schedule
+        to a single attempt for that call. Exhausted or non-retryable
+        transport failures surface as typed AiProviderRequestError.
+        """
+        list_delays: list[float] = list(self.backoff_delays)
+        if retry_override is not None:
+            if normalize_retry_policy(retry_override) == RETRY_POLICY_NONE:
+                list_delays = [0.0]
+        # Loop through the retry schedule while preserving backoff behavior.
+        for attempt, delay in enumerate(list_delays, start=1):
+            try:
+                # Normal return with the raw Converse response dictionary.
+                return callable_converse()
+            except Exception as exception:
+                bool_last_attempt: bool = attempt == len(list_delays)
+                if bool_last_attempt or not self._is_retryable_client_error(exception):
+                    self._raise_bedrock_request_error(exception)
+                    raise
+                self._sleep_with_backoff(delay)
+        raise RuntimeError("Unreachable: converse retry schedule was empty.")
+
+    @staticmethod
+    def _build_converse_tool_config(
+        tools: list[AITool],
+        tool_choice: str | None,
+    ) -> dict[str, Any]:
+        """
+        Maps provider-neutral tools onto the Converse toolConfig shape.
+        """
+        list_provider_tools: list[dict[str, Any]] = []
+        # Loop over tool definitions so each maps to a Converse toolSpec.
+        for ai_tool in tools:
+            dict_tool_spec: dict[str, Any] = {
+                "name": ai_tool.name,
+                "description": ai_tool.description,
+                "inputSchema": {"json": ai_tool.input_schema},
+            }
+            if ai_tool.strict:
+                dict_tool_spec["strict"] = True
+            list_provider_tools.append({"toolSpec": dict_tool_spec})
+        dict_tool_config: dict[str, Any] = {"tools": list_provider_tools}
+        if tool_choice is not None:
+            dict_tool_config["toolChoice"] = {"tool": {"name": tool_choice}}
+        # Normal return with the Converse-shaped tool configuration.
+        return dict_tool_config
+
+    def _usage_from_converse(self, dict_response: dict[str, Any]) -> AITokenUsage:
+        """
+        Builds the provider-neutral usage model from one Converse response.
+        """
+        # Normal return with the provider-neutral token usage model.
+        return AITokenUsage(
+            input_tokens=self._extract_bedrock_prompt_tokens(dict_response),
+            output_tokens=self._extract_bedrock_completion_tokens(dict_response),
+            cached_input_tokens=self._extract_bedrock_cached_tokens(dict_response),
+            total_tokens=self._extract_bedrock_total_tokens(dict_response),
+        )
+
+    def _build_turn_result_from_converse(
+        self, dict_response: dict[str, Any]
+    ) -> AITurnResult:
+        """
+        Maps one Converse response onto the provider-neutral turn.
+
+        Converse content blocks are already plain dictionaries, so raw_content
+        is the output message content list, replayable verbatim inside the
+        next assistant message.
+        """
+        list_content: list[dict[str, Any]] = (
+            dict_response.get("output", {}).get("message", {}).get("content", []) or []
+        )
+        list_text_parts: list[str] = []
+        list_tool_calls: list[AIToolCall] = []
+        # Loop over content blocks so text and tool calls align with replay.
+        for dict_block in list_content:
+            if "text" in dict_block:
+                list_text_parts.append(str(dict_block.get("text") or ""))
+            elif "toolUse" in dict_block:
+                dict_tool_use: dict[str, Any] = dict_block.get("toolUse") or {}
+                list_tool_calls.append(
+                    AIToolCall(
+                        id=str(dict_tool_use.get("toolUseId") or ""),
+                        name=str(dict_tool_use.get("name") or ""),
+                        input=dict(dict_tool_use.get("input") or {}),
+                    )
+                )
+        str_stop_reason: str = str(dict_response.get("stopReason", "") or "").lower()
+        finish_reason: AIFinishReason = self._normalize_finish_reason(
+            str_stop_reason if str_stop_reason else None,
+            self.DICT_FINISH_REASON_MAP,
+        )
+        str_text: str = "".join(list_text_parts)
+        # Normal return with the provider-neutral turn result.
+        return AITurnResult(
+            text=str_text if str_text else None,
+            tool_calls=list_tool_calls,
+            finish_reason=finish_reason,
+            raw_content=list_content,
+            usage=self._usage_from_converse(dict_response),
+        )
+
+    def _observed_converse_turn_result(
+        self, dict_response: dict[str, Any]
+    ) -> AiApiObservedCompletionsResultModel[AITurnResult]:
+        """
+        Wraps one Converse response as an observed conversation-turn result.
+        """
+        turn_result: AITurnResult = self._build_turn_result_from_converse(dict_response)
+        # Normal return with the observed turn result and usage metadata.
+        return AiApiObservedCompletionsResultModel(
+            return_value=turn_result,
+            raw_output_text=turn_result.text or "",
+            finish_reason=str(dict_response.get("stopReason", "") or "") or None,
+            provider_prompt_tokens=turn_result.usage.input_tokens,
+            provider_completion_tokens=turn_result.usage.output_tokens,
+            provider_cached_input_tokens=turn_result.usage.cached_input_tokens,
+            provider_total_tokens=turn_result.usage.total_tokens,
+            dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
+        )
+
+    def _build_conversation_observability_metadata(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+    ) -> dict[str, ObservabilityMetadataValue]:
+        """
+        Builds metadata-only observability fields for one conversation turn.
+        """
+        dict_metadata: dict[str, ObservabilityMetadataValue] = {
+            "response_mode": self.RESPONSE_MODE_TEXT,
+            "message_count": len(messages),
+            "tool_count": len(tools),
+            "system_prompt_char_count": len(system_prompt),
+        }
+        if tool_choice is not None:
+            dict_metadata["forced_tool"] = tool_choice
+        if max_response_tokens is not None:
+            dict_metadata["max_response_tokens"] = max_response_tokens
+        # Normal return with scalar conversation metadata.
+        return dict_metadata
+
+    def _send_conversation_provider(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[AITool],
+        tool_choice: str | None,
+        max_response_tokens: int | None,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AITurnResult:
+        """
+        Sends one conversation turn via the Converse API with toolConfig.
+        """
+        self._reject_bedrock_timeout(request_timeout_seconds)
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        dict_request_kwargs: dict[str, Any] = {
+            "modelId": self.model,
+            "messages": messages,
+            "system": [{"text": system_prompt}],
+            "inferenceConfig": {"maxTokens": max_response_tokens or 1024},
+        }
+        if tools:
+            dict_request_kwargs["toolConfig"] = self._build_converse_tool_config(
+                tools, tool_choice
+            )
+        dict_request_kwargs.update(dict_merge_options)
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
+            self._build_conversation_observability_metadata(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+            )
+        )
+
+        def _execute_turn() -> AiApiObservedCompletionsResultModel[AITurnResult]:
+            dict_response: dict[str, Any] = self._execute_converse_with_retries(
+                lambda: self.client.converse(**dict_request_kwargs),
+                retry_override=str_retry_override,
+            )
+            # Normal return with the observed conversation turn.
+            return self._observed_converse_turn_result(dict_response)
+
+        observed_result: AiApiObservedCompletionsResultModel[AITurnResult] = (
+            self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_COMPLETIONS,
+                operation="send_conversation",
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=_execute_turn,
+                callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                    observed_result=result,
+                    provider_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
+        )
+        # Normal return with the caller-facing conversation turn.
+        return observed_result.return_value
+
+    def _build_tool_result_message_provider(
+        self,
+        *,
+        tool_call_id: str,
+        result: dict[str, Any],
+        is_error: bool,
+    ) -> dict[str, Any]:
+        """
+        Builds one Converse toolResult user message.
+        """
+        dict_tool_result: dict[str, Any] = {
+            "toolUseId": tool_call_id,
+            "content": [{"json": result}],
+        }
+        if is_error:
+            dict_tool_result["status"] = "error"
+        # Normal return with the Converse-shaped tool-result entry.
+        return {"role": "user", "content": [{"toolResult": dict_tool_result}]}
+
+    def _extend_messages_with_turn_provider(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        turn: AITurnResult,
+    ) -> None:
+        """
+        Appends one Converse assistant message wrapping the raw content blocks.
+        """
+        messages.append({"role": "assistant", "content": turn.raw_content})
+        # Normal return after appending the assistant turn.
+        return None
+
+    def _send_structured_output_provider(
+        self,
+        *,
+        response_schema: dict[str, Any],
+        system_prompt: str | None,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        max_response_tokens: int,
+        request_timeout_seconds: float | None,
+        provider_options: dict[str, Any] | None,
+    ) -> AIStructuredOutputResult:
+        """
+        Generates structured output via Converse outputConfig.textFormat.
+
+        Reachable only on models whose capabilities flag structured-output
+        support (AWS's supported-model list; see the capabilities class).
+        """
+        self._reject_bedrock_timeout(request_timeout_seconds)
+        dict_merge_options, str_retry_override = self._split_provider_options(
+            provider_options
+        )
+        str_system_prompt: str = self._resolve_system_prompt(
+            system_prompt,
+            None,
+            AICompletionsPromptParamsBase.DEFAULT_STRICT_SCHEMA_SYSTEM_PROMPT,
+        )
+        list_messages: list[dict[str, Any]] = list(messages or [])
+        if prompt is not None and prompt.strip():
+            str_redacted_prompt: str = self.pii_middleware.process_input(prompt)
+            list_messages.append(
+                {"role": "user", "content": [{"text": str_redacted_prompt}]}
+            )
+        dict_request_kwargs: dict[str, Any] = {
+            "modelId": self.model,
+            "messages": list_messages,
+            "system": [{"text": str_system_prompt}],
+            "inferenceConfig": {"maxTokens": max_response_tokens},
+            "outputConfig": {
+                "textFormat": {
+                    "type": "json_schema",
+                    "structure": {
+                        "jsonSchema": {
+                            "schema": response_schema,
+                            "name": "structured_output",
+                        }
+                    },
+                }
+            },
+        }
+        dict_request_kwargs.update(dict_merge_options)
+        dict_input_metadata: dict[str, ObservabilityMetadataValue] = {
+            "response_mode": self.RESPONSE_MODE_STRUCTURED,
+            "prompt_char_count": len(prompt) if prompt else 0,
+            "message_count": len(messages) if messages else 0,
+            "max_response_tokens": max_response_tokens,
+        }
+
+        def _execute_structured() -> (
+            AiApiObservedCompletionsResultModel[AIStructuredOutputResult]
+        ):
+            dict_response: dict[str, Any] = self._execute_converse_with_retries(
+                lambda: self.client.converse(**dict_request_kwargs),
+                retry_override=str_retry_override,
+            )
+            str_stop_reason: str = str(
+                dict_response.get("stopReason", "") or ""
+            ).lower()
+            finish_reason: AIFinishReason = self._normalize_finish_reason(
+                str_stop_reason if str_stop_reason else None,
+                self.DICT_FINISH_REASON_MAP,
+            )
+            usage: AITokenUsage = self._usage_from_converse(dict_response)
+            list_content: list[dict[str, Any]] = (
+                dict_response.get("output", {}).get("message", {}).get("content", [])
+                or []
+            )
+            str_raw_text: str = "".join(
+                str(dict_block.get("text") or "")
+                for dict_block in list_content
+                if "text" in dict_block
+            )
+            if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
+                structured_result = AIStructuredOutputResult(
+                    data=None,
+                    finish_reason=finish_reason,
+                    usage=usage,
+                    raw_text=self.pii_middleware.process_output(str_raw_text),
+                )
+            else:
+                str_content: str = self.pii_middleware.process_output(str_raw_text)
+                if not str_content:
+                    raise ValueError("Empty response from Bedrock Converse API")
+                try:
+                    parsed_data: Any = json.loads(str_content)
+                except json.JSONDecodeError as json_error:
+                    raise ValueError(
+                        f"Invalid JSON response: {json_error}"
+                    ) from json_error
+                if not isinstance(parsed_data, dict):
+                    raise ValueError(
+                        "Structured response was valid JSON but not a JSON object."
+                    )
+                structured_result = AIStructuredOutputResult(
+                    data=parsed_data,
+                    finish_reason=finish_reason,
+                    usage=usage,
+                    raw_text=str_content,
+                )
+            # Normal return with the observed structured output result.
+            return AiApiObservedCompletionsResultModel(
+                return_value=structured_result,
+                raw_output_text=structured_result.raw_text,
+                finish_reason=str(dict_response.get("stopReason", "") or "") or None,
+                provider_prompt_tokens=usage.input_tokens,
+                provider_completion_tokens=usage.output_tokens,
+                provider_cached_input_tokens=usage.cached_input_tokens,
+                provider_total_tokens=usage.total_tokens,
+            )
+
+        observed_result: AiApiObservedCompletionsResultModel[
+            AIStructuredOutputResult
+        ] = self._execute_provider_call_with_observability(
+            capability=self.CLIENT_TYPE_COMPLETIONS,
+            operation="send_structured_output",
+            dict_input_metadata=dict_input_metadata,
+            callable_execute=_execute_structured,
+            callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
+                observed_result=result,
+                provider_elapsed_ms=provider_elapsed_ms,
+            ),
+        )
+        # Normal return with the caller-facing structured output result.
+        return observed_result.return_value

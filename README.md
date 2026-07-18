@@ -1,4 +1,4 @@
-# ai-api-unified 2.14.0
+# ai-api-unified 2.15.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -214,12 +214,12 @@ Claude models are reachable through two completions engines:
   `bedrock` extra and AWS credentials.
 
 The two engines expose the same core caller-facing API (`send_prompt`,
-`strict_schema_prompt`, `send_prompt_streaming`, `count_tokens`); switching
-between them is a configuration change. The `claude` engine additionally
-implements the capability-gated surface added in 2.14.0 —
-`send_structured_output`, `send_conversation`, the async variants, and batch
-completions. Use `claude` for the current model lineup on Anthropic's own
-endpoint; use `anthropic` when your Claude access is provisioned through AWS.
+`strict_schema_prompt`, `send_prompt_streaming`, `count_tokens`) plus the
+capability-gated conversation/structured-output surface (see the support
+matrix above); switching between them is a configuration change. The `claude`
+engine additionally implements the async variants and batch completions. Use
+`claude` for the current model lineup on Anthropic's own endpoint; use
+`anthropic` when your Claude access is provisioned through AWS.
 
 ```dotenv
 COMPLETIONS_ENGINE=claude
@@ -256,11 +256,24 @@ text = client.send_prompt(
 )
 ```
 
-The `claude` engine maps these to the Messages API `system`, `max_tokens`, and
-SDK request-timeout fields. Engines that have not yet mapped
-`max_response_tokens` or `request_timeout_seconds` raise
-`AiProviderCapabilityUnsupportedError` when those are supplied;
-`system_prompt` works on every engine.
+All three parameters map to native provider fields on the `claude`,
+`openai`, `openai-responses`, and `google-gemini` engines. Bedrock-routed
+engines map `system_prompt` and `max_response_tokens` but raise
+`AiProviderCapabilityUnsupportedError` for `request_timeout_seconds` (boto3
+has no per-call timeout). See the support matrix below.
+
+#### Feature support by engine
+
+| Feature | `claude` | `openai` | `openai-responses` | `google-gemini` | Bedrock-routed |
+|---|---|---|---|---|---|
+| `send_prompt` extended params | yes | yes | yes | yes | partial (no per-call timeout) |
+| `send_structured_output` | yes | yes | yes | yes | per-model (AWS structured-outputs list: Claude 4.5+) |
+| `send_conversation` tool loop | yes | yes | yes | yes | Nova + Claude families |
+| Async variants (`asend_*`) | yes | yes | yes | yes | no (boto3 has no official async client) |
+| `retry_policy` / `AiProviderRequestError` | yes | yes | yes | yes | yes (engine loop; SDK retries via `AWS_MAX_ATTEMPTS`) |
+
+Unsupported combinations raise the typed `AiProviderCapabilityUnsupportedError`
+and each engine's `client.capabilities` flags report support at runtime.
 
 ### Structured output extraction (send_structured_output)
 
@@ -268,8 +281,12 @@ SDK request-timeout fields. Engines that have not yet mapped
 JSON object out. It accepts either an `AIStructuredPrompt` subclass
 (`response_model`) or a raw JSON Schema (`response_schema`) — for example a
 hand-written schema with `anyOf` variants per node type. Engines declare
-support via `capabilities.supports_structured_output`; the `claude` engine
-implements it via the Messages API JSON-schema response format.
+support via `capabilities.supports_structured_output`. Provider mappings:
+`claude` uses the Messages API JSON-schema response format (and streams and
+accumulates internally above its non-streaming budget); `openai` and
+`openai-responses` use the `json_schema` response format in schema-guided
+mode; `google-gemini` uses `response_json_schema`; Bedrock uses Converse
+`outputConfig` on the models AWS supports (Claude 4.5+).
 
 ```python
 result = client.send_structured_output(
@@ -346,7 +363,7 @@ for _ in range(MAX_ITERATIONS):
     )
     if turn.finish_reason != "tool_use":
         break
-    messages.append({"role": "assistant", "content": turn.raw_content})
+    client.extend_messages_with_turn(messages, turn)   # engine-shaped replay
     for tool_call in turn.tool_calls:
         output = execute_tool(tool_call.name, tool_call.input)   # caller-side (e.g. MCP)
         messages.append(
@@ -358,18 +375,25 @@ for _ in range(MAX_ITERATIONS):
 
 Each `AITurnResult` carries `text`, `tool_calls` (`id`, `name`, `input`), the
 normalized `finish_reason`, `usage` for that turn, and `raw_content` —
-engine-specific content blocks replayable verbatim as the next assistant
-message. `build_tool_result_message` produces the engine's tool-result wire
-shape, so callers never touch provider block formats except as the opaque
-`raw_content`.
+engine-specific content replayable as the next assistant turn. Because the
+assistant-turn wire shape differs per engine, `extend_messages_with_turn`
+appends it for you and `build_tool_result_message` produces the engine's
+tool-result shape, so the loop above runs unchanged on `claude`, `openai`,
+`openai-responses`, `google-gemini`, and tool-capable Bedrock models
+(Nova and Claude families). On Gemini, tool calls carry no provider ids, so
+`AIToolCall.id` is the function name.
 
 ### Async variants
 
 Engines whose SDK has an async client expose `a`-prefixed variants with the
 same signatures: `asend_prompt`, `asend_structured_output`, and
-`asend_conversation`. Support is declared via `capabilities.supports_async`;
-the `claude` engine implements all three on a lazily created `AsyncAnthropic`
-client. Sync methods are unchanged.
+`asend_conversation`. Support is declared via `capabilities.supports_async`:
+`claude` (lazy `AsyncAnthropic`), `openai` and `openai-responses` (lazy
+`AsyncOpenAI`), and `google-gemini` (`client.aio`) implement all three;
+Bedrock does not (boto3 has no official async client). Gemini async calls
+run a single attempt — the engine backoff loop is synchronous — so pair them
+with caller-owned backoff on `AiProviderRequestError`. Sync methods are
+unchanged.
 
 ```python
 turn = await client.asend_conversation("system", messages, tools=tools)
@@ -379,17 +403,20 @@ turn = await client.asend_conversation("system", messages, tools=tools)
 
 Engine retry behavior:
 
-- `claude` — the Anthropic SDK retries transient failures (408, 409, 429, 5xx)
-  twice by default with exponential backoff.
-- `openai` / `openai-responses` — the engine retries `send_prompt` and
-  `strict_schema_prompt` up to 3 attempts in-method.
-- `google-gemini` and Bedrock-routed engines — in-method retry loops with
-  backoff.
+- `claude` / `openai` / `openai-responses` — the provider SDK retries
+  transient failures (408, 409, 429, 5xx) twice by default with exponential
+  backoff; `retry_policy="none"` constructs the client with `max_retries=0`.
+- `google-gemini` — the engine's exponential-backoff loop (5 attempts);
+  `retry_policy="none"` collapses it to a single attempt.
+- Bedrock-routed engines — the engine's backoff schedule;
+  `retry_policy="none"` collapses it to a single attempt. botocore's own
+  client-level retries are configured separately via the standard
+  `AWS_MAX_ATTEMPTS` environment variable.
 
-Callers that run their own backoff can disable the `claude` engine's SDK
-retries at the constructor (`retry_policy="none"`), through configuration
+Every engine accepts `retry_policy` at the constructor, through configuration
 (`COMPLETIONS_RETRY_POLICY=none`), or per call
-(`provider_options={"retry_policy": "none"}`). HTTP-level failures raise
+(`provider_options={"retry_policy": "none"}`; on Bedrock the per-call
+override collapses that call's schedule). HTTP-level failures raise
 `AiProviderRequestError`, whose `status_code` attribute lets caller backoff
 classify 429/5xx/529 uniformly across engines; it is `None` when the failure
 happened before a status was available (connection error or client-side

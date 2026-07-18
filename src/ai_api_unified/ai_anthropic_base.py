@@ -15,7 +15,11 @@ from typing import Any
 
 from anthropic import Anthropic, AsyncAnthropic
 
-from ai_api_unified.ai_base import RETRY_POLICY_DEFAULT, RETRY_POLICY_NONE
+from ai_api_unified.ai_base import (
+    RETRY_POLICY_DEFAULT,
+    RETRY_POLICY_NONE,
+    normalize_retry_policy,
+)
 from ai_api_unified.util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -79,14 +83,8 @@ class AIAnthropicBase:
             if retry_policy is not None
             else str(self.env.get_setting(RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT))
         )
-        str_normalized: str = str_candidate.strip().lower()
-        if str_normalized not in (RETRY_POLICY_DEFAULT, RETRY_POLICY_NONE):
-            raise ValueError(
-                f"Unsupported retry policy {str_candidate!r}; "
-                f"expected '{RETRY_POLICY_DEFAULT}' or '{RETRY_POLICY_NONE}'."
-            )
         # Normal return with the normalized retry policy token.
-        return str_normalized
+        return normalize_retry_policy(str_candidate)
 
     @property
     def async_client(self) -> AsyncAnthropic:
