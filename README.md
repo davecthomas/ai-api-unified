@@ -1037,6 +1037,19 @@ it, events carry the org id only, captured once per client from a free
 open — cost events omit the fields when identity is unavailable. Other
 providers report no org identity yet.
 
+Callers can also fetch the identity on demand from any client:
+
+```python
+info = client.get_org_info()   # AIProviderOrgInfoBase
+print(info.org_id, info.org_name, info.source)
+# source: "admin_api" (id + name) | "response_header" (id only) | "none"
+```
+
+Unlike enrichment, the explicit call raises `AiProviderRequestError` (with
+`status_code`) when resolution fails — a rejected `ANTHROPIC_ADMIN_KEY`
+surfaces as a 401 rather than a silent gap. Providers subclass the returned
+model (`AIProviderOrgInfoAnthropic`) for provider-native fields.
+
 ### PII Redaction
 
 PII redaction is optional and requires one of:

@@ -137,6 +137,84 @@ class TestHeaderProbeResolution:
         assert (org_id, org_name) == (None, None)
 
 
+class TestGetOrgInfo:
+    def test_admin_path_returns_full_identity_with_source(self):
+        client = _build_client(ANTHROPIC_ADMIN_KEY="admin-test-key")
+        response = Mock(status_code=200)
+        response.json.return_value = {"id": "org_123", "name": "Acme Robotics"}
+        with patch("ai_api_unified.ai_anthropic_base.httpx.get", return_value=response):
+            info = client.get_org_info()
+        assert info.org_id == "org_123"
+        assert info.org_name == "Acme Robotics"
+        assert info.source == "admin_api"
+
+    def test_header_probe_returns_id_only_with_source(self):
+        client = _build_client()
+        raw = SimpleNamespace(headers={"anthropic-organization-id": "org_hdr_9"})
+        client.client.messages.with_raw_response.count_tokens.return_value = raw
+        info = client.get_org_info()
+        assert info.org_id == "org_hdr_9"
+        assert info.org_name is None
+        assert info.source == "response_header"
+
+    def test_rejected_admin_key_raises_typed_error_with_status(self):
+        from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
+
+        client = _build_client(ANTHROPIC_ADMIN_KEY="admin-test-key")
+        with patch(
+            "ai_api_unified.ai_anthropic_base.httpx.get",
+            return_value=Mock(status_code=401),
+        ):
+            with pytest.raises(AiProviderRequestError) as exc_info:
+                client.get_org_info()
+        assert exc_info.value.status_code == 401
+
+    def test_probe_failure_raises_typed_error(self):
+        from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
+
+        client = _build_client()
+        client.client.messages.with_raw_response.count_tokens.side_effect = (
+            RuntimeError("boom")
+        )
+        with pytest.raises(AiProviderRequestError):
+            client.get_org_info()
+
+    def test_on_demand_retries_after_failed_enrichment(self):
+        # Enrichment negative-caches a failure; an explicit call retries and
+        # succeeds without being poisoned by the cached failure.
+        client = _build_client()
+        probe = client.client.messages.with_raw_response.count_tokens
+        probe.side_effect = RuntimeError("transient")
+        assert client._resolve_provider_organization() == (None, None)
+        probe.side_effect = None
+        probe.return_value = SimpleNamespace(
+            headers={"anthropic-organization-id": "org_retry"}
+        )
+        info = client.get_org_info()
+        assert info.org_id == "org_retry"
+        # And enrichment now sees the cached success.
+        assert client._resolve_provider_organization() == ("org_retry", None)
+
+    def test_default_engines_report_source_none(self):
+        from ai_api_unified.ai_base import AIBaseEmbeddings
+
+        class _PlainEmbeddings(AIBaseEmbeddings):
+            @property
+            def list_model_names(self):
+                return ["plain"]
+
+            def generate_embeddings(self, text, *, input_type=None):
+                return {}
+
+            def generate_embeddings_batch(self, texts, *, input_type=None):
+                return []
+
+        info = _PlainEmbeddings(model="plain", dimensions=3).get_org_info()
+        assert info.org_id is None
+        assert info.org_name is None
+        assert info.source == "none"
+
+
 class TestContextAndCostEvent:
     def test_call_context_carries_org_identity(self):
         client = _build_client(ANTHROPIC_ADMIN_KEY="admin-test-key")

@@ -17,10 +17,15 @@ import httpx
 from anthropic import Anthropic, AsyncAnthropic
 
 from ai_api_unified.ai_base import (
+    AIProviderOrgInfoBase,
+    ORG_INFO_SOURCE_ADMIN_API,
+    ORG_INFO_SOURCE_NONE,
+    ORG_INFO_SOURCE_RESPONSE_HEADER,
     RETRY_POLICY_DEFAULT,
     RETRY_POLICY_NONE,
     normalize_retry_policy,
 )
+from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
 from ai_api_unified.util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -31,6 +36,15 @@ ANTHROPIC_ADMIN_ORGANIZATION_URL: str = "https://api.anthropic.com/v1/organizati
 ANTHROPIC_API_VERSION: str = "2023-06-01"
 ANTHROPIC_ORG_ID_RESPONSE_HEADER: str = "anthropic-organization-id"
 ORG_RESOLUTION_TIMEOUT_SECONDS: float = 10.0
+
+
+class AIProviderOrgInfoAnthropic(AIProviderOrgInfoBase):
+    """
+    Anthropic organization identity.
+
+    Carries the normalized base fields today; Anthropic-native additions
+    (for example workspace detail) belong here rather than on the base.
+    """
 
 
 class AIAnthropicBase:
@@ -74,12 +88,12 @@ class AIAnthropicBase:
         self.admin_key: str = str(
             self.env.get_setting(ANTHROPIC_ADMIN_KEY_SETTING, "") or ""
         )
-        # Organization identity is resolved lazily, once per client, and
-        # cached (including failed attempts) so cost enrichment never adds
-        # per-call overhead or repeated probes.
-        self._bool_org_resolution_attempted: bool = False
-        self._str_org_id: str | None = None
-        self._str_org_name: str | None = None
+        # Organization identity is resolved lazily and cached per client.
+        # Success caches the info object; failure sets a negative-cache flag
+        # honored only by fail-open enrichment, so an explicit get_org_info
+        # call still retries and surfaces the typed error.
+        self._org_info_cache: AIProviderOrgInfoAnthropic | None = None
+        self._bool_org_resolution_failed: bool = False
 
     def _resolve_retry_policy(self, retry_policy: str | None) -> str:
         """
@@ -120,81 +134,136 @@ class AIAnthropicBase:
         # Normal return with the shared async client instance.
         return self._async_client
 
+    def _get_org_info_provider(self) -> AIProviderOrgInfoAnthropic:
+        """
+        Resolves Anthropic organization identity, raising on failure.
+
+        With ANTHROPIC_ADMIN_KEY set, the Admin API supplies org id and name;
+        without it, one free count_tokens probe captures the org id from the
+        anthropic-organization-id response header. Success is cached per
+        client; an explicit call after a failed background attempt retries.
+
+        Raises:
+            AiProviderRequestError: When resolution fails, carrying the HTTP
+                status code when one was available.
+        """
+        if self._org_info_cache is not None:
+            # Early return with the cached successful identity.
+            return self._org_info_cache
+        if self.admin_key and self.admin_key.strip():
+            org_info: AIProviderOrgInfoAnthropic = self._fetch_org_info_via_admin_api()
+        else:
+            org_info = self._fetch_org_id_via_header_probe()
+        self._org_info_cache = org_info
+        self._bool_org_resolution_failed = False
+        # Normal return with the freshly resolved identity.
+        return org_info
+
     def _resolve_provider_organization(self) -> tuple[str | None, str | None]:
         """
-        Resolves the Anthropic organization identity for finops attribution.
+        Fail-open enrichment resolution with negative caching.
 
-        With ANTHROPIC_ADMIN_KEY set, the Admin API supplies the organization
-        id and name; without it, one free count_tokens probe captures the
-        organization id from the anthropic-organization-id response header.
-        Resolution is attempted once per client and fails open: cost events
-        simply omit the fields when identity is unavailable.
-
-        Returns:
-            Tuple of (org_id, org_name); either element may be None.
+        A failed attempt is remembered so cost enrichment does not retry on
+        every call; get_org_info bypasses the negative cache and retries.
         """
-        if self._bool_org_resolution_attempted:
-            # Early return with the cached (possibly empty) identity.
-            return self._str_org_id, self._str_org_name
-        self._bool_org_resolution_attempted = True
+        if self._org_info_cache is not None:
+            # Early return with the cached successful identity.
+            return self._org_info_cache.org_id, self._org_info_cache.org_name
+        if self._bool_org_resolution_failed:
+            # Early return because a prior attempt failed; enrichment does
+            # not retry (get_org_info does).
+            return None, None
         try:
-            if self.admin_key and self.admin_key.strip():
-                self._resolve_organization_via_admin_api()
-            else:
-                self._resolve_organization_id_via_header_probe()
+            org_info: AIProviderOrgInfoAnthropic = self._get_org_info_provider()
         except Exception as exception:
+            self._bool_org_resolution_failed = True
             _LOGGER.warning(
                 "Anthropic organization resolution failed (%s); cost events "
                 "will omit org identity.",
                 exception.__class__.__name__,
             )
-        # Normal return with whatever identity resolution produced.
-        return self._str_org_id, self._str_org_name
+            # Early return with no identity because enrichment fails open.
+            return None, None
+        # Normal return with the resolved identity fields.
+        return org_info.org_id, org_info.org_name
 
-    def _resolve_organization_via_admin_api(self) -> None:
+    def _fetch_org_info_via_admin_api(self) -> AIProviderOrgInfoAnthropic:
         """
         Fetches organization id and name from the Anthropic Admin API.
+
+        Raises:
+            AiProviderRequestError: On transport failure (status_code=None)
+                or a non-200 response (status_code set), for example a
+                rejected ANTHROPIC_ADMIN_KEY.
         """
-        response: httpx.Response = httpx.get(
-            ANTHROPIC_ADMIN_ORGANIZATION_URL,
-            headers={
-                "x-api-key": self.admin_key,
-                "anthropic-version": ANTHROPIC_API_VERSION,
-            },
-            timeout=ORG_RESOLUTION_TIMEOUT_SECONDS,
-        )
-        if response.status_code != 200:
-            _LOGGER.warning(
-                "Anthropic Admin API organization lookup returned %s; cost "
-                "events will omit org identity. Verify ANTHROPIC_ADMIN_KEY.",
-                response.status_code,
+        try:
+            response: httpx.Response = httpx.get(
+                ANTHROPIC_ADMIN_ORGANIZATION_URL,
+                headers={
+                    "x-api-key": self.admin_key,
+                    "anthropic-version": ANTHROPIC_API_VERSION,
+                },
+                timeout=ORG_RESOLUTION_TIMEOUT_SECONDS,
             )
-            # Early return leaving identity unset.
-            return None
+        except Exception as exception:
+            raise AiProviderRequestError(
+                "Anthropic Admin API organization lookup failed before a "
+                f"status was available: {exception.__class__.__name__}",
+                status_code=None,
+                provider_engine="claude",
+            ) from exception
+        if response.status_code != 200:
+            raise AiProviderRequestError(
+                "Anthropic Admin API organization lookup failed with status "
+                f"{response.status_code}. Verify ANTHROPIC_ADMIN_KEY.",
+                status_code=response.status_code,
+                provider_engine="claude",
+            )
         dict_payload: dict = response.json()
         raw_org_id = dict_payload.get("id")
         raw_org_name = dict_payload.get("name")
-        self._str_org_id = str(raw_org_id) if raw_org_id else None
-        self._str_org_name = str(raw_org_name) if raw_org_name else None
-        # Normal return after caching the admin-resolved identity.
-        return None
+        # Normal return with the admin-resolved identity.
+        return AIProviderOrgInfoAnthropic(
+            org_id=str(raw_org_id) if raw_org_id else None,
+            org_name=str(raw_org_name) if raw_org_name else None,
+            source=ORG_INFO_SOURCE_ADMIN_API,
+        )
 
-    def _resolve_organization_id_via_header_probe(self) -> None:
+    def _fetch_org_id_via_header_probe(self) -> AIProviderOrgInfoAnthropic:
         """
         Captures the organization id from one free count_tokens response.
 
         The Messages API stamps anthropic-organization-id on responses; the
-        count_tokens endpoint runs no inference and bills nothing, so one
-        probe per client is a cost-free way to attribute spend by org id.
+        count_tokens endpoint runs no inference and bills nothing.
+
+        Raises:
+            AiProviderRequestError: When the probe request fails.
         """
         str_model: str = str(
             getattr(self, "completions_model", "") or "claude-haiku-4-5"
         )
-        raw_response = self.client.messages.with_raw_response.count_tokens(
-            model=str_model,
-            messages=[{"role": "user", "content": "."}],
-        )
+        try:
+            raw_response = self.client.messages.with_raw_response.count_tokens(
+                model=str_model,
+                messages=[{"role": "user", "content": "."}],
+            )
+        except Exception as exception:
+            raise AiProviderRequestError(
+                "Anthropic organization header probe failed: "
+                f"{exception.__class__.__name__}",
+                status_code=(
+                    getattr(exception, "status_code", None)
+                    if isinstance(getattr(exception, "status_code", None), int)
+                    else None
+                ),
+                provider_engine="claude",
+            ) from exception
         raw_org_id = raw_response.headers.get(ANTHROPIC_ORG_ID_RESPONSE_HEADER)
-        self._str_org_id = str(raw_org_id) if raw_org_id else None
-        # Normal return after caching the header-resolved org id.
-        return None
+        # Normal return with the header-resolved identity (id only).
+        return AIProviderOrgInfoAnthropic(
+            org_id=str(raw_org_id) if raw_org_id else None,
+            org_name=None,
+            source=(
+                ORG_INFO_SOURCE_RESPONSE_HEADER if raw_org_id else ORG_INFO_SOURCE_NONE
+            ),
+        )

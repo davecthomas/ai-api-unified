@@ -12,9 +12,14 @@ version lives in `pyproject.toml` (see the README release section).
   org id alone is captured from one free `count_tokens` response header.
   Resolution runs once per client, is cached, and fails open — cost events
   omit the fields when identity is unavailable. The call-context model gains
-  `provider_org_id` / `provider_org_name`, and engines can implement
-  `_resolve_provider_organization()` to supply identity (other providers
-  report none yet).
+  `provider_org_id` / `provider_org_name`, and engines implement one
+  resolver hook to supply identity (other providers report none yet).
+- Public `client.get_org_info()` on every client returns
+  `AIProviderOrgInfoBase` (`org_id`, `org_name`, `source`:
+  `admin_api | response_header | none`; providers subclass it, v1
+  `AIProviderOrgInfoAnthropic`). Unlike fail-open cost enrichment, the
+  explicit call raises `AiProviderRequestError` with `status_code` when
+  resolution fails, and retries after a failed background attempt.
 
 ## 2.17.0
 
