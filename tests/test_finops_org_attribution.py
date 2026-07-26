@@ -365,6 +365,20 @@ class TestOpenAIOrgInfo:
         assert info.org_name is None
         assert info.source == "response_header"
 
+    def test_non_json_account_payload_falls_back_to_header_probe(self):
+        client = _build_openai_client()
+        bad_response = Mock(status_code=200)
+        bad_response.json.side_effect = ValueError("not json")
+        client.client.models.with_raw_response.list.return_value = SimpleNamespace(
+            headers={"openai-organization": "org-hdr2"}
+        )
+        with patch(
+            "ai_api_unified.ai_openai_base.httpx.get", return_value=bad_response
+        ):
+            info = client.get_org_info()
+        assert info.org_id == "org-hdr2"
+        assert info.source == "response_header"
+
     def test_both_paths_failing_raises_primary_error(self):
         from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
 

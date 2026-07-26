@@ -174,7 +174,16 @@ class AIOpenAIBase:
                 status_code=response.status_code,
                 provider_engine="openai",
             )
-        dict_payload: dict = response.json()
+        try:
+            dict_payload: dict = response.json()
+        except ValueError as exception:
+            # A non-JSON 200 body still follows the typed-error contract, so
+            # the caller's header-probe fallback can fire.
+            raise AiProviderRequestError(
+                "OpenAI account API returned a non-JSON organization payload.",
+                status_code=response.status_code,
+                provider_engine="openai",
+            ) from exception
         list_orgs: list = (dict_payload.get("orgs") or {}).get("data") or []
         if not list_orgs:
             raise AiProviderRequestError(
