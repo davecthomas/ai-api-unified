@@ -106,7 +106,13 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     # Middleware: observability, finops, PII
     "test_custom_recognizer_registration.py": ("middleware",),
     "test_finops_cost_observability.py": ("middleware", "pricing"),
-    "test_finops_org_attribution.py": ("middleware", "engine_anthropic"),
+    "test_finops_org_attribution.py": (
+        "middleware",
+        "engine_anthropic",
+        "engine_openai",
+        "engine_gemini",
+        "engine_bedrock",
+    ),
     "test_middleware_config.py": ("middleware",),
     "test_middleware_extensibility_poc.py": ("middleware",),
     "test_observability_docs_release_phase_h.py": ("middleware",),

@@ -307,7 +307,9 @@ RETRY_POLICY_DEFAULT: str = "default"
 RETRY_POLICY_NONE: str = "none"
 
 ORG_INFO_SOURCE_ADMIN_API: str = "admin_api"
+ORG_INFO_SOURCE_ACCOUNT_API: str = "account_api"
 ORG_INFO_SOURCE_RESPONSE_HEADER: str = "response_header"
+ORG_INFO_SOURCE_CONFIGURATION: str = "configuration"
 ORG_INFO_SOURCE_NONE: str = "none"
 
 
@@ -329,6 +331,29 @@ class AIProviderOrgInfoBase(BaseModel):
     org_id: str | None = None
     org_name: str | None = None
     source: str = ORG_INFO_SOURCE_NONE
+
+
+class AIProviderOrgInfoCapability(BaseModel):
+    """
+    Declares what organization identity an engine can resolve, and how.
+
+    Lets consumers introspect before calling get_org_info: whether the org
+    id and name are resolvable in the current configuration, and what would
+    unlock more (for example an admin key or an IAM permission).
+
+    Attributes:
+        supports_org_id: True when the engine can resolve an organization
+            (or account/project) identifier as configured.
+        supports_org_name: True when the engine can resolve a display name
+            as configured.
+        requirement: What unlocks fuller identity when something is missing
+            (for example "set ANTHROPIC_ADMIN_KEY for org_name"); None when
+            nothing more is available.
+    """
+
+    supports_org_id: bool = False
+    supports_org_name: bool = False
+    requirement: str | None = None
 
 
 def normalize_retry_policy(retry_policy: str) -> str:
@@ -755,22 +780,51 @@ class AIBase(ABC):
         surfaces resolution failures: engines raise AiProviderRequestError
         with status_code when their identity lookup fails (for example a
         rejected ANTHROPIC_ADMIN_KEY). Engines that cannot identify the
-        paying organization return source="none".
+        paying organization return source="none". Successful resolution is
+        cached per client; an explicit call after a failed background
+        attempt retries.
 
         Returns:
             AIProviderOrgInfoBase (or a provider subclass) with org_id,
             org_name, and the resolution source.
         """
-        # Normal return with the provider-implemented organization identity.
-        return self._get_org_info_provider()
+        cached: AIProviderOrgInfoBase | None = getattr(self, "_org_info_cache", None)
+        if cached is not None:
+            # Early return with the cached successful identity.
+            return cached
+        org_info: AIProviderOrgInfoBase = self._get_org_info_provider()
+        self._org_info_cache = org_info
+        self._bool_org_enrichment_failed = False
+        # Normal return with the freshly resolved identity.
+        return org_info
+
+    def get_org_info_capability(self) -> AIProviderOrgInfoCapability:
+        """
+        Declares what organization identity this engine can resolve.
+
+        Returns:
+            AIProviderOrgInfoCapability describing id/name resolvability in
+            the current configuration and what would unlock more.
+        """
+        # Normal return with the provider-declared capability.
+        return self._get_org_info_capability_provider()
+
+    def _get_org_info_capability_provider(self) -> AIProviderOrgInfoCapability:
+        """
+        Provider hook for the org-identity capability declaration.
+        """
+        # Normal return declaring no organization identity by default.
+        return AIProviderOrgInfoCapability()
 
     def _get_org_info_provider(self) -> AIProviderOrgInfoBase:
         """
         Provider hook for organization identity resolution.
 
-        The base default reports no organization identity; engines that can
-        identify the paying organization override this (v1: the anthropic
-        base, via the Admin API or a response-header probe).
+        The base default reports no organization identity; provider bases
+        override it (anthropic: Admin API or response-header probe; openai:
+        account API or response-header probe; bedrock: STS/IAM; google:
+        configured project). Hooks fetch only — caching lives in
+        get_org_info and the enrichment wrapper.
         """
         # Normal return with no organization identity by default.
         return AIProviderOrgInfoBase()
@@ -779,18 +833,28 @@ class AIBase(ABC):
         """
         Fail-open organization resolution used by cost-event enrichment.
 
-        Delegates to the same provider hook as get_org_info but swallows
-        failures, so enrichment never affects the provider call. Engines may
-        override to add negative caching across calls.
+        Uses the shared success cache and negative-caches failures so
+        enrichment never re-probes on every call; get_org_info bypasses the
+        negative cache and retries.
 
         Returns:
             Tuple of (org_id, org_name); either element may be None.
         """
+        cached: AIProviderOrgInfoBase | None = getattr(self, "_org_info_cache", None)
+        if cached is not None:
+            # Early return with the cached successful identity.
+            return cached.org_id, cached.org_name
+        if getattr(self, "_bool_org_enrichment_failed", False):
+            # Early return because a prior attempt failed; enrichment does
+            # not retry (get_org_info does).
+            return None, None
         try:
-            org_info: AIProviderOrgInfoBase = self._get_org_info_provider()
+            org_info: AIProviderOrgInfoBase = self.get_org_info()
         except Exception as exception:
-            _LOGGER.debug(
-                "organization enrichment resolution failed: %s",
+            self._bool_org_enrichment_failed = True
+            _LOGGER.warning(
+                "organization enrichment resolution failed (%s); cost events "
+                "will omit org identity.",
                 exception.__class__.__name__,
             )
             # Early return with no identity because enrichment fails open.

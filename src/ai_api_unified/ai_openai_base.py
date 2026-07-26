@@ -3,17 +3,31 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI, OpenAI
 from ai_api_unified.ai_base import (
+    AIProviderOrgInfoBase,
+    AIProviderOrgInfoCapability,
+    ORG_INFO_SOURCE_ACCOUNT_API,
+    ORG_INFO_SOURCE_NONE,
+    ORG_INFO_SOURCE_RESPONSE_HEADER,
     RETRY_POLICY_DEFAULT,
     RETRY_POLICY_NONE,
     normalize_retry_policy,
 )
+from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
 from ai_api_unified.util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 RETRY_POLICY_KEY: str = "COMPLETIONS_RETRY_POLICY"
+OPENAI_ME_URL: str = "https://api.openai.com/v1/me"
+OPENAI_ORG_ID_RESPONSE_HEADER: str = "openai-organization"
+ORG_RESOLUTION_TIMEOUT_SECONDS: float = 10.0
+
+
+class AIProviderOrgInfoOpenAI(AIProviderOrgInfoBase):
+    """OpenAI organization identity (id and title from the account API)."""
 
 
 class AIOpenAIBase:
@@ -97,3 +111,113 @@ class AIOpenAIBase:
             return self.OPENAI_US_BASE_URL
 
         return self.DEFAULT_OPENAI_BASE_URL
+
+    def _get_org_info_provider(self) -> AIProviderOrgInfoOpenAI:
+        """
+        Resolves OpenAI organization identity, raising on failure.
+
+        Primary: the account API (/v1/me) returns the key's organizations
+        with id and title, using the regular API key. Fallback: one free
+        models.list probe captures the org id from the openai-organization
+        response header. Caching lives on AIBase.
+
+        Raises:
+            AiProviderRequestError: When both resolution paths fail.
+        """
+        try:
+            # Normal return with the account-API identity (id and name).
+            return self._fetch_org_info_via_account_api()
+        except AiProviderRequestError as primary_error:
+            try:
+                # Normal return with the header-resolved identity (id only).
+                return self._fetch_org_id_via_header_probe()
+            except Exception:
+                raise primary_error
+
+    def _get_org_info_capability_provider(self) -> AIProviderOrgInfoCapability:
+        """
+        Declares OpenAI org-identity resolvability: id and name resolve from
+        the account API with the regular API key.
+        """
+        # Normal return with the configured capability declaration.
+        return AIProviderOrgInfoCapability(
+            supports_org_id=True,
+            supports_org_name=True,
+            requirement=None,
+        )
+
+    def _fetch_org_info_via_account_api(self) -> AIProviderOrgInfoOpenAI:
+        """
+        Fetches organization id and title from the OpenAI account API.
+
+        Raises:
+            AiProviderRequestError: On transport failure, a non-200
+                response, or a payload without organizations.
+        """
+        try:
+            response: httpx.Response = httpx.get(
+                OPENAI_ME_URL,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=ORG_RESOLUTION_TIMEOUT_SECONDS,
+            )
+        except Exception as exception:
+            raise AiProviderRequestError(
+                "OpenAI account API organization lookup failed before a "
+                f"status was available: {exception.__class__.__name__}",
+                status_code=None,
+                provider_engine="openai",
+            ) from exception
+        if response.status_code != 200:
+            raise AiProviderRequestError(
+                "OpenAI account API organization lookup failed with status "
+                f"{response.status_code}.",
+                status_code=response.status_code,
+                provider_engine="openai",
+            )
+        dict_payload: dict = response.json()
+        list_orgs: list = (dict_payload.get("orgs") or {}).get("data") or []
+        if not list_orgs:
+            raise AiProviderRequestError(
+                "OpenAI account API returned no organizations for this key.",
+                status_code=None,
+                provider_engine="openai",
+            )
+        # Prefer the key's default organization when the flag is present.
+        dict_org: dict = next(
+            (org for org in list_orgs if org.get("is_default")), list_orgs[0]
+        )
+        raw_org_id = dict_org.get("id")
+        raw_org_name = dict_org.get("title")
+        # Normal return with the account-resolved identity.
+        return AIProviderOrgInfoOpenAI(
+            org_id=str(raw_org_id) if raw_org_id else None,
+            org_name=str(raw_org_name) if raw_org_name else None,
+            source=ORG_INFO_SOURCE_ACCOUNT_API,
+        )
+
+    def _fetch_org_id_via_header_probe(self) -> AIProviderOrgInfoOpenAI:
+        """
+        Captures the organization id from one free models.list response.
+        """
+        try:
+            raw_response = self.client.models.with_raw_response.list()
+        except Exception as exception:
+            raise AiProviderRequestError(
+                "OpenAI organization header probe failed: "
+                f"{exception.__class__.__name__}",
+                status_code=(
+                    getattr(exception, "status_code", None)
+                    if isinstance(getattr(exception, "status_code", None), int)
+                    else None
+                ),
+                provider_engine="openai",
+            ) from exception
+        raw_org_id = raw_response.headers.get(OPENAI_ORG_ID_RESPONSE_HEADER)
+        # Normal return with the header-resolved identity (id only).
+        return AIProviderOrgInfoOpenAI(
+            org_id=str(raw_org_id) if raw_org_id else None,
+            org_name=None,
+            source=(
+                ORG_INFO_SOURCE_RESPONSE_HEADER if raw_org_id else ORG_INFO_SOURCE_NONE
+            ),
+        )

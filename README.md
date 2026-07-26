@@ -1,4 +1,4 @@
-# ai-api-unified 2.18.0
+# ai-api-unified 2.19.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -1030,12 +1030,17 @@ Cost enrichment fires whenever `emit_cost` is on, even when output events are
 disabled by `direction`. See [`docs/finops_middleware_design.md`](docs/finops_middleware_design.md).
 
 Cost events also carry organization identity for billing attribution
-(`org_id` / `org_name`), v1 on the `claude` engine: set `ANTHROPIC_ADMIN_KEY`
-(an Admin API key) and events carry your organization's id and name; without
-it, events carry the org id only, captured once per client from a free
-`count_tokens` response header. Resolution is cached per client and fails
-open — cost events omit the fields when identity is unavailable. Other
-providers report no org identity yet.
+(`org_id` / `org_name`), resolved per provider to what each platform
+supports, cached per client, and failing open (cost events omit the fields
+when identity is unavailable):
+
+| Provider | `org_id` | `org_name` | How |
+|---|---|---|---|
+| `claude` (native Anthropic) | always | with `ANTHROPIC_ADMIN_KEY` | Admin API; else a free `count_tokens` response header |
+| `openai` / `openai-responses` | always | always | account API (`/v1/me`) with the regular key; header-probe fallback |
+| Bedrock-routed | always | with `iam:ListAccountAliases` | STS caller identity; IAM account alias |
+| `google-gemini` | with `GOOGLE_PROJECT_ID` | unsupported | configured GCP project id |
+| `voyage`, `titan` | unsupported | unsupported | the platforms expose no caller identity |
 
 Callers can also fetch the identity on demand from any client:
 
@@ -1047,8 +1052,17 @@ print(info.org_id, info.org_name, info.source)
 
 Unlike enrichment, the explicit call raises `AiProviderRequestError` (with
 `status_code`) when resolution fails — a rejected `ANTHROPIC_ADMIN_KEY`
-surfaces as a 401. Providers subclass the returned
-model (`AIProviderOrgInfoAnthropic`) for provider-native fields.
+surfaces as a 401. Providers subclass the returned model
+(`AIProviderOrgInfoAnthropic`, `AIProviderOrgInfoOpenAI`, ...) for
+provider-native fields, and `client.get_org_info_capability()` declares up
+front what the configured engine can resolve:
+
+```python
+capability = client.get_org_info_capability()
+capability.supports_org_id, capability.supports_org_name, capability.requirement
+# e.g. on Bedrock: (True, True, "org_name is the AWS account alias and needs
+#                    iam:ListAccountAliases; identity falls back to id-only without it")
+```
 
 ### PII Redaction
 

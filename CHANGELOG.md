@@ -4,6 +4,24 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.19.0
+
+- Organization identity for finops attribution now covers every provider to
+  what its platform supports: `openai`/`openai-responses` resolve org id and
+  name from the account API (`/v1/me`, regular key) with a response-header
+  fallback; Bedrock-routed engines resolve the AWS account id via STS and
+  the account alias as org_name when `iam:ListAccountAliases` permits;
+  `google-gemini` attributes by the configured `GOOGLE_PROJECT_ID` (the
+  Developer API exposes no caller identity). `voyage` and `titan` report
+  none.
+- New `client.get_org_info_capability()` returns
+  `AIProviderOrgInfoCapability` (`supports_org_id`, `supports_org_name`,
+  `requirement`) so consumers can introspect what the configured engine can
+  resolve before calling. New sources: `account_api`, `configuration`.
+- Org-identity caching (success cache; enrichment-only negative cache with
+  on-demand retry) moved into the shared base, one implementation for all
+  providers.
+
 ## 2.18.0
 
 - Organization-level finops attribution, v1 on the `claude` engine: cost

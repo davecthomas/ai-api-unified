@@ -22,12 +22,22 @@ from botocore.exceptions import (
     ParamValidationError,
 )
 
-from .ai_base import AIBase
+from .ai_base import (
+    AIBase,
+    AIProviderOrgInfoBase,
+    AIProviderOrgInfoCapability,
+    ORG_INFO_SOURCE_ACCOUNT_API,
+)
+from .ai_provider_exceptions import AiProviderRequestError
 from .util.env_settings import EnvSettings
 
 T = TypeVar("T")
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+
+class AIProviderOrgInfoBedrock(AIProviderOrgInfoBase):
+    """AWS attribution identity: account id (STS) and account alias (IAM)."""
 
 
 class AIBedrockBase(AIBase):
@@ -246,3 +256,73 @@ class AIBedrockBase(AIBase):
                 ) from decode_error
 
         return self._execute_with_retries(operation=_operation, trace_name=trace_name)
+
+    def _get_org_info_provider(self) -> AIProviderOrgInfoBedrock:
+        """
+        Resolves AWS attribution identity, raising on failure.
+
+        The account id comes from STS GetCallerIdentity (allowed for every
+        principal). The org_name is the account alias from IAM
+        ListAccountAliases when the caller holds that permission; without
+        it, identity is id-only. Caching lives on AIBase.
+
+        Raises:
+            AiProviderRequestError: When the STS lookup fails, carrying the
+                HTTP status code when one was available.
+        """
+        try:
+            sts_client = boto3.client("sts", region_name=self.region)
+            dict_identity: dict[str, Any] = sts_client.get_caller_identity()
+        except ClientError as exception:
+            raw_status = (
+                (getattr(exception, "response", None) or {})
+                .get("ResponseMetadata", {})
+                .get("HTTPStatusCode")
+            )
+            raise AiProviderRequestError(
+                f"AWS STS caller-identity lookup failed: {exception}",
+                status_code=raw_status if isinstance(raw_status, int) else None,
+                provider_engine="bedrock",
+            ) from exception
+        except Exception as exception:
+            raise AiProviderRequestError(
+                "AWS STS caller-identity lookup failed before a status was "
+                f"available: {exception.__class__.__name__}",
+                status_code=None,
+                provider_engine="bedrock",
+            ) from exception
+        raw_account_id = dict_identity.get("Account")
+        str_account_alias: str | None = None
+        try:
+            iam_client = boto3.client("iam", region_name=self.region)
+            list_aliases: list = iam_client.list_account_aliases().get(
+                "AccountAliases", []
+            )
+            if list_aliases:
+                str_account_alias = str(list_aliases[0])
+        except Exception:
+            # The alias is permission-gated enrichment; identity stays
+            # id-only without iam:ListAccountAliases.
+            pass
+        # Normal return with the account-resolved identity.
+        return AIProviderOrgInfoBedrock(
+            org_id=str(raw_account_id) if raw_account_id else None,
+            org_name=str_account_alias,
+            source=ORG_INFO_SOURCE_ACCOUNT_API,
+        )
+
+    def _get_org_info_capability_provider(self) -> AIProviderOrgInfoCapability:
+        """
+        Declares AWS org-identity resolvability: account id via STS always;
+        org_name is the account alias, gated on iam:ListAccountAliases.
+        """
+        # Normal return with the AWS capability declaration.
+        return AIProviderOrgInfoCapability(
+            supports_org_id=True,
+            supports_org_name=True,
+            requirement=(
+                "org_name is the AWS account alias and needs "
+                "iam:ListAccountAliases; identity falls back to id-only "
+                "without it"
+            ),
+        )
