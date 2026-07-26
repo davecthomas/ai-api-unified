@@ -18,6 +18,7 @@ from anthropic import Anthropic, AsyncAnthropic
 
 from ai_api_unified.ai_base import (
     AIProviderOrgInfoBase,
+    AIProviderOrgInfoCapability,
     ORG_INFO_SOURCE_ADMIN_API,
     ORG_INFO_SOURCE_NONE,
     ORG_INFO_SOURCE_RESPONSE_HEADER,
@@ -88,12 +89,8 @@ class AIAnthropicBase:
         self.admin_key: str = str(
             self.env.get_setting(ANTHROPIC_ADMIN_KEY_SETTING, "") or ""
         )
-        # Organization identity is resolved lazily and cached per client.
-        # Success caches the info object; failure sets a negative-cache flag
-        # honored only by fail-open enrichment, so an explicit get_org_info
-        # call still retries and surfaces the typed error.
-        self._org_info_cache: AIProviderOrgInfoAnthropic | None = None
-        self._bool_org_resolution_failed: bool = False
+        # Org-identity caching (success cache + enrichment negative cache)
+        # lives on AIBase; this base only implements the fetch hooks.
 
     def _resolve_retry_policy(self, retry_policy: str | None) -> str:
         """
@@ -140,52 +137,33 @@ class AIAnthropicBase:
 
         With ANTHROPIC_ADMIN_KEY set, the Admin API supplies org id and name;
         without it, one free count_tokens probe captures the org id from the
-        anthropic-organization-id response header. Success is cached per
-        client; an explicit call after a failed background attempt retries.
+        anthropic-organization-id response header. Caching lives on AIBase.
 
         Raises:
             AiProviderRequestError: When resolution fails, carrying the HTTP
                 status code when one was available.
         """
-        if self._org_info_cache is not None:
-            # Early return with the cached successful identity.
-            return self._org_info_cache
         if self.admin_key and self.admin_key.strip():
-            org_info: AIProviderOrgInfoAnthropic = self._fetch_org_info_via_admin_api()
-        else:
-            org_info = self._fetch_org_id_via_header_probe()
-        self._org_info_cache = org_info
-        self._bool_org_resolution_failed = False
-        # Normal return with the freshly resolved identity.
-        return org_info
+            # Normal return with the admin-resolved identity.
+            return self._fetch_org_info_via_admin_api()
+        # Normal return with the header-resolved identity (id only).
+        return self._fetch_org_id_via_header_probe()
 
-    def _resolve_provider_organization(self) -> tuple[str | None, str | None]:
+    def _get_org_info_capability_provider(self) -> AIProviderOrgInfoCapability:
         """
-        Fail-open enrichment resolution with negative caching.
-
-        A failed attempt is remembered so cost enrichment does not retry on
-        every call; get_org_info bypasses the negative cache and retries.
+        Declares Anthropic org-identity resolvability as configured.
         """
-        if self._org_info_cache is not None:
-            # Early return with the cached successful identity.
-            return self._org_info_cache.org_id, self._org_info_cache.org_name
-        if self._bool_org_resolution_failed:
-            # Early return because a prior attempt failed; enrichment does
-            # not retry (get_org_info does).
-            return None, None
-        try:
-            org_info: AIProviderOrgInfoAnthropic = self._get_org_info_provider()
-        except Exception as exception:
-            self._bool_org_resolution_failed = True
-            _LOGGER.warning(
-                "Anthropic organization resolution failed (%s); cost events "
-                "will omit org identity.",
-                exception.__class__.__name__,
-            )
-            # Early return with no identity because enrichment fails open.
-            return None, None
-        # Normal return with the resolved identity fields.
-        return org_info.org_id, org_info.org_name
+        bool_has_admin_key: bool = bool(self.admin_key and self.admin_key.strip())
+        # Normal return with the configured capability declaration.
+        return AIProviderOrgInfoCapability(
+            supports_org_id=True,
+            supports_org_name=bool_has_admin_key,
+            requirement=(
+                None
+                if bool_has_admin_key
+                else "set ANTHROPIC_ADMIN_KEY (Admin API key) to resolve org_name"
+            ),
+        )
 
     def _fetch_org_info_via_admin_api(self) -> AIProviderOrgInfoAnthropic:
         """

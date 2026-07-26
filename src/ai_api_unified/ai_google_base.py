@@ -8,6 +8,13 @@ import time
 from typing import Any, Callable, ClassVar, TypeVar
 
 from google import genai
+
+from ai_api_unified.ai_base import (
+    AIProviderOrgInfoBase,
+    AIProviderOrgInfoCapability,
+    ORG_INFO_SOURCE_CONFIGURATION,
+    ORG_INFO_SOURCE_NONE,
+)
 from google.api_core import exceptions as gexc  # Provided by google-* libs
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai import errors as gerr
@@ -463,3 +470,54 @@ class AIGoogleBase:
             except Exception as unexpected:
                 _LOGGER.error("Unexpected non-retryable error: %s", unexpected)
                 raise
+
+    @staticmethod
+    def _google_configured_project_id() -> str | None:
+        """Returns the configured GCP project id, when one is set."""
+        from ai_api_unified.util.env_settings import EnvSettings
+
+        raw_project_id = EnvSettings().get_setting("GOOGLE_PROJECT_ID", "")
+        str_project_id: str = str(raw_project_id or "").strip()
+        # Normal return with the configured project id or None.
+        return str_project_id or None
+
+    def _get_org_info_provider(self) -> "AIProviderOrgInfoGoogle":
+        """
+        Builds Google attribution identity from configuration.
+
+        Google's Developer (api_key) endpoint exposes no caller identity,
+        and project display-name lookup would require the Cloud Resource
+        Manager API and credentials this library does not carry — so
+        attribution uses the configured GOOGLE_PROJECT_ID as the org id,
+        with no org name.
+        """
+        str_project_id: str | None = self._google_configured_project_id()
+        if str_project_id:
+            # Normal return with the configured project identity.
+            return AIProviderOrgInfoGoogle(
+                org_id=str_project_id,
+                org_name=None,
+                source=ORG_INFO_SOURCE_CONFIGURATION,
+            )
+        # Normal return declaring no identity in api_key-only configurations.
+        return AIProviderOrgInfoGoogle(source=ORG_INFO_SOURCE_NONE)
+
+    def _get_org_info_capability_provider(self) -> AIProviderOrgInfoCapability:
+        """Declares Google org-identity resolvability as configured."""
+        bool_has_project: bool = self._google_configured_project_id() is not None
+        # Normal return with the configured capability declaration.
+        return AIProviderOrgInfoCapability(
+            supports_org_id=bool_has_project,
+            supports_org_name=False,
+            requirement=(
+                "project display-name lookup is not supported; attribution "
+                "uses the GCP project id"
+                if bool_has_project
+                else "set GOOGLE_PROJECT_ID (service-account mode) to "
+                "attribute by GCP project id"
+            ),
+        )
+
+
+class AIProviderOrgInfoGoogle(AIProviderOrgInfoBase):
+    """Google attribution identity: the configured GCP project id."""
