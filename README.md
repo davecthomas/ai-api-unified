@@ -1,4 +1,4 @@
-# ai-api-unified 2.17.0
+# ai-api-unified 2.18.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -1028,6 +1028,14 @@ middleware:
 
 Cost enrichment fires whenever `emit_cost` is on, even when output events are
 disabled by `direction`. See [`docs/finops_middleware_design.md`](docs/finops_middleware_design.md).
+
+Cost events also carry organization identity for billing attribution
+(`org_id` / `org_name`), v1 on the `claude` engine: set `ANTHROPIC_ADMIN_KEY`
+(an Admin API key) and events carry your organization's id and name; without
+it, events carry the org id only, captured once per client from a free
+`count_tokens` response header. Resolution is cached per client and fails
+open — cost events omit the fields when identity is unavailable. Other
+providers report no org identity yet.
 
 ### PII Redaction
 

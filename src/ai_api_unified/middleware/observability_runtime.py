@@ -109,6 +109,11 @@ class AiApiCallContextModel:
         default_factory=dict
     )
     dict_tags: Mapping[str, str] = field(default_factory=dict)
+    # Provider-organization identity for billing attribution: resolved by the
+    # engine (for anthropic: the Admin API when ANTHROPIC_ADMIN_KEY is set,
+    # else the response-header org id) and emitted on cost-topic events.
+    provider_org_id: str | None = None
+    provider_org_name: str | None = None
 
     def __post_init__(self) -> None:
         """

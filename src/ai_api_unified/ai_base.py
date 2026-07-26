@@ -606,6 +606,17 @@ class AIBase(ABC):
         model_version: str | None = self._resolve_observability_model_version(
             model_name=model_name
         )
+        str_org_id: str | None = None
+        str_org_name: str | None = None
+        try:
+            str_org_id, str_org_name = self._resolve_provider_organization()
+        except Exception as exception:
+            # Fail open: organization identity is enrichment only and must
+            # never affect the provider call.
+            _LOGGER.debug(
+                "provider organization resolution failed: %s",
+                exception.__class__.__name__,
+            )
         ai_api_call_context: AiApiCallContextModel = AiApiCallContextModel(
             call_id=str(uuid.uuid4()),
             event_time_utc=self._get_observability_event_time_utc(),
@@ -620,6 +631,8 @@ class AIBase(ABC):
             originating_caller_id_source=caller_id_source,
             dict_metadata=dict_context_metadata,
             dict_tags=observability_context.tags,
+            provider_org_id=str_org_id,
+            provider_org_name=str_org_name,
         )
         # Normal return with immutable provider-boundary call metadata.
         return ai_api_call_context
@@ -709,6 +722,21 @@ class AIBase(ABC):
         )
         # Normal return with the original provider result after optional observability wrapping.
         return provider_result
+
+    def _resolve_provider_organization(self) -> tuple[str | None, str | None]:
+        """
+        Resolves the provider organization identity for billing attribution.
+
+        Engines that can identify the paying organization override this hook
+        (the claude engine resolves the org name via the Admin API when
+        ANTHROPIC_ADMIN_KEY is set, else the org id from response headers).
+        The base default reports no organization identity.
+
+        Returns:
+            Tuple of (org_id, org_name); either element may be None.
+        """
+        # Normal return with no organization identity by default.
+        return None, None
 
     def _resolve_observability_provider_vendor(self) -> str:
         """

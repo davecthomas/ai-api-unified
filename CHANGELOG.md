@@ -4,6 +4,18 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.18.0
+
+- Organization-level finops attribution, v1 on the `claude` engine: cost
+  events carry `org_id` and `org_name`. With `ANTHROPIC_ADMIN_KEY` set (an
+  Admin API key), both fields resolve from the Admin API; without it, the
+  org id alone is captured from one free `count_tokens` response header.
+  Resolution runs once per client, is cached, and fails open — cost events
+  omit the fields when identity is unavailable. The call-context model gains
+  `provider_org_id` / `provider_org_name`, and engines can implement
+  `_resolve_provider_organization()` to supply identity (other providers
+  report none yet).
+
 ## 2.17.0
 
 - New `voyage` embeddings engine (extra: `voyage`, auth: `VOYAGE_API_KEY`)
