@@ -1,4 +1,4 @@
-# ai-api-unified 2.17.0
+# ai-api-unified 2.18.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -149,7 +149,7 @@ VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
 DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
 ```
 
-Leave `EMBEDDING_DIMENSIONS` unset unless you deliberately want a provider-specific override. The library now preserves provider defaults instead of forcing a generic value.
+Leave `EMBEDDING_DIMENSIONS` unset unless you deliberately want a provider-specific override. The library preserves provider defaults.
 
 ### Smoke Test
 
@@ -449,7 +449,7 @@ except AiProviderRequestError as error:
 The `claude` engine can process many prompts as one asynchronous batch through
 Anthropic's Message Batches API. Batches run in the background (most finish well
 under an hour, up to a 24-hour ceiling) at roughly half the per-token cost of
-individual calls — use them for bulk work that isn't latency-sensitive, such as
+individual calls — use them for bulk work that can wait, such as
 classification, extraction, or evaluation runs.
 
 Batch support is capability-gated like streaming and token counting: check
@@ -457,8 +457,8 @@ Batch support is capability-gated like streaming and token counting: check
 supports it; other engines raise `AiProviderCapabilityUnsupportedError`.
 
 Each request carries a `custom_id` you choose. Results come back keyed by that
-`custom_id` (in arbitrary order), so you correlate results to requests yourself
-rather than relying on position.
+`custom_id` (in arbitrary order), so you correlate results to requests by
+`custom_id`.
 
 The blocking convenience path submits, polls, and returns results in one call:
 
@@ -478,7 +478,7 @@ if client.capabilities.supports_batch:
         print(item.custom_id, item.status, item.text)
 ```
 
-For explicit control instead of the blocking wrapper, drive the lifecycle
+For explicit control, drive the lifecycle
 directly — submit, poll status, then fetch results once the batch has ended:
 
 ```python
@@ -649,7 +649,7 @@ AIBaseVideos.save_image_buffers_as_files(
 )
 ```
 
-If you want explicit job control instead of the blocking wrapper:
+For explicit job control:
 
 ```python
 from ai_api_unified import AIFactory, AIBaseVideos
@@ -1029,6 +1029,27 @@ middleware:
 Cost enrichment fires whenever `emit_cost` is on, even when output events are
 disabled by `direction`. See [`docs/finops_middleware_design.md`](docs/finops_middleware_design.md).
 
+Cost events also carry organization identity for billing attribution
+(`org_id` / `org_name`), v1 on the `claude` engine: set `ANTHROPIC_ADMIN_KEY`
+(an Admin API key) and events carry your organization's id and name; without
+it, events carry the org id only, captured once per client from a free
+`count_tokens` response header. Resolution is cached per client and fails
+open — cost events omit the fields when identity is unavailable. Other
+providers report no org identity yet.
+
+Callers can also fetch the identity on demand from any client:
+
+```python
+info = client.get_org_info()   # AIProviderOrgInfoBase
+print(info.org_id, info.org_name, info.source)
+# source: "admin_api" (id + name) | "response_header" (id only) | "none"
+```
+
+Unlike enrichment, the explicit call raises `AiProviderRequestError` (with
+`status_code`) when resolution fails — a rejected `ANTHROPIC_ADMIN_KEY`
+surfaces as a 401. Providers subclass the returned
+model (`AIProviderOrgInfoAnthropic`) for provider-native fields.
+
 ### PII Redaction
 
 PII redaction is optional and requires one of:
@@ -1053,8 +1074,8 @@ Notes:
 - `balanced`, `high_accuracy`, and `low_memory` detection profiles are supported
 - install a matching spaCy model separately, for example `poetry run python -m spacy download en_core_web_sm` for `balanced` or `poetry run python -m spacy download en_core_web_lg` for `high_accuracy`
 - `middleware-pii-redaction-small` and `middleware-pii-redaction-large` are compatibility aliases for the same Python dependency set; the spaCy model is still installed as a separate build/runtime asset
-- for no-egress images and Lambda-style deployments, install the spaCy model wheel into the build artifact instead of relying on runtime downloads
-- recognizer customization is configured in YAML, not hard-coded in provider implementations
+- for no-egress images and Lambda-style deployments, install the spaCy model wheel into the build artifact (runtime model downloads need egress)
+- recognizer customization is configured in YAML
 
 See [`docs/pii_redaction_design.md`](docs/pii_redaction_design.md) for the fuller contract and deployment tradeoffs.
 

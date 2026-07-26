@@ -398,6 +398,8 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             "capability": call_context.capability,
             "operation": call_context.operation,
             "caller_id": call_context.originating_caller_id,
+            "org_id": call_context.provider_org_id,
+            "org_name": call_context.provider_org_name,
             "input_tokens": int_input_tokens,
             "output_tokens": int_output_tokens,
             "cached_input_tokens": int_cached_input_tokens,

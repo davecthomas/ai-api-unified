@@ -306,6 +306,30 @@ class AIBatchResultItem(BaseModel):
 RETRY_POLICY_DEFAULT: str = "default"
 RETRY_POLICY_NONE: str = "none"
 
+ORG_INFO_SOURCE_ADMIN_API: str = "admin_api"
+ORG_INFO_SOURCE_RESPONSE_HEADER: str = "response_header"
+ORG_INFO_SOURCE_NONE: str = "none"
+
+
+class AIProviderOrgInfoBase(BaseModel):
+    """
+    Provider organization identity for billing attribution.
+
+    Providers subclass this to add native fields (for example a Google
+    project number); the normalized base fields cover cross-provider use.
+
+    Attributes:
+        org_id: Provider organization identifier, when resolvable.
+        org_name: Organization display name; requires the provider admin key
+            (v1: ANTHROPIC_ADMIN_KEY on the claude engine).
+        source: How the identity was resolved: "admin_api" (id and name),
+            "response_header" (id only), or "none" (engine cannot identify).
+    """
+
+    org_id: str | None = None
+    org_name: str | None = None
+    source: str = ORG_INFO_SOURCE_NONE
+
 
 def normalize_retry_policy(retry_policy: str) -> str:
     """
@@ -606,6 +630,17 @@ class AIBase(ABC):
         model_version: str | None = self._resolve_observability_model_version(
             model_name=model_name
         )
+        str_org_id: str | None = None
+        str_org_name: str | None = None
+        try:
+            str_org_id, str_org_name = self._resolve_provider_organization()
+        except Exception as exception:
+            # Fail open: organization identity is enrichment only and must
+            # never affect the provider call.
+            _LOGGER.debug(
+                "provider organization resolution failed: %s",
+                exception.__class__.__name__,
+            )
         ai_api_call_context: AiApiCallContextModel = AiApiCallContextModel(
             call_id=str(uuid.uuid4()),
             event_time_utc=self._get_observability_event_time_utc(),
@@ -620,6 +655,8 @@ class AIBase(ABC):
             originating_caller_id_source=caller_id_source,
             dict_metadata=dict_context_metadata,
             dict_tags=observability_context.tags,
+            provider_org_id=str_org_id,
+            provider_org_name=str_org_name,
         )
         # Normal return with immutable provider-boundary call metadata.
         return ai_api_call_context
@@ -709,6 +746,57 @@ class AIBase(ABC):
         )
         # Normal return with the original provider result after optional observability wrapping.
         return provider_result
+
+    def get_org_info(self) -> AIProviderOrgInfoBase:
+        """
+        Returns the provider organization identity on demand.
+
+        Unlike cost-event enrichment (which fails open), an explicit call
+        surfaces resolution failures: engines raise AiProviderRequestError
+        with status_code when their identity lookup fails (for example a
+        rejected ANTHROPIC_ADMIN_KEY). Engines that cannot identify the
+        paying organization return source="none".
+
+        Returns:
+            AIProviderOrgInfoBase (or a provider subclass) with org_id,
+            org_name, and the resolution source.
+        """
+        # Normal return with the provider-implemented organization identity.
+        return self._get_org_info_provider()
+
+    def _get_org_info_provider(self) -> AIProviderOrgInfoBase:
+        """
+        Provider hook for organization identity resolution.
+
+        The base default reports no organization identity; engines that can
+        identify the paying organization override this (v1: the anthropic
+        base, via the Admin API or a response-header probe).
+        """
+        # Normal return with no organization identity by default.
+        return AIProviderOrgInfoBase()
+
+    def _resolve_provider_organization(self) -> tuple[str | None, str | None]:
+        """
+        Fail-open organization resolution used by cost-event enrichment.
+
+        Delegates to the same provider hook as get_org_info but swallows
+        failures, so enrichment never affects the provider call. Engines may
+        override to add negative caching across calls.
+
+        Returns:
+            Tuple of (org_id, org_name); either element may be None.
+        """
+        try:
+            org_info: AIProviderOrgInfoBase = self._get_org_info_provider()
+        except Exception as exception:
+            _LOGGER.debug(
+                "organization enrichment resolution failed: %s",
+                exception.__class__.__name__,
+            )
+            # Early return with no identity because enrichment fails open.
+            return None, None
+        # Normal return with the resolved identity fields.
+        return org_info.org_id, org_info.org_name
 
     def _resolve_observability_provider_vendor(self) -> str:
         """

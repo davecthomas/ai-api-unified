@@ -14,6 +14,12 @@ EMBEDDING_ENGINE=google-gemini
 OPENAI_API_KEY=
 # --- Anthropic (native Claude API; used by COMPLETIONS_ENGINE=claude) ---
 ANTHROPIC_API_KEY=
+# Optional Admin API key (sk-ant-admin...) for organization-level finops
+# attribution: when set, cost events carry your org id AND name (resolved
+# once per client from the Admin API). When unset, cost events carry the org
+# id only, captured from one free count_tokens response header. Fails open:
+# cost events omit org identity if resolution fails.
+ANTHROPIC_ADMIN_KEY=
 # Geo-residency constraint (optional: US | USA | United States)
 AI_API_GEO_RESIDENCY=
 # --- Voyage AI (embeddings; used by EMBEDDING_ENGINE=voyage) ---
