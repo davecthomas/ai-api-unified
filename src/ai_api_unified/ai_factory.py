@@ -51,9 +51,6 @@ VIDEO_MODEL_NAME_KEY: str = "VIDEO_MODEL_NAME"
 FROZENSET_BASE_URL_OVERRIDE_COMPLETIONS_ENGINES: frozenset[str] = frozenset(
     {"claude", "openai", "openai-responses", "google-gemini"}
 )
-FROZENSET_BASE_URL_OVERRIDE_EMBEDDING_ENGINES: frozenset[str] = frozenset(
-    {"openai", "google-gemini"}
-)
 VIDEO_ENGINE_KEY: str = "VIDEO_ENGINE"
 
 

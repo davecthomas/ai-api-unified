@@ -69,6 +69,21 @@ class TestValidation:
             validate_base_url_override("http://evil.example", str_env_key="MY_OVERRIDE")
 
 
+class TestErrorRedaction:
+    def test_credentials_in_url_are_not_echoed(self):
+        # Gateway URLs can carry secrets in userinfo or query strings, and
+        # config errors land in logs and tracebacks.
+        with pytest.raises(AiProviderConfigurationError) as exc_info:
+            validate_base_url_override(
+                "http://user:sk-secret-token@gw.example.com/v1?api-key=sk-another",
+                str_env_key="X",
+            )
+        str_message = str(exc_info.value)
+        assert "sk-secret-token" not in str_message
+        assert "sk-another" not in str_message
+        assert "gw.example.com" in str_message
+
+
 class TestResolution:
     def test_explicit_argument_wins_over_env(self):
         env = _StubEnv(X="https://from-env/v1")
@@ -155,15 +170,17 @@ class TestAnthropicOverride:
             with pytest.raises(AiProviderConfigurationError):
                 AiAnthropicCompletions(model="claude-opus-4-8")
 
-    def test_admin_org_lookup_follows_override(self):
-        # The org-identity fetch must go through the gateway too, not the
-        # hardcoded vendor host.
+    def test_admin_key_does_not_follow_the_inference_override(self):
+        # The admin key grants org-wide read/write. Routing inference through
+        # a gateway must not silently hand that gateway an administration
+        # credential, so the admin lookup stays on the vendor host.
         with patch.dict(
             os.environ,
             {
                 "ANTHROPIC_API_KEY": "k",
                 "ANTHROPIC_ADMIN_KEY": "admin",
                 "ANTHROPIC_BASE_URL_OVERRIDE": "https://gw.internal/anthropic",
+                "ANTHROPIC_ADMIN_BASE_URL_OVERRIDE": "",
             },
         ):
             with patch("ai_api_unified.ai_anthropic_base.Anthropic"):
@@ -176,7 +193,31 @@ class TestAnthropicOverride:
                 client.get_org_info()
         assert (
             mock_get.call_args.args[0]
-            == "https://gw.internal/anthropic/v1/organizations/me"
+            == "https://api.anthropic.com/v1/organizations/me"
+        )
+
+    def test_admin_lookup_follows_its_own_opt_in_override(self):
+        # Egress-restricted networks can route the admin call too, explicitly.
+        with patch.dict(
+            os.environ,
+            {
+                "ANTHROPIC_API_KEY": "k",
+                "ANTHROPIC_ADMIN_KEY": "admin",
+                "ANTHROPIC_BASE_URL_OVERRIDE": "https://gw.internal/anthropic",
+                "ANTHROPIC_ADMIN_BASE_URL_OVERRIDE": "https://admin-gw.internal",
+            },
+        ):
+            with patch("ai_api_unified.ai_anthropic_base.Anthropic"):
+                client = AiAnthropicCompletions(model="claude-opus-4-8")
+            response = Mock(status_code=200)
+            response.json.return_value = {"id": "org_1", "name": "Acme"}
+            with patch(
+                "ai_api_unified.ai_anthropic_base.httpx.get", return_value=response
+            ) as mock_get:
+                client.get_org_info()
+        assert (
+            mock_get.call_args.args[0]
+            == "https://admin-gw.internal/v1/organizations/me"
         )
 
 
@@ -204,6 +245,33 @@ class TestOpenAIOverride:
                 client = AiOpenAICompletions(model="gpt-4o-mini")
         assert mock_cls.call_args.kwargs["base_url"] == "https://gw.internal/openai"
         assert client.base_url == "https://gw.internal/openai"
+
+    def test_deprecated_openai_base_url_is_validated(self):
+        # The SDK's own variable name is commonly set process-wide by other
+        # tooling; it must not smuggle a plaintext destination past the guard.
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "k",
+                "OPENAI_BASE_URL_OVERRIDE": "",
+                "OPENAI_BASE_URL": "http://gw.corp.internal/v1",
+            },
+        ):
+            with pytest.raises(AiProviderConfigurationError):
+                AiOpenAICompletions(model="gpt-4o-mini")
+
+    def test_deprecated_openai_base_url_still_works_over_https(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "k",
+                "OPENAI_BASE_URL_OVERRIDE": "",
+                "OPENAI_BASE_URL": "https://legacy-gw.internal/v1",
+            },
+        ):
+            with patch("ai_api_unified.ai_openai_base.OpenAI") as mock_cls:
+                AiOpenAICompletions(model="gpt-4o-mini")
+        assert mock_cls.call_args.kwargs["base_url"] == "https://legacy-gw.internal/v1"
 
     def test_geo_residency_still_applies_without_override(self):
         with patch.dict(

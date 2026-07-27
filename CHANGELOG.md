@@ -20,7 +20,12 @@ version lives in `pyproject.toml` (see the README release section).
   `GOOGLE_GEMINI_BASE_URL` variables cannot take effect unvalidated.
 - Organization-identity lookups (2.18.0/2.19.0) now derive from the resolved
   base URL, so finops attribution follows the gateway instead of calling the
-  vendor directly.
+  vendor directly. Exception: the Anthropic Admin API key grants org-wide
+  read/write, so it does not follow `ANTHROPIC_BASE_URL_OVERRIDE`; set
+  `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` to route that lookup too.
+- The deprecated `OPENAI_BASE_URL` is now validated by the same https rules,
+  closing a path where a process-wide value set by other tooling could send
+  the API key to a plaintext host.
 - Engines whose SDK cannot honor an override (Bedrock-routed, `titan`,
   `voyage`, voice) raise `AiProviderCapabilityUnsupportedError` when passed
   `base_url` rather than ignoring it.

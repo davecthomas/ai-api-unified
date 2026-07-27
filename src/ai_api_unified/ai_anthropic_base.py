@@ -35,6 +35,7 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 RETRY_POLICY_KEY: str = "COMPLETIONS_RETRY_POLICY"
 ANTHROPIC_ADMIN_KEY_SETTING: str = "ANTHROPIC_ADMIN_KEY"
 ANTHROPIC_BASE_URL_OVERRIDE_SETTING: str = "ANTHROPIC_BASE_URL_OVERRIDE"
+ANTHROPIC_ADMIN_BASE_URL_OVERRIDE_SETTING: str = "ANTHROPIC_ADMIN_BASE_URL_OVERRIDE"
 ANTHROPIC_DEFAULT_BASE_URL: str = "https://api.anthropic.com"
 ANTHROPIC_ADMIN_ORGANIZATION_PATH: str = "/v1/organizations/me"
 ANTHROPIC_API_VERSION: str = "2023-06-01"
@@ -114,6 +115,17 @@ class AIAnthropicBase:
         # Optional Admin API key for organization-level finops attribution.
         self.admin_key: str = str(
             self.env.get_setting(ANTHROPIC_ADMIN_KEY_SETTING, "") or ""
+        )
+        # The admin key grants org-wide read/write, far beyond the inference
+        # key, so it does NOT follow ANTHROPIC_BASE_URL_OVERRIDE: routing
+        # inference through a gateway must not silently hand that gateway an
+        # org-administration credential. Sending it elsewhere is opt-in.
+        self.admin_base_url: str = (
+            resolve_base_url_override(
+                self.env,
+                str_env_key=ANTHROPIC_ADMIN_BASE_URL_OVERRIDE_SETTING,
+            )
+            or ANTHROPIC_DEFAULT_BASE_URL
         )
         # Org-identity caching (success cache + enrichment negative cache)
         # lives on AIBase; this base only implements the fetch hooks.
@@ -203,7 +215,8 @@ class AIAnthropicBase:
         """
         try:
             response: httpx.Response = httpx.get(
-                f"{self.base_url.rstrip('/')}{ANTHROPIC_ADMIN_ORGANIZATION_PATH}",
+                f"{self.admin_base_url.rstrip('/')}"
+                f"{ANTHROPIC_ADMIN_ORGANIZATION_PATH}",
                 headers={
                     "x-api-key": self.admin_key,
                     "anthropic-version": ANTHROPIC_API_VERSION,

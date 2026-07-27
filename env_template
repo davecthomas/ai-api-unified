@@ -28,6 +28,10 @@ ANTHROPIC_ADMIN_KEY=
 # https:// unless it targets localhost/127.0.0.1/::1. Deliberately named
 # _OVERRIDE so it does not collide with the SDK's own ANTHROPIC_BASE_URL.
 ANTHROPIC_BASE_URL_OVERRIDE=
+# The Admin API key grants org-wide read/write, so it does NOT follow the
+# override above. Set this only if the admin lookup should also route through
+# a gateway (egress-restricted networks).
+ANTHROPIC_ADMIN_BASE_URL_OVERRIDE=
 # Geo-residency constraint (optional: US | USA | United States)
 AI_API_GEO_RESIDENCY=
 # --- Voyage AI (embeddings; used by EMBEDDING_ENGINE=voyage) ---

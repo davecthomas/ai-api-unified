@@ -771,6 +771,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | `ANTHROPIC_BASE_URL_OVERRIDE` | Optional API base-URL override for the `claude` engine (https required) |
 | `OPENAI_BASE_URL_OVERRIDE`  | Optional API base-URL override for the OpenAI engines (https required) |
 | `GOOGLE_GEMINI_BASE_URL_OVERRIDE` | Optional API base-URL override for `google-gemini` (https required) |
+| `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` | Optional separate override for the Anthropic Admin API lookup; the admin key does not follow the inference override |
 
 ### API Base URL Overrides
 
@@ -819,7 +820,13 @@ Rules and rationale:
   then (OpenAI only) the deprecated `OPENAI_BASE_URL` and geo-residency
   routing, then the provider default.
 - **Organization lookups follow the override**, so finops attribution does not
-  bypass your gateway.
+  bypass your gateway — with one deliberate exception: the Anthropic **Admin
+  API key** grants org-wide read/write, far beyond the inference key, so it
+  does not follow `ANTHROPIC_BASE_URL_OVERRIDE`. Routing inference through a
+  gateway never silently hands that gateway an administration credential. Set
+  `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` to opt the admin lookup in as well.
+- The deprecated `OPENAI_BASE_URL` is validated by the same rules, since other
+  tooling commonly sets that name process-wide.
 - Engines without SDK support (Bedrock-routed, `titan`, `voyage`, voice)
   raise `AiProviderCapabilityUnsupportedError` when passed `base_url`, rather
   than ignoring it silently.

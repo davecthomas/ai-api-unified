@@ -8,6 +8,7 @@ from openai import AsyncOpenAI, OpenAI
 from ai_api_unified.ai_base import (
     AIProviderOrgInfoBase,
     resolve_base_url_override,
+    validate_base_url_override,
     AIProviderOrgInfoCapability,
     ORG_INFO_SOURCE_ACCOUNT_API,
     ORG_INFO_SOURCE_NONE,
@@ -130,9 +131,15 @@ class AIOpenAIBase:
         override_url: str | None = env.get_setting("OPENAI_BASE_URL")
         if override_url:
             _LOGGER.warning(
-                "OPENAI_BASE_URL is deprecated. Please use AI_API_GEO_RESIDENCY instead.",
+                "OPENAI_BASE_URL is deprecated. Please use "
+                "OPENAI_BASE_URL_OVERRIDE (or AI_API_GEO_RESIDENCY) instead.",
             )
-            return override_url
+            # Validated like the new override: this is the SDK's own variable
+            # name, so other tooling may set it process-wide, and it feeds
+            # credential-bearing requests including the org lookup.
+            return validate_base_url_override(
+                override_url, str_env_key="OPENAI_BASE_URL"
+            )
 
         geo_residency: str | None = (
             env.get_geo_residency()
