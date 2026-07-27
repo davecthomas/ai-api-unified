@@ -1,4 +1,4 @@
-# ai-api-unified 2.19.0
+# ai-api-unified 2.20.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -768,6 +768,68 @@ There is no implicit default provider. Set the selector for each capability you 
 | `EMBEDDING_DIMENSIONS`      | Optional embeddings dimension override. Leave unset for provider defaults.                  |
 | `AI_API_GEO_RESIDENCY`      | Optional geo hint. `US`, `USA`, or `United States` normalize to US routing where supported. |
 | `AI_MIDDLEWARE_CONFIG_PATH` | Optional YAML config path for observability and PII middleware                              |
+| `ANTHROPIC_BASE_URL_OVERRIDE` | Optional API base-URL override for the `claude` engine (https required) |
+| `OPENAI_BASE_URL_OVERRIDE`  | Optional API base-URL override for the OpenAI engines (https required) |
+| `GOOGLE_GEMINI_BASE_URL_OVERRIDE` | Optional API base-URL override for `google-gemini` (https required) |
+| `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` | Optional separate override for the Anthropic Admin API lookup; the admin key does not follow the inference override |
+
+### API Base URL Overrides
+
+The `claude`, `openai`, `openai-responses`, and `google-gemini` engines accept
+a base-URL override, so provider traffic can route through an LLM gateway,
+a corporate egress proxy, a recording proxy in tests, or any
+OpenAI-compatible server:
+
+| Engine | Setting |
+| --- | --- |
+| `claude` | `ANTHROPIC_BASE_URL_OVERRIDE` |
+| `openai`, `openai-responses` | `OPENAI_BASE_URL_OVERRIDE` |
+| `google-gemini` | `GOOGLE_GEMINI_BASE_URL_OVERRIDE` |
+
+```dotenv
+# Route Claude traffic through a gateway
+ANTHROPIC_BASE_URL_OVERRIDE=https://llm-gateway.internal/anthropic
+
+# Point the openai engine at a local OpenAI-compatible server
+OPENAI_BASE_URL_OVERRIDE=http://localhost:11434/v1
+```
+
+Per client, when one process needs several destinations:
+
+```python
+client = AIFactory.get_ai_completions_client(
+    completions_engine="claude",
+    base_url="https://llm-gateway.internal/anthropic",
+)
+```
+
+Rules and rationale:
+
+- **https is required.** An override redirects your API keys to that host, so
+  plain `http://` is rejected with `AiProviderConfigurationError` unless the
+  host is `localhost`, `127.0.0.1`, or `::1` (local gateways and test
+  servers).
+- **The `_OVERRIDE` suffix is deliberate.** The OpenAI, Anthropic, and Google
+  SDKs read their own `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, and
+  `GOOGLE_GEMINI_BASE_URL` variables. Using distinct names, and passing the
+  resolved value to the SDK explicitly, keeps a stray native variable from
+  taking effect without the https check. (On `google-gemini` with no override
+  set, the SDK still resolves its own default, including those native
+  variables, which this library does not validate.)
+- **Precedence:** the `base_url` argument, then `<ENGINE>_BASE_URL_OVERRIDE`,
+  then (OpenAI only) the deprecated `OPENAI_BASE_URL` and geo-residency
+  routing, then the provider default.
+- **Organization lookups follow the override**, so finops attribution does not
+  bypass your gateway — with one deliberate exception: the Anthropic **Admin
+  API key** grants org-wide read/write, far beyond the inference key, so it
+  does not follow `ANTHROPIC_BASE_URL_OVERRIDE`. Routing inference through a
+  gateway never silently hands that gateway an administration credential. Set
+  `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` to opt the admin lookup in as well.
+- The deprecated `OPENAI_BASE_URL` is validated by the same rules, since other
+  tooling commonly sets that name process-wide.
+- Engines without SDK support (Bedrock-routed, `titan`, `voyage`, voice)
+  raise `AiProviderCapabilityUnsupportedError` when passed `base_url`, rather
+  than ignoring it silently.
 
 ### Provider Authentication
 

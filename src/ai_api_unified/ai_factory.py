@@ -10,9 +10,11 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import logging
+from typing import Any
 
 from .ai_base import AIBaseCompletions, AIBaseEmbeddings, AIBaseImages, AIBaseVideos
 from .ai_provider_exceptions import (
+    AiProviderCapabilityUnsupportedError,
     AiProviderConfigurationError,
     AiProviderDependencyUnavailableError,
     AiProviderRuntimeError,
@@ -44,6 +46,11 @@ EMBEDDING_DIMENSIONS_KEY: str = "EMBEDDING_DIMENSIONS"
 IMAGE_MODEL_NAME_KEY: str = "IMAGE_MODEL_NAME"
 IMAGE_ENGINE_KEY: str = "IMAGE_ENGINE"
 VIDEO_MODEL_NAME_KEY: str = "VIDEO_MODEL_NAME"
+# Engines whose provider SDK accepts a base-URL override. Others ignore the
+# argument silently, so the factory rejects it for them instead.
+FROZENSET_BASE_URL_OVERRIDE_COMPLETIONS_ENGINES: frozenset[str] = frozenset(
+    {"claude", "openai", "openai-responses", "google-gemini"}
+)
 VIDEO_ENGINE_KEY: str = "VIDEO_ENGINE"
 
 
@@ -240,6 +247,7 @@ class AIFactory:
     def get_ai_completions_client(
         model_name: str | None = None,
         completions_engine: str | None = None,
+        base_url: str | None = None,
     ) -> AIBaseCompletions:
         """
         Instantiates the configured completions client.
@@ -280,8 +288,17 @@ class AIFactory:
                 AIBaseCompletions,
             )
             # Instantiate the resolved class only after lazy-load validation succeeds.
+            dict_client_kwargs: dict[str, Any] = {"model": str_model_name}
+            if base_url is not None:
+                AIFactory._require_base_url_override_support(
+                    str_engine=str_engine,
+                    frozenset_supported=(
+                        FROZENSET_BASE_URL_OVERRIDE_COMPLETIONS_ENGINES
+                    ),
+                )
+                dict_client_kwargs["base_url"] = base_url
             completions_client: AIBaseCompletions = class_completions_client(
-                model=str_model_name
+                **dict_client_kwargs
             )
             # Normal return with configured completions provider client.
             return completions_client
@@ -296,6 +313,31 @@ class AIFactory:
             raise
         except AiProviderRuntimeError:
             raise
+
+    @staticmethod
+    def _require_base_url_override_support(
+        *,
+        str_engine: str,
+        frozenset_supported: frozenset[str],
+    ) -> None:
+        """
+        Rejects a base-URL override for engines whose SDK cannot honor it.
+
+        Args:
+            str_engine: Resolved engine selector token.
+            frozenset_supported: Engines whose SDK accepts a base URL.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the engine cannot
+                honor a base-URL override.
+        """
+        if str_engine in frozenset_supported:
+            # Normal return because this engine honors the override.
+            return None
+        raise AiProviderCapabilityUnsupportedError(
+            f"Engine {str_engine!r} does not support a base-URL override. "
+            f"Supported engines: {', '.join(sorted(frozenset_supported))}."
+        )
 
     @staticmethod
     def get_ai_embedding_client(

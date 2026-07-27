@@ -9,6 +9,7 @@ import math
 import mimetypes
 import tempfile
 import time
+import urllib.parse
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -354,6 +355,96 @@ class AIProviderOrgInfoCapability(BaseModel):
     supports_org_id: bool = False
     supports_org_name: bool = False
     requirement: str | None = None
+
+
+BASE_URL_OVERRIDE_LOCAL_HOSTS: tuple[str, ...] = ("localhost", "127.0.0.1", "::1")
+
+
+def _redact_url_for_error(str_base_url: str, parsed: Any) -> str:
+    """
+    Builds a display form of a URL safe to place in errors and logs.
+
+    Gateway URLs legitimately carry secrets in userinfo or query strings, and
+    configuration errors surface in logs and tracebacks, so only the scheme,
+    host, and port are echoed back.
+    """
+    if not parsed.hostname:
+        # Early return because a malformed value has no host to show.
+        return "<malformed url>"
+    str_port: str = f":{parsed.port}" if parsed.port else ""
+    # Normal return with scheme, host, and port only.
+    return f"{parsed.scheme}://{parsed.hostname}{str_port}"
+
+
+def validate_base_url_override(str_base_url: str, *, str_env_key: str) -> str:
+    """
+    Validates one base-URL override before any credential is sent to it.
+
+    A base-URL override redirects provider traffic — including API keys — to
+    the supplied host, so it must be HTTPS. Plain http:// is permitted only
+    for loopback hosts, which covers local gateways and recording proxies.
+
+    Args:
+        str_base_url: Raw override value from configuration or a caller.
+        str_env_key: Setting name quoted in errors so the fix is obvious.
+
+    Returns:
+        The trimmed, validated base URL.
+
+    Raises:
+        AiProviderConfigurationError: When the URL is malformed or would send
+            credentials over plaintext to a non-loopback host.
+    """
+    str_trimmed: str = str_base_url.strip()
+    parsed = urllib.parse.urlparse(str_trimmed)
+    if parsed.scheme not in ("https", "http") or not parsed.hostname:
+        raise AiProviderConfigurationError(
+            f"{str_env_key} must be an absolute http(s) URL; got "
+            f"{_redact_url_for_error(str_trimmed, parsed)}."
+        )
+    if parsed.scheme == "http" and parsed.hostname not in BASE_URL_OVERRIDE_LOCAL_HOSTS:
+        raise AiProviderConfigurationError(
+            f"{str_env_key} must use https:// so provider credentials are not "
+            f"sent in plaintext; got "
+            f"{_redact_url_for_error(str_trimmed, parsed)}. Plain http:// is "
+            f"allowed only for {', '.join(BASE_URL_OVERRIDE_LOCAL_HOSTS)}."
+        )
+    # Normal return with the validated override URL.
+    return str_trimmed
+
+
+def resolve_base_url_override(
+    env_settings: Any,
+    *,
+    str_env_key: str,
+    str_explicit: str | None = None,
+) -> str | None:
+    """
+    Resolves a validated base-URL override from a caller argument or config.
+
+    Precedence: explicit argument, then the `<ENGINE>_BASE_URL_OVERRIDE`
+    setting. The override name is deliberately distinct from the provider
+    SDKs' own base-URL environment variables (OPENAI_BASE_URL,
+    ANTHROPIC_BASE_URL, GOOGLE_GEMINI_BASE_URL): engines pass the resolved
+    value to the SDK explicitly, so a native variable can never take effect
+    unvalidated and bypass the https check.
+
+    Args:
+        env_settings: EnvSettings-like accessor exposing get_setting.
+        str_env_key: Override setting name for this engine.
+        str_explicit: Optional caller-supplied override.
+
+    Returns:
+        Validated override URL, or None when no override is configured.
+    """
+    str_candidate: str = str_explicit or ""
+    if not str_candidate.strip():
+        str_candidate = str(env_settings.get_setting(str_env_key, "") or "")
+    if not str_candidate.strip():
+        # Early return because no override is configured.
+        return None
+    # Normal return with the validated override URL.
+    return validate_base_url_override(str_candidate, str_env_key=str_env_key)
 
 
 def normalize_retry_policy(retry_policy: str) -> str:

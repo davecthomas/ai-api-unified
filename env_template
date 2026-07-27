@@ -12,6 +12,9 @@ EMBEDDING_ENGINE=google-gemini
 ########################################################################
 # --- OpenAI ---
 OPENAI_API_KEY=
+# Optional API base-URL override; also points the openai engine at any
+# OpenAI-compatible server. Same https rule as above.
+OPENAI_BASE_URL_OVERRIDE=
 # --- Anthropic (native Claude API; used by COMPLETIONS_ENGINE=claude) ---
 ANTHROPIC_API_KEY=
 # Optional Admin API key (sk-ant-admin...) for organization-level finops
@@ -20,11 +23,22 @@ ANTHROPIC_API_KEY=
 # id only, captured from one free count_tokens response header. Fails open:
 # cost events omit org identity if resolution fails.
 ANTHROPIC_ADMIN_KEY=
+# Optional API base-URL override for gateways, proxies, or local test
+# servers (LiteLLM, Helicone, Cloudflare AI Gateway, vLLM, Ollama). Must be
+# https:// unless it targets localhost/127.0.0.1/::1. Deliberately named
+# _OVERRIDE so it does not collide with the SDK's own ANTHROPIC_BASE_URL.
+ANTHROPIC_BASE_URL_OVERRIDE=
+# The Admin API key grants org-wide read/write, so it does NOT follow the
+# override above. Set this only if the admin lookup should also route through
+# a gateway (egress-restricted networks).
+ANTHROPIC_ADMIN_BASE_URL_OVERRIDE=
 # Geo-residency constraint (optional: US | USA | United States)
 AI_API_GEO_RESIDENCY=
 # --- Voyage AI (embeddings; used by EMBEDDING_ENGINE=voyage) ---
 VOYAGE_API_KEY=
 GOOGLE_GEMINI_API_KEY=
+# Optional API base-URL override for Gemini. Same https rule as above.
+GOOGLE_GEMINI_BASE_URL_OVERRIDE=
 GOOGLE_AUTH_METHOD=api_key
 # Completions engine (openai | openai-responses | claude | google-gemini | nova | anthropic | ...)
 COMPLETIONS_ENGINE=google-gemini

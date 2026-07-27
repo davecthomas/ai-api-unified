@@ -128,7 +128,12 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
     """
 
     def __init__(
-        self, model: str = "", *, retry_policy: str | None = None, **kwargs: Any
+        self,
+        model: str = "",
+        *,
+        retry_policy: str | None = None,
+        base_url: str | None = None,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize Google Gemini completions client.
@@ -139,9 +144,14 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 retries; "none" disables them (single attempt). Falls back to
                 the COMPLETIONS_RETRY_POLICY environment setting, then
                 "default".
+            base_url: Optional API base-URL override (gateways, proxies,
+                local test servers). Falls back to
+                GOOGLE_GEMINI_BASE_URL_OVERRIDE. Must be https:// unless it
+                targets a loopback host.
             dimensions: Not used for completions but kept for interface compatibility
         """
         AIGoogleBase.__init__(self, **kwargs)
+        self._str_base_url_override: str | None = base_url
         self.env: EnvSettings = EnvSettings()
         str_retry_candidate: str = (
             retry_policy
@@ -191,7 +201,10 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         """Initialize the Google Gemini client with proper authentication."""
         ai_google_base_module.genai = genai
         ai_google_base_module.gerr = gerr
-        self.client = self.get_client(model=self.completions_model)
+        self.client = self.get_client(
+            model=self.completions_model,
+            base_url=getattr(self, "_str_base_url_override", None),
+        )
 
     @property
     def model_name(self) -> str:
