@@ -7,6 +7,7 @@ import httpx
 from openai import AsyncOpenAI, OpenAI
 from ai_api_unified.ai_base import (
     AIProviderOrgInfoBase,
+    resolve_base_url_override,
     AIProviderOrgInfoCapability,
     ORG_INFO_SOURCE_ACCOUNT_API,
     ORG_INFO_SOURCE_NONE,
@@ -21,7 +22,8 @@ from ai_api_unified.util.env_settings import EnvSettings
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 RETRY_POLICY_KEY: str = "COMPLETIONS_RETRY_POLICY"
-OPENAI_ME_URL: str = "https://api.openai.com/v1/me"
+OPENAI_BASE_URL_OVERRIDE_SETTING: str = "OPENAI_BASE_URL_OVERRIDE"
+OPENAI_ME_PATH: str = "/me"
 OPENAI_ORG_ID_RESPONSE_HEADER: str = "openai-organization"
 ORG_RESOLUTION_TIMEOUT_SECONDS: float = 10.0
 
@@ -43,7 +45,13 @@ class AIOpenAIBase:
     DEFAULT_OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     OPENAI_US_BASE_URL: str = "https://us.api.openai.com/v1"
 
-    def __init__(self, *, retry_policy: str | None = None, **kwargs: Any):
+    def __init__(
+        self,
+        *,
+        retry_policy: str | None = None,
+        base_url: str | None = None,
+        **kwargs: Any,
+    ):
         """
         Initialize the AIOpenAIBase class with environment settings and API credentials.
 
@@ -51,13 +59,18 @@ class AIOpenAIBase:
             retry_policy: "default" keeps the OpenAI SDK's built-in retries;
                 "none" disables them (max_retries=0). Falls back to the
                 COMPLETIONS_RETRY_POLICY environment setting, then "default".
+            base_url: Optional API base-URL override (gateways, proxies,
+                OpenAI-compatible servers). Falls back to
+                OPENAI_BASE_URL_OVERRIDE, the deprecated OPENAI_BASE_URL,
+                geo-residency routing, then the OpenAI default. Must be
+                https:// unless it targets a loopback host.
         """
         self.env = EnvSettings()
         self.api_key = self.env.get_setting("OPENAI_API_KEY")
         self.user = self.env.get_setting("OPENAI_USER", "default_user")
         if not self.api_key or self.api_key.strip() == "":
             raise ValueError("OPENAI_API_KEY environment variable must be set.")
-        self.base_url = self.get_api_base_url()
+        self.base_url = self.get_api_base_url(base_url=base_url)
 
         str_candidate: str = (
             retry_policy
@@ -93,9 +106,26 @@ class AIOpenAIBase:
         # Normal return with the shared async client instance.
         return self._async_client
 
-    def get_api_base_url(self) -> str:
-        """Resolve the OpenAI base URL based on data residency constraints."""
+    def get_api_base_url(self, *, base_url: str | None = None) -> str:
+        """
+        Resolve the OpenAI base URL.
+
+        Precedence: the caller argument, then OPENAI_BASE_URL_OVERRIDE, then
+        the deprecated OPENAI_BASE_URL, then geo-residency routing, then the
+        OpenAI default. The override is validated (https, or loopback) and
+        always passed to the SDK explicitly, so the SDK's own OPENAI_BASE_URL
+        variable cannot take effect unvalidated.
+        """
         env: EnvSettings = EnvSettings()
+
+        str_validated_override: str | None = resolve_base_url_override(
+            env,
+            str_env_key=OPENAI_BASE_URL_OVERRIDE_SETTING,
+            str_explicit=base_url,
+        )
+        if str_validated_override:
+            # Early return with the validated override.
+            return str_validated_override
 
         override_url: str | None = env.get_setting("OPENAI_BASE_URL")
         if override_url:
@@ -156,7 +186,7 @@ class AIOpenAIBase:
         """
         try:
             response: httpx.Response = httpx.get(
-                OPENAI_ME_URL,
+                f"{self.base_url.rstrip('/')}{OPENAI_ME_PATH}",
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 timeout=ORG_RESOLUTION_TIMEOUT_SECONDS,
             )

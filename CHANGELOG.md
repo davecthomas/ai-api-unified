@@ -4,6 +4,27 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.20.0
+
+- Per-engine API base-URL overrides for `claude`, `openai`,
+  `openai-responses`, and `google-gemini`, so provider traffic can route
+  through an LLM gateway, an egress proxy, a recording proxy, or any
+  OpenAI-compatible server: `ANTHROPIC_BASE_URL_OVERRIDE`,
+  `OPENAI_BASE_URL_OVERRIDE`, `GOOGLE_GEMINI_BASE_URL_OVERRIDE`, or a
+  `base_url` argument on the factory and engine constructors for per-client
+  routing.
+- Overrides must be https unless they target `localhost`, `127.0.0.1`, or
+  `::1`; anything else raises `AiProviderConfigurationError` before a
+  credential leaves the process. The resolved value is passed to each SDK
+  explicitly, so the SDKs' own `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` /
+  `GOOGLE_GEMINI_BASE_URL` variables cannot take effect unvalidated.
+- Organization-identity lookups (2.18.0/2.19.0) now derive from the resolved
+  base URL, so finops attribution follows the gateway instead of calling the
+  vendor directly.
+- Engines whose SDK cannot honor an override (Bedrock-routed, `titan`,
+  `voyage`, voice) raise `AiProviderCapabilityUnsupportedError` when passed
+  `base_url` rather than ignoring it.
+
 ## 2.19.0
 
 - Organization identity for finops attribution now covers every provider to

@@ -14,6 +14,7 @@ from ai_api_unified.ai_base import (
     AIProviderOrgInfoCapability,
     ORG_INFO_SOURCE_CONFIGURATION,
     ORG_INFO_SOURCE_NONE,
+    resolve_base_url_override,
 )
 from google.api_core import exceptions as gexc  # Provided by google-* libs
 from google.auth.exceptions import DefaultCredentialsError
@@ -21,6 +22,8 @@ from google.genai import errors as gerr
 from google.genai import pagers
 
 from ai_api_unified.util.env_settings import EnvSettings
+
+GOOGLE_BASE_URL_OVERRIDE_SETTING: str = "GOOGLE_GEMINI_BASE_URL_OVERRIDE"
 
 T = TypeVar("T")
 
@@ -96,6 +99,7 @@ class AIGoogleBase:
         model: str,
         *,
         use_api_key: bool = False,
+        base_url: str | None = None,
     ) -> genai.Client:
         """
         Initialize the Google Gemini client with either Vertex AI credentials or an API key.
@@ -106,6 +110,13 @@ class AIGoogleBase:
             Model identifier to validate once the client is created.
         use_api_key:
             Backward-compatible explicit override that forces API-key mode.
+        base_url:
+            Optional API base-URL override (gateways, proxies, local test
+            servers), falling back to GOOGLE_GEMINI_BASE_URL_OVERRIDE. Must
+            be https:// unless it targets a loopback host. When unset, the
+            google-genai SDK resolves its own default, including its native
+            GOOGLE_GEMINI_BASE_URL / GOOGLE_VERTEX_BASE_URL variables, which
+            this library does not validate.
         """
 
         env_settings: EnvSettings = EnvSettings()
@@ -113,6 +124,16 @@ class AIGoogleBase:
             env_settings,
             use_api_key=use_api_key,
         )
+        str_base_url: str | None = resolve_base_url_override(
+            env_settings,
+            str_env_key=GOOGLE_BASE_URL_OVERRIDE_SETTING,
+            str_explicit=base_url,
+        )
+        dict_client_kwargs: dict[str, Any] = {}
+        if str_base_url:
+            dict_client_kwargs["http_options"] = genai.types.HttpOptions(
+                base_url=str_base_url
+            )
 
         try:
             if auth_method == self.GOOGLE_AUTH_METHOD_API_KEY:
@@ -123,7 +144,9 @@ class AIGoogleBase:
                     raise RuntimeError(
                         "GOOGLE_GEMINI_API_KEY is not configured but API-key auth was selected."
                     )
-                client: genai.Client = genai.Client(api_key=api_key)
+                client: genai.Client = genai.Client(
+                    api_key=api_key, **dict_client_kwargs
+                )
             else:
                 project_id: str = env_settings.get_setting("GOOGLE_PROJECT_ID", "")
                 location: str = env_settings.get_setting(
@@ -133,6 +156,7 @@ class AIGoogleBase:
                     vertexai=True,
                     project=project_id,
                     location=location,
+                    **dict_client_kwargs,
                 )
 
             try:

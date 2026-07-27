@@ -18,6 +18,7 @@ from anthropic import Anthropic, AsyncAnthropic
 
 from ai_api_unified.ai_base import (
     AIProviderOrgInfoBase,
+    resolve_base_url_override,
     AIProviderOrgInfoCapability,
     ORG_INFO_SOURCE_ADMIN_API,
     ORG_INFO_SOURCE_NONE,
@@ -33,7 +34,9 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 RETRY_POLICY_KEY: str = "COMPLETIONS_RETRY_POLICY"
 ANTHROPIC_ADMIN_KEY_SETTING: str = "ANTHROPIC_ADMIN_KEY"
-ANTHROPIC_ADMIN_ORGANIZATION_URL: str = "https://api.anthropic.com/v1/organizations/me"
+ANTHROPIC_BASE_URL_OVERRIDE_SETTING: str = "ANTHROPIC_BASE_URL_OVERRIDE"
+ANTHROPIC_DEFAULT_BASE_URL: str = "https://api.anthropic.com"
+ANTHROPIC_ADMIN_ORGANIZATION_PATH: str = "/v1/organizations/me"
 ANTHROPIC_API_VERSION: str = "2023-06-01"
 ANTHROPIC_ORG_ID_RESPONSE_HEADER: str = "anthropic-organization-id"
 ORG_RESOLUTION_TIMEOUT_SECONDS: float = 10.0
@@ -58,7 +61,13 @@ class AIAnthropicBase:
     retries so caller-owned backoff is the only retry layer.
     """
 
-    def __init__(self, *, retry_policy: str | None = None, **kwargs: Any):
+    def __init__(
+        self,
+        *,
+        retry_policy: str | None = None,
+        base_url: str | None = None,
+        **kwargs: Any,
+    ):
         """
         Initialize the AIAnthropicBase class with environment settings and API credentials.
 
@@ -66,6 +75,10 @@ class AIAnthropicBase:
             retry_policy: "default" keeps the Anthropic SDK's built-in retries;
                 "none" disables them (max_retries=0). Falls back to the
                 COMPLETIONS_RETRY_POLICY environment setting, then "default".
+            base_url: Optional API base-URL override (gateways, proxies,
+                local test servers). Falls back to
+                ANTHROPIC_BASE_URL_OVERRIDE, then the Anthropic default.
+                Must be https:// unless it targets a loopback host.
         """
         self.env = EnvSettings()
         self.api_key = self.env.get_setting("ANTHROPIC_API_KEY")
@@ -74,13 +87,26 @@ class AIAnthropicBase:
             raise ValueError("ANTHROPIC_API_KEY environment variable must be set.")
 
         self.retry_policy: str = self._resolve_retry_policy(retry_policy)
+        # Always pass base_url explicitly so the SDK's own ANTHROPIC_BASE_URL
+        # variable cannot take effect without passing the https validation.
+        self.base_url: str = (
+            resolve_base_url_override(
+                self.env,
+                str_env_key=ANTHROPIC_BASE_URL_OVERRIDE_SETTING,
+                str_explicit=base_url,
+            )
+            or ANTHROPIC_DEFAULT_BASE_URL
+        )
         int_max_retries: int | None = (
             0 if self.retry_policy == RETRY_POLICY_NONE else None
         )
-        if int_max_retries is None:
-            self.client = Anthropic(api_key=self.api_key)
-        else:
-            self.client = Anthropic(api_key=self.api_key, max_retries=int_max_retries)
+        dict_client_kwargs: dict[str, Any] = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+        }
+        if int_max_retries is not None:
+            dict_client_kwargs["max_retries"] = int_max_retries
+        self.client = Anthropic(**dict_client_kwargs)
         # The async client is created lazily so purely synchronous consumers
         # never pay for an unused event-loop-bound transport.
         self._async_client: AsyncAnthropic | None = None
@@ -122,12 +148,13 @@ class AIAnthropicBase:
             int_max_retries: int | None = (
                 0 if self.retry_policy == RETRY_POLICY_NONE else None
             )
-            if int_max_retries is None:
-                self._async_client = AsyncAnthropic(api_key=self.api_key)
-            else:
-                self._async_client = AsyncAnthropic(
-                    api_key=self.api_key, max_retries=int_max_retries
-                )
+            dict_client_kwargs: dict[str, Any] = {
+                "api_key": self.api_key,
+                "base_url": self.base_url,
+            }
+            if int_max_retries is not None:
+                dict_client_kwargs["max_retries"] = int_max_retries
+            self._async_client = AsyncAnthropic(**dict_client_kwargs)
         # Normal return with the shared async client instance.
         return self._async_client
 
@@ -176,7 +203,7 @@ class AIAnthropicBase:
         """
         try:
             response: httpx.Response = httpx.get(
-                ANTHROPIC_ADMIN_ORGANIZATION_URL,
+                f"{self.base_url.rstrip('/')}{ANTHROPIC_ADMIN_ORGANIZATION_PATH}",
                 headers={
                     "x-api-key": self.admin_key,
                     "anthropic-version": ANTHROPIC_API_VERSION,
