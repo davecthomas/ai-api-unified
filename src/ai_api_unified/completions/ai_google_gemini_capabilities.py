@@ -42,7 +42,15 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
         }
 
         # Model-specific capabilities
-        if "2.5" in model_name:
+        if model_name.startswith("gemini-3"):
+            capabilities.update(
+                {
+                    "context_window_length": 1048576,
+                    "knowledge_cutoff_date": date(2025, 1, 1),  # Approximate
+                    "reasoning": True,  # Gemini 3.x supports reasoning
+                }
+            )
+        elif "2.5" in model_name:
             capabilities.update(
                 {
                     "context_window_length": 1048576,

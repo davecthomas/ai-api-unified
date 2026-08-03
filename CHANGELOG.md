@@ -4,6 +4,27 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.21.0
+
+- Catalogue the latest models served by all three major completions
+  providers (verified against each provider's live models API on
+  2026-08-03), with registry pricing and capability entries:
+  - Anthropic: `claude-opus-5` and `claude-sonnet-5` (both 1M context;
+    Sonnet 5 priced at list rates, introductory pricing noted through
+    2026-08-31). `claude-opus-4-1`'s recommended replacement is now
+    `claude-opus-5`.
+  - OpenAI: `gpt-5.5`, `gpt-5.4-mini`, `gpt-5.4-nano`, and `gpt-5.2` are now
+    in the model list and context-window table (they were previously priced
+    in the registry but not selectable).
+  - Google Gemini: the 3.x generation — `gemini-3.6-flash`,
+    `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`,
+    and `gemini-3.1-pro-preview` (tiered >200K pricing) — with a
+    reasoning-capable Gemini 3 capabilities branch.
+- Engine defaults are unchanged (`claude-opus-4-8`, `gpt-4o-mini`,
+  `gemini-2.5-flash`); the new models are opt-in via
+  `COMPLETIONS_MODEL_NAME`. `env_template` now lists per-engine model
+  choices including the new generation.
+
 ## 2.20.0
 
 - Per-engine API base-URL overrides for `claude`, `openai`,

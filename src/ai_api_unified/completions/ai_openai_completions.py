@@ -74,7 +74,11 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
     # Context window sizes (max tokens each model can handle)
     DICT_OPENAI_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
         # --- GPT-5.x current family (API) ---
+        "gpt-5.5": 400_000,
         "gpt-5.4": 400_000,
+        "gpt-5.4-mini": 400_000,
+        "gpt-5.4-nano": 400_000,
+        "gpt-5.2": 400_000,
         "gpt-5.1-codex-max": 400_000,
         # --- GPT-5 Family (API) ---
         "gpt-5": 400_000,
@@ -248,7 +252,11 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         # Updated as of Aug 2025 based on OpenAI announcements and docs
         return [
             # --- GPT-5.x current family ---
-            "gpt-5.4",  # current workhorse
+            "gpt-5.5",  # current flagship (Apr 2026)
+            "gpt-5.4",  # previous flagship, current workhorse
+            "gpt-5.4-mini",  # smaller, cheaper 5.4 variant
+            "gpt-5.4-nano",  # lowest-cost 5.4 variant
+            "gpt-5.2",  # older 5.x generation, still served
             "gpt-5.1-codex-max",  # coding-optimized, large context
             # --- GPT-5 Family (previous generation, still available) ---
             "gpt-5",  # flagship

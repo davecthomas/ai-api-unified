@@ -55,6 +55,12 @@ models split into input / cached-input / output.
 | OpenAI | o4-mini | 1.10 | 0.275 | 4.40 | high |
 | OpenAI | gpt-4o | 2.50 | 1.25 | 10.00 | high |
 | OpenAI | gpt-4o-mini | 0.15 | 0.075 | 0.60 | high |
+| Google | gemini-3.6-flash | 1.50 | 0.15 | 7.50 | high |
+| Google | gemini-3.5-flash | 1.50 | 0.15 | 9.00 | high |
+| Google | gemini-3.5-flash-lite | 0.30 | 0.03 | 2.50 | high |
+| Google | gemini-3.1-flash-lite | 0.25 | 0.025 | 1.50 | high |
+| Google | gemini-3.1-pro-preview (≤200K) | 2.00 | 0.20 | 12.00 | high |
+| Google | gemini-3.1-pro-preview (>200K) | 4.00 | 0.40 | 18.00 | high |
 | Google | gemini-2.5-pro (≤200K) | 1.25 | 0.13 | 10.00 | high |
 | Google | gemini-2.5-pro (>200K) | 2.50 | 0.25 | 15.00 | high |
 | Google | gemini-2.5-flash | 0.30 | 0.03 | 2.50 | high |
@@ -67,6 +73,8 @@ models split into input / cached-input / output.
 | Bedrock | amazon.nova-premier | 2.50 | n/a | 12.50 | high |
 | Bedrock | claude-3-5-haiku | 0.80 | n/a | 4.00 | high |
 | Anthropic | claude-fable-5 | 10.00 | 1.00 | 50.00 | high |
+| Anthropic | claude-opus-5 | 5.00 | 0.50 | 25.00 | high |
+| Anthropic | claude-sonnet-5 † | 3.00 | 0.30 | 15.00 | high |
 | Anthropic | claude-opus-4-8 | 5.00 | 0.50 | 25.00 | high |
 | Anthropic | claude-opus-4-7 | 5.00 | 0.50 | 25.00 | high |
 | Anthropic | claude-opus-4-6 | 5.00 | 0.50 | 25.00 | high |
@@ -74,7 +82,12 @@ models split into input / cached-input / output.
 | Anthropic | claude-haiku-4-5 | 1.00 | 0.10 | 5.00 | high |
 | Anthropic | claude-opus-4-1 ⚠ | 15.00 | 1.50 | 75.00 | high |
 
-Notes: Anthropic rates are the native-API list (added 2026-07 with the `claude`
+Notes: rows added 2026-08-03 (claude-opus-5, claude-sonnet-5, and the Gemini
+3.x generation) were compiled from the same provider pricing pages as the rest
+of the table. † claude-sonnet-5 shows list rates; introductory pricing
+($2.00 in / $10.00 out) runs through 2026-08-31. gemini-3.1-pro-preview is the
+latest pro tier served by the Gemini API (preview-only as of 2026-08).
+Anthropic rates are the native-API list (added 2026-07 with the `claude`
 engine); the cached-input column is the documented 0.1x prompt-cache read rate,
 and 5-minute cache writes bill 1.25x input (not modeled). Anthropic lifecycle
 entries also cover claude-opus-4-1 (deprecated, retires 2026-08-05, replace

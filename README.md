@@ -1,4 +1,4 @@
-# ai-api-unified 2.20.0
+# ai-api-unified 2.21.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -240,11 +240,11 @@ ANTHROPIC_API_KEY=...
 ```
 
 Models catalogued for the `claude` engine (alias model IDs):
-`claude-fable-5`, `claude-opus-4-8` (default), `claude-opus-4-7`,
-`claude-opus-4-6`, `claude-sonnet-4-6`, and `claude-haiku-4-5`. Capabilities
-per model include the context window (1M tokens except `claude-haiku-4-5` at
-200K), streaming, provider-side token counting, image inputs, and registry
-pricing. Structured output uses the Messages API JSON-schema response format,
+`claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`
+(default), `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, and
+`claude-haiku-4-5`. Capabilities per model include the context window (1M
+tokens except `claude-haiku-4-5` at 200K), streaming, provider-side token
+counting, image inputs, and registry pricing. Structured output uses the Messages API JSON-schema response format,
 so `strict_schema_prompt` works on every catalogued model. On
 `claude-fable-5`, whose thinking is always on and counts against `max_tokens`,
 pass a `max_response_tokens` well above the 2048 default so the budget covers

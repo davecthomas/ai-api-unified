@@ -38,6 +38,8 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 # Provenance shared by this compilation.
 _EFFECTIVE: date = date(2026, 7, 7)
+# Later compilation date for models added after the initial 2026-07-07 sweep.
+_EFFECTIVE_AUG: date = date(2026, 8, 3)
 _SRC_OPENAI: str = "https://developers.openai.com/api/docs/pricing"
 _SRC_GOOGLE: str = "https://ai.google.dev/gemini-api/docs/pricing"
 _SRC_GOOGLE_DEP: str = "https://ai.google.dev/gemini-api/docs/deprecations"
@@ -61,11 +63,12 @@ def _tok(
     confidence: str = "high",
     tiers: list[AIPricingTier] | None = None,
     notes: str | None = None,
+    effective: date = _EFFECTIVE,
 ) -> AIModelPricing:
     """Build a token-unit AIModelPricing from string decimals (per 1M tokens)."""
     return AIModelPricing(
         unit=PricingUnit.TOKEN,
-        effective_date=_EFFECTIVE,
+        effective_date=effective,
         source=source,
         confidence=confidence,  # type: ignore[arg-type]
         token_rates=AITokenRates(
@@ -184,6 +187,56 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             _tok("0.12", None, None, _SRC_VOYAGE),
         ),
         # ── Google completions (active) ─────────────────────────────────────
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3.6-flash",
+            _tok("1.50", "7.50", "0.15", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3.5-flash",
+            _tok("1.50", "9.00", "0.15", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3.5-flash-lite",
+            _tok("0.30", "2.50", "0.03", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3.1-flash-lite",
+            _tok(
+                "0.25",
+                "1.50",
+                "0.025",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_AUG,
+                notes="Audio input priced higher ($0.50/1M).",
+            ),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3.1-pro-preview",
+            _tok(
+                "2.00",
+                "12.00",
+                "0.20",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_AUG,
+                tiers=[
+                    AIPricingTier(
+                        label="context>200k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("4.00"),
+                            output_per_1m=Decimal("18.00"),
+                            cached_input_per_1m=Decimal("0.40"),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=200K input tokens. Preview model; "
+                "latest pro tier served by the Gemini API.",
+            ),
+        ),
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.5-pro",
@@ -341,6 +394,24 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         ),
         _info(
             PROVIDER_ANTHROPIC,
+            "claude-opus-5",
+            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC, effective=_EFFECTIVE_AUG),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-sonnet-5",
+            _tok(
+                "3.00",
+                "15.00",
+                "0.30",
+                _SRC_ANTHROPIC,
+                effective=_EFFECTIVE_AUG,
+                notes="List rates; introductory pricing ($2.00 in / $10.00 out) "
+                "runs through 2026-08-31.",
+            ),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
             "claude-opus-4-8",
             _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
         ),
@@ -371,7 +442,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             _tok("15.00", "75.00", "1.50", _SRC_ANTHROPIC),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 8, 5),
-            replacement="claude-opus-4-8",
+            replacement="claude-opus-5",
         ),
         # ── Anthropic completions (retired: hard 404) ───────────────────────
         _info(
