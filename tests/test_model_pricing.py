@@ -81,6 +81,40 @@ class TestRegistry:
     def test_uncatalogued_model_returns_none(self) -> None:
         assert get_model_pricing("openai", "does-not-exist") is None
 
+    def test_anthropic_claude_5_generation(self) -> None:
+        # Added 2026-08-03 from the live models API; opus-5 matches opus-4-8
+        # rates, sonnet-5 is registered at list (not introductory) rates.
+        opus = get_model_pricing("anthropic", "claude-opus-5")
+        assert opus is not None
+        assert opus.token_rates.input_per_1m == Decimal("5.00")
+        assert opus.token_rates.output_per_1m == Decimal("25.00")
+        assert opus.token_rates.cached_input_per_1m == Decimal("0.50")
+
+        sonnet = get_model_pricing("anthropic", "claude-sonnet-5")
+        assert sonnet is not None
+        assert sonnet.token_rates.input_per_1m == Decimal("3.00")
+        assert sonnet.token_rates.output_per_1m == Decimal("15.00")
+
+    def test_openai_gpt_5_5_present(self) -> None:
+        pricing = get_model_pricing("openai", "gpt-5.5")
+        assert pricing is not None
+        assert pricing.token_rates.input_per_1m == Decimal("5.00")
+        assert pricing.token_rates.output_per_1m == Decimal("30.00")
+
+    def test_gemini_3_generation(self) -> None:
+        flash = get_model_pricing("google", "gemini-3.5-flash")
+        assert flash is not None
+        assert flash.token_rates.input_per_1m == Decimal("1.50")
+        assert flash.token_rates.output_per_1m == Decimal("9.00")
+
+        # The pro preview carries a >200K pricing tier like gemini-2.5-pro.
+        pro = get_model_pricing("google", "gemini-3.1-pro-preview")
+        assert pro is not None
+        assert pro.token_rates.input_per_1m == Decimal("2.00")
+        assert pro.tiers is not None and len(pro.tiers) == 1
+        assert pro.tiers[0].token_rates is not None
+        assert pro.tiers[0].token_rates.input_per_1m == Decimal("4.00")
+
 
 class TestLifecycle:
     """enforce_model_lifecycle policy per status."""

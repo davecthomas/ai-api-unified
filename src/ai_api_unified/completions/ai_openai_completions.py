@@ -74,7 +74,11 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
     # Context window sizes (max tokens each model can handle)
     DICT_OPENAI_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
         # --- GPT-5.x current family (API) ---
+        "gpt-5.5": 400_000,
         "gpt-5.4": 400_000,
+        "gpt-5.4-mini": 400_000,
+        "gpt-5.4-nano": 400_000,
+        "gpt-5.2": 400_000,
         "gpt-5.1-codex-max": 400_000,
         # --- GPT-5 Family (API) ---
         "gpt-5": 400_000,
@@ -218,7 +222,7 @@ class AICompletionsPromptParamsOpenAI(AICompletionsPromptParamsBase):
 
 
 class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
-    def __init__(self, model: str = "4o-mini", **kwargs: Any):
+    def __init__(self, model: str = "", **kwargs: Any):
         """
         Initializes the AiOpenAICompletions class, setting the model and related configuration.
 
@@ -228,7 +232,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         AIOpenAIBase.__init__(self, **kwargs)
         explicit_model: str = model.strip() if model else ""
         self.completions_model = explicit_model or self.env.get_setting(
-            "COMPLETIONS_MODEL_NAME", "gpt-4o-mini"
+            "COMPLETIONS_MODEL_NAME", "gpt-5.4-mini"
         )
         AIBaseCompletions.__init__(self, model=self.completions_model, **kwargs)
         self.model = self.completions_model
@@ -248,7 +252,11 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         # Updated as of Aug 2025 based on OpenAI announcements and docs
         return [
             # --- GPT-5.x current family ---
-            "gpt-5.4",  # current workhorse
+            "gpt-5.5",  # current flagship (Apr 2026)
+            "gpt-5.4",  # previous flagship, current workhorse
+            "gpt-5.4-mini",  # smaller, cheaper 5.4 variant
+            "gpt-5.4-nano",  # lowest-cost 5.4 variant
+            "gpt-5.2",  # older 5.x generation, still served
             "gpt-5.1-codex-max",  # coding-optimized, large context
             # --- GPT-5 Family (previous generation, still available) ---
             "gpt-5",  # flagship

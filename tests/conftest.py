@@ -166,7 +166,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--llmmodel",
         action="store",
-        default="gemini-2.5-flash",
+        default="gemini-3.5-flash",
         help="LLM model to use (default: gemini-2.5-flash)",
     )
 

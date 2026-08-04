@@ -78,8 +78,8 @@ GOOGLE_GENAI_ERRORS: object = gerr
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_COMPLETIONS_MODEL: str = "gemini-2.5-flash"
-DEFAULT_FALLBACK_MODEL: str = "gemini-2.5-flash"
+DEFAULT_COMPLETIONS_MODEL: str = "gemini-3.5-flash"
+DEFAULT_FALLBACK_MODEL: str = "gemini-3.5-flash"
 MAX_RETRIES: int = 5
 INITIAL_BACKOFF_DELAY: float = 1.0
 BACKOFF_MULTIPLIER: float = 2.0
@@ -98,12 +98,23 @@ STRUCTURED_DEFAULT_TOP_P: float = 0.8
 # Context window and status only. Pricing now lives in the pricing registry
 # (single source of truth); lifecycle (deprecated/retired) is enforced there.
 GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
-    # Latest stable models
-    "gemini-2.5-pro": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
-    "gemini-2.5-flash": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
-    "gemini-2.5-flash-lite": {
+    # Latest stable models (Gemini 3.x generation; token limits confirmed via
+    # the models.get API 2026-08-03: 1,048,576 in / 65,536 out).
+    "gemini-3.6-flash": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
+    "gemini-3.5-flash": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
+    "gemini-3.5-flash-lite": {
         "max_context_tokens": 1_048_576,
         "status": "Latest Stable",
+    },
+    "gemini-3.1-flash-lite": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    # Latest pro tier is preview-only on the Gemini API as of 2026-08.
+    "gemini-3.1-pro-preview": {"max_context_tokens": 1_048_576, "status": "Preview"},
+    # Previous stable generation
+    "gemini-2.5-pro": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    "gemini-2.5-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    "gemini-2.5-flash-lite": {
+        "max_context_tokens": 1_048_576,
+        "status": "Stable",
     },
     # Deprecated (still functional; the registry warns and names a replacement).
     "gemini-2.0-flash-lite": {"max_context_tokens": 1_048_576, "status": "Deprecated"},

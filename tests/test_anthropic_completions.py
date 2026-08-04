@@ -368,5 +368,5 @@ class TestPricingAndLifecycle:
             (PROVIDER_ANTHROPIC, "claude-opus-4-1")
         )
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-            with pytest.warns(DeprecationWarning, match="claude-opus-4-8"):
+            with pytest.warns(DeprecationWarning, match="claude-opus-5"):
                 AiAnthropicCompletions(model="claude-opus-4-1")

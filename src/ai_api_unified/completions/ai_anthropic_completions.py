@@ -73,6 +73,8 @@ class AICompletionsCapabilitiesAnthropic(AICompletionsCapabilitiesBase):
     # Context window sizes (max input tokens each model can handle).
     DICT_ANTHROPIC_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
         "claude-fable-5": 1_000_000,
+        "claude-opus-5": 1_000_000,
+        "claude-sonnet-5": 1_000_000,
         "claude-opus-4-8": 1_000_000,
         "claude-opus-4-7": 1_000_000,
         "claude-opus-4-6": 1_000_000,
@@ -172,10 +174,12 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         # date-suffixed snapshots).
         return [
             "claude-fable-5",  # most capable, premium tier
-            "claude-opus-4-8",  # most capable Opus-tier model (default)
+            "claude-opus-5",  # current Opus-tier flagship
+            "claude-sonnet-5",  # latest speed/intelligence balance
+            "claude-opus-4-8",  # previous Opus-tier flagship (default)
             "claude-opus-4-7",  # previous-generation Opus
             "claude-opus-4-6",  # older Opus
-            "claude-sonnet-4-6",  # speed/intelligence balance
+            "claude-sonnet-4-6",  # previous-generation Sonnet
             "claude-haiku-4-5",  # fastest, most cost-effective
         ]
 
