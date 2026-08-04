@@ -47,7 +47,7 @@ The public entry points are the stable base interfaces and factories:
 Default model guidance in the checked-in OSS env files:
 
 - Anthropic completions: `claude-opus-4-8`
-- Google completions: `gemini-2.5-flash`
+- Google completions: `gemini-3.5-flash`
 - Google embeddings: `gemini-embedding-001` (text-only) or `gemini-embedding-2` (multimodal)
 - Google images: `imagen-4.0-generate-001`
 - Google videos: `veo-3.1-lite-generate-preview`
@@ -142,7 +142,7 @@ AI_VOICE_ENGINE=google
 GOOGLE_GEMINI_API_KEY=...
 GOOGLE_AUTH_METHOD=api_key
 
-COMPLETIONS_MODEL_NAME=gemini-2.5-flash
+COMPLETIONS_MODEL_NAME=gemini-3.5-flash
 EMBEDDING_MODEL_NAME=gemini-embedding-001
 IMAGE_MODEL_NAME=imagen-4.0-generate-001
 VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview

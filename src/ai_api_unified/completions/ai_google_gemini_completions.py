@@ -78,8 +78,8 @@ GOOGLE_GENAI_ERRORS: object = gerr
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_COMPLETIONS_MODEL: str = "gemini-2.5-flash"
-DEFAULT_FALLBACK_MODEL: str = "gemini-2.5-flash"
+DEFAULT_COMPLETIONS_MODEL: str = "gemini-3.5-flash"
+DEFAULT_FALLBACK_MODEL: str = "gemini-3.5-flash"
 MAX_RETRIES: int = 5
 INITIAL_BACKOFF_DELAY: float = 1.0
 BACKOFF_MULTIPLIER: float = 2.0

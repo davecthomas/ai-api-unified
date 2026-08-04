@@ -20,10 +20,16 @@ version lives in `pyproject.toml` (see the README release section).
     `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`,
     and `gemini-3.1-pro-preview` (tiered >200K pricing) — with a
     reasoning-capable Gemini 3 capabilities branch.
-- Engine defaults are unchanged (`claude-opus-4-8`, `gpt-4o-mini`,
-  `gemini-2.5-flash`); the new models are opt-in via
-  `COMPLETIONS_MODEL_NAME`. `env_template` now lists per-engine model
-  choices including the new generation.
+- Engine defaults move to one generation behind the newest catalogued
+  model: OpenAI `gpt-4o-mini` -> `gpt-5.4-mini`, Gemini
+  `gemini-2.5-flash` -> `gemini-3.5-flash` (default and unknown-model
+  fallback). The Claude default stays `claude-opus-4-8`, already one
+  generation behind `claude-opus-5`. `env_template` now lists per-engine
+  model choices including the new generation.
+- Fix: `AiOpenAICompletions()` constructed with no arguments previously
+  used the literal `"4o-mini"` (an invalid model ID) and never consulted
+  `COMPLETIONS_MODEL_NAME`; the signature default is now empty so the
+  environment setting and the `gpt-5.4-mini` fallback apply.
 
 ## 2.20.0
 

@@ -222,7 +222,7 @@ class AICompletionsPromptParamsOpenAI(AICompletionsPromptParamsBase):
 
 
 class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
-    def __init__(self, model: str = "4o-mini", **kwargs: Any):
+    def __init__(self, model: str = "", **kwargs: Any):
         """
         Initializes the AiOpenAICompletions class, setting the model and related configuration.
 
@@ -232,7 +232,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         AIOpenAIBase.__init__(self, **kwargs)
         explicit_model: str = model.strip() if model else ""
         self.completions_model = explicit_model or self.env.get_setting(
-            "COMPLETIONS_MODEL_NAME", "gpt-4o-mini"
+            "COMPLETIONS_MODEL_NAME", "gpt-5.4-mini"
         )
         AIBaseCompletions.__init__(self, model=self.completions_model, **kwargs)
         self.model = self.completions_model
