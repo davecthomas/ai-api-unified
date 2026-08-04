@@ -773,6 +773,25 @@ There is no implicit default provider. Set the selector for each capability you 
 | `GOOGLE_GEMINI_BASE_URL_OVERRIDE` | Optional API base-URL override for `google-gemini` (https required) |
 | `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` | Optional separate override for the Anthropic Admin API lookup; the admin key does not follow the inference override |
 
+### Catalogued Completions Models
+
+Models with capability and pricing entries per engine, last verified against
+each provider's live models API on 2026-08-03. Defaults sit one generation
+behind the newest catalogued model.
+
+| Engine | Default (no `COMPLETIONS_MODEL_NAME`) | Catalogued models |
+| --- | --- | --- |
+| `openai` / `openai-responses` | `gpt-5.4-mini` | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini`, `o4-mini-high`, `gpt-4o`, `gpt-4o-mini` |
+| `claude` | `claude-opus-4-8` | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
+| `google-gemini` | `gemini-3.5-flash` | `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` (2.0 family deprecated) |
+| `nova` (Bedrock) | `amazon.nova-lite-v1:0` | `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0` |
+
+An uncatalogued model name passes through to the provider on the OpenAI and
+Claude engines (with a conservative default context window); the
+`google-gemini` engine falls back to its default model and logs a warning.
+Deprecated models warn once per process with a sunset date and replacement;
+retired models fail fast (see the pricing registry).
+
 ### API Base URL Overrides
 
 The `claude`, `openai`, `openai-responses`, and `google-gemini` engines accept
