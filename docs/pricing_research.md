@@ -96,7 +96,8 @@ and 5-minute cache writes bill 1.25x input (not modeled). Anthropic lifecycle
 entries also cover claude-opus-4-1 (retired 2026-08-05, replace with
 claude-opus-5) and the retired claude-3-7-sonnet, claude-3-5-haiku, and
 claude-3-opus snapshots. Retired entries that were priced while active keep
-their rates so historical usage can still be costed; requesting one raises. Gemini audio input is priced higher than text (2.5-flash audio input
+their rates so historical usage can still be costed; requesting one raises.
+Gemini audio input is priced higher than text (2.5-flash audio input
 $1.00/1M). Gemini rates shown are the Gemini Developer API list; Vertex differs
 for the 2.0 family ($0.15 in / $0.60 out). Bedrock on-demand; cross-region
 inference profiles add ~10%, batch ≈50% off.

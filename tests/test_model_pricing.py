@@ -147,7 +147,9 @@ class TestLifecycle:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             enforce_model_lifecycle("google", "gemini-2.0-flash")
-        assert "scheduled for withdrawal on 2026-06-01" in str(caught[0].message)
+        dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert len(dep) == 1
+        assert "scheduled for withdrawal on 2026-06-01" in str(dep[0].message)
 
     def test_deprecated_model_warns_once(self) -> None:
         with warnings.catch_warnings(record=True) as caught:
