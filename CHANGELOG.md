@@ -4,6 +4,19 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.22.0
+
+- `claude-opus-4-1` is now RETIRED (Anthropic withdrew it 2026-08-05) with
+  `claude-opus-5` as its replacement. Requesting it raises
+  `AiProviderConfigurationError` at construction instead of emitting a
+  deprecation warning. Callers still on it must switch models.
+- Retired registry entries keep the pricing they carried while active, so
+  cost enrichment can still price usage recorded before the withdrawal
+  date. Lifecycle enforcement is independent of whether rates are present.
+- Lifecycle messages now read a sunset date as history for retired models
+  ("withdrawn on <date>") and as a schedule for deprecated ones
+  ("scheduled for withdrawal on <date>").
+
 ## 2.21.0
 
 - Catalogue the latest models served by all three major completions

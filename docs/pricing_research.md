@@ -80,7 +80,10 @@ models split into input / cached-input / output.
 | Anthropic | claude-opus-4-6 | 5.00 | 0.50 | 25.00 | high |
 | Anthropic | claude-sonnet-4-6 | 3.00 | 0.30 | 15.00 | high |
 | Anthropic | claude-haiku-4-5 | 1.00 | 0.10 | 5.00 | high |
-| Anthropic | claude-opus-4-1 ⚠ | 15.00 | 1.50 | 75.00 | high |
+| Anthropic | claude-opus-4-1 ✖ | 15.00 | 1.50 | 75.00 | high |
+
+Lifecycle markers: ⚠ deprecated (still served; warns once per process).
+✖ retired (no longer served; requesting it raises).
 
 Notes: rows added 2026-08-03 (claude-opus-5, claude-sonnet-5, and the Gemini
 3.x generation) were compiled from the same provider pricing pages as the rest
@@ -90,9 +93,10 @@ latest pro tier served by the Gemini API (preview-only as of 2026-08).
 Anthropic rates are the native-API list (added 2026-07 with the `claude`
 engine); the cached-input column is the documented 0.1x prompt-cache read rate,
 and 5-minute cache writes bill 1.25x input (not modeled). Anthropic lifecycle
-entries also cover claude-opus-4-1 (deprecated, retires 2026-08-05, replace
-with claude-opus-4-8) and the retired claude-3-7-sonnet, claude-3-5-haiku, and
-claude-3-opus snapshots. Gemini audio input is priced higher than text (2.5-flash audio input
+entries also cover claude-opus-4-1 (retired 2026-08-05, replace with
+claude-opus-5) and the retired claude-3-7-sonnet, claude-3-5-haiku, and
+claude-3-opus snapshots. Retired entries that were priced while active keep
+their rates so historical usage can still be costed; requesting one raises. Gemini audio input is priced higher than text (2.5-flash audio input
 $1.00/1M). Gemini rates shown are the Gemini Developer API list; Vertex differs
 for the 2.0 family ($0.15 in / $0.60 out). Bedrock on-demand; cross-region
 inference profiles add ~10%, batch ≈50% off.

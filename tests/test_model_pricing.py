@@ -135,6 +135,20 @@ class TestLifecycle:
         with pytest.raises(AiProviderConfigurationError, match="retired"):
             enforce_model_lifecycle("google", "gemini-1.5-pro-002")
 
+    def test_sunset_date_phrasing_matches_status(self) -> None:
+        # A sunset date on a retired entry describes a past withdrawal; on a
+        # deprecated entry it is still a schedule.
+        with pytest.raises(AiProviderConfigurationError) as excinfo:
+            enforce_model_lifecycle("anthropic", "claude-opus-4-1")
+        retired_message = str(excinfo.value)
+        assert "withdrawn on 2026-08-05" in retired_message
+        assert "scheduled" not in retired_message
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            enforce_model_lifecycle("google", "gemini-2.0-flash")
+        assert "scheduled for withdrawal on 2026-06-01" in str(caught[0].message)
+
     def test_deprecated_model_warns_once(self) -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")

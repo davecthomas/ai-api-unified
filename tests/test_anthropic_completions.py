@@ -31,7 +31,6 @@ from ai_api_unified.completions.ai_anthropic_completions import (
 from ai_api_unified.completions.ai_openai_completions import (
     AICompletionsPromptParamsOpenAI,
 )
-from ai_api_unified.pricing import pricing_registry
 from ai_api_unified.pricing.pricing_registry import (
     PROVIDER_ANTHROPIC,
     get_model_pricing,
@@ -351,9 +350,10 @@ class TestPricingAndLifecycle:
         assert haiku is not None
         assert haiku.token_rates.input_per_1m == Decimal("1.00")
 
-    def test_deprecated_model_is_still_priced(self) -> None:
-        # Deprecated models keep billing until retirement, so finops cost
-        # enrichment must still find rates for them.
+    def test_retired_model_retains_pricing(self) -> None:
+        # Retirement stops new calls but not cost enrichment: an entry priced
+        # while it was active keeps its rates so usage recorded before the
+        # withdrawal date can still be priced.
         pricing = get_model_pricing(PROVIDER_ANTHROPIC, "claude-opus-4-1")
         assert pricing is not None
         assert pricing.token_rates.input_per_1m == Decimal("15.00")
@@ -363,10 +363,13 @@ class TestPricingAndLifecycle:
             with pytest.raises(AiProviderConfigurationError, match="retired"):
                 AiAnthropicCompletions(model="claude-3-opus-20240229")
 
-    def test_deprecated_model_warns_once(self) -> None:
-        pricing_registry._SET_WARNED_MODELS.discard(
-            (PROVIDER_ANTHROPIC, "claude-opus-4-1")
-        )
+    def test_retired_opus_4_1_fails_fast_naming_replacement(self) -> None:
+        # claude-opus-4-1 was withdrawn 2026-08-05: construction must raise
+        # rather than warn, and the message reads as history, not a schedule.
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-            with pytest.warns(DeprecationWarning, match="claude-opus-5"):
+            with pytest.raises(AiProviderConfigurationError) as excinfo:
                 AiAnthropicCompletions(model="claude-opus-4-1")
+        message = str(excinfo.value)
+        assert "retired" in message
+        assert "withdrawn on 2026-08-05" in message
+        assert "claude-opus-5" in message

@@ -1,4 +1,4 @@
-# ai-api-unified 2.21.0
+# ai-api-unified 2.22.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -532,6 +532,11 @@ surfacing the problem at setup. Requesting a **deprecated** model logs a
 warning and emits a `DeprecationWarning` once per process, naming the sunset
 date and replacement, then proceeds. Set `AI_STRICT_DEPRECATIONS=1` to escalate
 deprecated models to the same construction-time error (useful in CI).
+
+A retired model keeps whatever pricing it carried while it was active, so cost
+enrichment can still price usage recorded before the withdrawal date. As of
+2.22.0, `claude-opus-4-1` is retired (withdrawn 2026-08-05); use
+`claude-opus-5`.
 
 ### Embeddings
 
