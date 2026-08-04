@@ -345,6 +345,48 @@ class TestGoogleGeminiModules:
                     assert hasattr(client, "send_prompt")
                     assert hasattr(client, "strict_schema_prompt")
 
+    def test_gemini_completions_deprecated_model_warns_and_proceeds(self):
+        """A deprecated model warns at construction but still builds a client.
+
+        This is the client-level half of the lifecycle policy: deprecated
+        warns and continues, retired raises. It lives here because Google is
+        the only provider with a deprecated completions model catalogued.
+        """
+        from ai_api_unified.pricing import pricing_registry
+        from ai_api_unified.pricing.pricing_registry import PROVIDER_GOOGLE
+
+        # The warning is deduped per process, so clear any prior emission.
+        pricing_registry._SET_WARNED_MODELS.discard(
+            (PROVIDER_GOOGLE, "gemini-2.0-flash")
+        )
+
+        completions_module = _import_google_gemini_completions_module()
+        with patch.object(completions_module, "genai") as mock_genai:
+            with patch.object(completions_module, "gerr"):
+                with patch.object(completions_module, "EnvSettings") as mock_env:
+                    mock_env_instance = Mock()
+                    mock_env_instance.get_setting.side_effect = (
+                        lambda key, default: default
+                    )
+                    mock_env.return_value = mock_env_instance
+
+                    mock_client = Mock()
+                    mock_models = Mock()
+                    mock_client.models = mock_models
+                    mock_models.get.return_value = None
+                    mock_genai.Client.return_value = mock_client
+                    mock_genai.types = Mock()
+
+                    from ai_api_unified.completions.ai_google_gemini_completions import (
+                        GoogleGeminiCompletions,
+                    )
+
+                    with pytest.warns(DeprecationWarning, match="gemini-2.5-flash"):
+                        client = GoogleGeminiCompletions(model="gemini-2.0-flash")
+
+                    # Warned rather than raised, and the client is usable.
+                    assert client.model_name == "gemini-2.0-flash"
+
     def test_gemini_embeddings_basic_functionality(self):
         """Test basic Google Gemini embeddings functionality with mocking."""
         embeddings_module = _import_google_gemini_embeddings_module()
