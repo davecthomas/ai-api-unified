@@ -435,16 +435,18 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             "claude-haiku-4-5",
             _tok("1.00", "5.00", "0.10", _SRC_ANTHROPIC),
         ),
-        # ── Anthropic completions (deprecated, still billable) ──────────────
+        # ── Anthropic completions (retired: hard 404) ───────────────────────
+        # Rates are retained on entries that were priced while active so
+        # historical cost enrichment can still price calls made before the
+        # withdrawal date; lifecycle enforcement is independent of pricing.
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-1",
             _tok("15.00", "75.00", "1.50", _SRC_ANTHROPIC),
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 8, 5),
             replacement="claude-opus-5",
         ),
-        # ── Anthropic completions (retired: hard 404) ───────────────────────
         _info(
             PROVIDER_ANTHROPIC,
             "claude-3-7-sonnet-20250219",
@@ -510,7 +512,12 @@ def _format_lifecycle_message(info: AIModelInfo) -> str:
         f"Model '{info.model}' ({info.provider}) is {info.status.value}"
     ]
     if info.sunset_date is not None:
-        parts.append(f"scheduled for withdrawal on {info.sunset_date.isoformat()}")
+        # Retired models are already withdrawn, so the date reads as history;
+        # deprecated ones are still served until it arrives.
+        if info.status is ModelLifecycleStatus.RETIRED:
+            parts.append(f"withdrawn on {info.sunset_date.isoformat()}")
+        else:
+            parts.append(f"scheduled for withdrawal on {info.sunset_date.isoformat()}")
     if info.recommended_replacement is not None:
         parts.append(f"use '{info.recommended_replacement}' instead")
     return "; ".join(parts) + "."
