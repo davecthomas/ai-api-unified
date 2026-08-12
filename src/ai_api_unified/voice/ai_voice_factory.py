@@ -31,27 +31,31 @@ class AIVoiceFactory:
     """
 
     @staticmethod
-    def create() -> AIVoiceBase:
+    def create(voice_engine: str | None = None) -> AIVoiceBase:
         """
         Creates a voice provider client based on the configured voice engine.
 
         Args:
-            None
+            voice_engine: Optional engine override; falls back to AI_VOICE_ENGINE config.
 
         Returns:
-            Concrete AIVoiceBase implementation for the configured voice engine.
+            Concrete AIVoiceBase implementation for the requested voice engine.
             Raises ValueError for unsupported engines and RuntimeError-derived
             provider exceptions for dependency/runtime loading failures.
         """
-        env_settings: EnvSettings = EnvSettings()
-        object_engine_value: object = env_settings.get_setting(
-            AI_VOICE_ENGINE_ENV_KEY, ""
-        )
-        str_engine: str = (
-            str(object_engine_value).strip().lower()
-            if object_engine_value is not None
-            else ""
-        )
+        str_engine: str
+        if voice_engine is not None and voice_engine.strip():
+            str_engine = voice_engine.strip().lower()
+        else:
+            env_settings: EnvSettings = EnvSettings()
+            object_engine_value: object = env_settings.get_setting(
+                AI_VOICE_ENGINE_ENV_KEY, ""
+            )
+            str_engine = (
+                str(object_engine_value).strip().lower()
+                if object_engine_value is not None
+                else ""
+            )
         if not str_engine:
             raise ValueError(
                 "AI_VOICE_ENGINE must be configured explicitly; there is no default provider."

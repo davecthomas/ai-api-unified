@@ -294,14 +294,19 @@ class AIVoiceBase(BaseModel, ABC):
         Args:
             operation: Public operation name such as `text_to_voice` or `stream_audio`.
             dict_metadata: Optional scalar metadata describing the request side of the call.
-            legacy_caller_id: Optional explicit legacy caller hint supplied by existing config.
+            legacy_caller_id: Optional explicit legacy caller hint overriding the provider default.
 
         Returns:
             AiApiCallContextModel containing shared metadata for input, output, and error events.
         """
         observability_context = get_observability_context()
+        effective_legacy_caller_id: str | None = (
+            legacy_caller_id
+            if legacy_caller_id is not None
+            else self._resolve_legacy_caller_id()
+        )
         resolved_caller_id, caller_id_source = resolve_originating_caller(
-            legacy_caller_id=legacy_caller_id
+            legacy_caller_id=effective_legacy_caller_id
         )
         dict_context_metadata: dict[str, ObservabilityMetadataValue] = dict(
             dict_metadata or {}
@@ -481,6 +486,24 @@ class AIVoiceBase(BaseModel, ABC):
             # Early return with the configured default voice model identifier.
             return self.default_model_id
         # Early return because no voice model identifier is currently available.
+        return None
+
+    def _resolve_legacy_caller_id(self) -> str | None:
+        """
+        Resolves the vendor-configured legacy caller identifier for observability attribution.
+
+        Voice providers are pydantic models, so a vendor base class listed after
+        `AIVoiceBase` in the MRO never has its `__init__` run and never gets to
+        assign attributes such as `user`. Providers therefore override this hook
+        instead of reading vendor state directly at the call site.
+
+        Args:
+            None
+
+        Returns:
+            Vendor-configured legacy caller identifier, or None when the vendor has no such setting.
+        """
+        # Normal return because the vendor exposes no legacy caller identifier by default.
         return None
 
     def _resolve_observability_provider_vendor(self) -> str:

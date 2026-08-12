@@ -24,6 +24,8 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 RETRY_POLICY_KEY: str = "COMPLETIONS_RETRY_POLICY"
 OPENAI_BASE_URL_OVERRIDE_SETTING: str = "OPENAI_BASE_URL_OVERRIDE"
+OPENAI_USER_SETTING_KEY: str = "OPENAI_USER"
+DEFAULT_OPENAI_USER: str = "default_user"
 OPENAI_ME_PATH: str = "/me"
 OPENAI_ORG_ID_RESPONSE_HEADER: str = "openai-organization"
 ORG_RESOLUTION_TIMEOUT_SECONDS: float = 10.0
@@ -68,7 +70,7 @@ class AIOpenAIBase:
         """
         self.env = EnvSettings()
         self.api_key = self.env.get_setting("OPENAI_API_KEY")
-        self.user = self.env.get_setting("OPENAI_USER", "default_user")
+        self.user = self.env.get_setting(OPENAI_USER_SETTING_KEY, DEFAULT_OPENAI_USER)
         if not self.api_key or self.api_key.strip() == "":
             raise ValueError("OPENAI_API_KEY environment variable must be set.")
         self.base_url = self.get_api_base_url(base_url=base_url)

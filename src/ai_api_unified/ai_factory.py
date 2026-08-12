@@ -30,6 +30,8 @@ from .ai_provider_registry import (
     get_ai_provider_spec,
 )
 from .util.env_settings import EnvSettings
+from .voice.ai_voice_base import AIVoiceBase
+from .voice.ai_voice_factory import AIVoiceFactory
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ FROZENSET_BASE_URL_OVERRIDE_COMPLETIONS_ENGINES: frozenset[str] = frozenset(
     {"claude", "openai", "openai-responses", "google-gemini"}
 )
 VIDEO_ENGINE_KEY: str = "VIDEO_ENGINE"
+AI_VOICE_ENGINE_KEY: str = "AI_VOICE_ENGINE"
 
 
 def _is_python_module_available(str_module_name: str) -> bool:
@@ -547,3 +550,28 @@ class AIFactory:
             raise
         except AiProviderRuntimeError:
             raise
+
+    @staticmethod
+    def get_ai_voice_client(
+        voice_engine: str | None = None,
+    ) -> AIVoiceBase:
+        """
+        Instantiates the configured voice (text-to-speech) client.
+
+        Delegates to AIVoiceFactory, which owns voice provider construction, so
+        every capability is reachable from the same factory.
+
+        Args:
+            voice_engine: Optional engine override; falls back to AI_VOICE_ENGINE config.
+
+        Returns:
+            Concrete AIVoiceBase implementation for the requested voice engine.
+        """
+        env_settings: EnvSettings = EnvSettings()
+        str_voice_engine: str = AIFactory._resolve_required_engine(
+            env_settings=env_settings,
+            str_engine_key=AI_VOICE_ENGINE_KEY,
+            str_engine_override=voice_engine,
+        )
+        # Normal return with the voice client resolved by the voice factory.
+        return AIVoiceFactory.create(str_voice_engine)

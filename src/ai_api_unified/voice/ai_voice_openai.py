@@ -8,12 +8,22 @@ from io import BytesIO
 from time import time
 from typing import Any, ClassVar
 
-from openai import BadRequestError, OpenAI, OpenAIError, RateLimitError
+from openai import AsyncOpenAI, BadRequestError, OpenAI, OpenAIError, RateLimitError
 from openai.types.audio import (
     TranscriptionCreateResponse,
 )
-from pydantic import Field
-from ai_api_unified.ai_openai_base import AIOpenAIBase
+from pydantic import Field, PrivateAttr
+from ai_api_unified.ai_base import (
+    RETRY_POLICY_DEFAULT,
+    RETRY_POLICY_NONE,
+    normalize_retry_policy,
+)
+from ai_api_unified.ai_openai_base import (
+    AIOpenAIBase,
+    DEFAULT_OPENAI_USER,
+    OPENAI_USER_SETTING_KEY,
+    RETRY_POLICY_KEY,
+)
 from ai_api_unified.util._lazy_pydub import AudioSegment, get_CouldntDecodeError
 
 from .ai_voice_base import (
@@ -63,6 +73,18 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
 
     default_model_id: str = Field("tts-1-hd", description="Default OpenAI TTS model")
 
+    # AIOpenAIBase.__init__ never runs for this class: pydantic's BaseModel sits
+    # ahead of it in the MRO and does not chain to super(). Every attribute that
+    # initializer would assign is therefore established here instead, so the
+    # inherited AIOpenAIBase surface (async_client, organization lookup) works.
+    _env: EnvSettings | None = PrivateAttr(default=None)
+    _api_key: str = PrivateAttr(default="")
+    _user: str = PrivateAttr(default=DEFAULT_OPENAI_USER)
+    _base_url: str = PrivateAttr(default="")
+    _retry_policy: str = PrivateAttr(default=RETRY_POLICY_DEFAULT)
+    _backoff_delays: list[int] = PrivateAttr(default_factory=lambda: [1, 2, 4, 8, 16])
+    _async_client: AsyncOpenAI | None = PrivateAttr(default=None)
+
     def __init__(self, *, engine: str, **kwargs: Any) -> None:
         super().__init__(engine=engine, **kwargs)
         env: EnvSettings = EnvSettings()
@@ -71,7 +93,21 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
             raise RuntimeError("OPENAI_API_KEY is not set")
 
         base_url: str = self.get_api_base_url()
-        self.client: OpenAI = OpenAI(api_key=api_key, base_url=base_url)
+        self._env = env
+        self._api_key = api_key
+        self._user = env.get_setting(OPENAI_USER_SETTING_KEY, DEFAULT_OPENAI_USER)
+        self._base_url = base_url
+        self._retry_policy = normalize_retry_policy(
+            str(env.get_setting(RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT))
+        )
+
+        dict_client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url,
+        }
+        if self._retry_policy == RETRY_POLICY_NONE:
+            dict_client_kwargs["max_retries"] = 0
+        self.client: OpenAI = OpenAI(**dict_client_kwargs)
 
         # Supported formats – all 24 kHz output
         self.list_output_formats: list[AudioFormat] = [
@@ -144,6 +180,49 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
         self.list_models_capabilities = self._initialize_models_and_capabilities()
 
         self.selected_model: AIVoiceModelBase = self.get_default_model()
+
+    @property
+    def env(self) -> EnvSettings | None:
+        """Environment accessor resolved at construction, mirroring AIOpenAIBase."""
+        return self._env
+
+    @property
+    def api_key(self) -> str:
+        """OpenAI API key resolved at construction, mirroring AIOpenAIBase."""
+        return self._api_key
+
+    @property
+    def user(self) -> str:
+        """Configured OPENAI_USER value, mirroring AIOpenAIBase."""
+        return self._user
+
+    @property
+    def base_url(self) -> str:
+        """Resolved OpenAI base URL, mirroring AIOpenAIBase."""
+        return self._base_url
+
+    @property
+    def retry_policy(self) -> str:
+        """Normalized retry policy applied to the SDK clients, mirroring AIOpenAIBase."""
+        return self._retry_policy
+
+    @property
+    def backoff_delays(self) -> list[int]:
+        """Caller-owned backoff schedule, mirroring AIOpenAIBase."""
+        return self._backoff_delays
+
+    def _resolve_legacy_caller_id(self) -> str | None:
+        """
+        Resolves the OPENAI_USER attribution value captured during construction.
+
+        Args:
+            None
+
+        Returns:
+            Configured OPENAI_USER value, or None when the client was built without one.
+        """
+        # Normal return with the OPENAI_USER value resolved at construction time.
+        return self.user
 
     def _initialize_models_and_capabilities(self) -> list[AIVoiceModelBase]:
         """
@@ -284,16 +363,19 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
         model_id: str = (
             self.selected_model.name if self.selected_model else self.default_model_id
         )
-        response = self.client.audio.speech.create(
+        # Streaming goes through with_streaming_response; speech.create() takes no
+        # `stream` argument in any openai 2.x release and raises TypeError if given one.
+        with self.client.audio.speech.with_streaming_response.create(
             model=model_id,
             voice=voice.voice_id,
             input=text_to_convert,
             response_format=self._format_to_response_key(audio_format),
             speed=1.0,
-            stream=True,
             instructions=self.DEFAULT_INSTRUCTIONS,
-        )
-        combined_audio_bytes: bytes = b"".join(chunk for chunk in response.iter_bytes())
+        ) as response:
+            combined_audio_bytes: bytes = b"".join(
+                chunk for chunk in response.iter_bytes()
+            )
         if not is_hex_enabled():
             self._play_bytes(combined_audio_bytes)
         # Normal return with the fully aggregated streaming audio payload.
@@ -333,7 +415,6 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
                 ),
                 provider_elapsed_ms=provider_elapsed_ms,
             ),
-            legacy_caller_id=self.user,
         )
         # Normal return with caller-facing audio bytes after optional observability wrapping.
         return audio_bytes
@@ -369,7 +450,6 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
                 ),
                 provider_elapsed_ms=provider_elapsed_ms,
             ),
-            legacy_caller_id=self.user,
         )
         # Normal return with aggregated streaming audio bytes after optional observability wrapping.
         return audio_bytes
