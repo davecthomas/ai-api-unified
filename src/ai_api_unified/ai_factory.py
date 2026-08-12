@@ -31,7 +31,7 @@ from .ai_provider_registry import (
 )
 from .util.env_settings import EnvSettings
 from .voice.ai_voice_base import AIVoiceBase
-from .voice.ai_voice_factory import AIVoiceFactory
+from .voice.ai_voice_factory import AI_VOICE_ENGINE_ENV_KEY, AIVoiceFactory
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -54,7 +54,6 @@ FROZENSET_BASE_URL_OVERRIDE_COMPLETIONS_ENGINES: frozenset[str] = frozenset(
     {"claude", "openai", "openai-responses", "google-gemini"}
 )
 VIDEO_ENGINE_KEY: str = "VIDEO_ENGINE"
-AI_VOICE_ENGINE_KEY: str = "AI_VOICE_ENGINE"
 
 
 def _is_python_module_available(str_module_name: str) -> bool:
@@ -570,7 +569,7 @@ class AIFactory:
         env_settings: EnvSettings = EnvSettings()
         str_voice_engine: str = AIFactory._resolve_required_engine(
             env_settings=env_settings,
-            str_engine_key=AI_VOICE_ENGINE_KEY,
+            str_engine_key=AI_VOICE_ENGINE_ENV_KEY,
             str_engine_override=voice_engine,
         )
         # Normal return with the voice client resolved by the voice factory.

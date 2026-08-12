@@ -748,9 +748,15 @@ explicit `voice_engine` override, matching the other capability constructors.
 It delegates to `AIVoiceFactory.create()`, which remains supported and callable
 with no arguments.
 
-Calls are attributed to `OPENAI_USER` on the OpenAI engine. The other voice
-engines expose no vendor user setting, so their calls carry no originating
-caller id unless the application sets one through the observability context.
+Calls are attributed to `OPENAI_USER` on the OpenAI engine, falling back to the
+`default_user` sentinel when it is unset — the same behavior the OpenAI
+completions, embeddings, images, and videos clients already have. The other
+voice engines expose no vendor user setting, so their calls carry no
+originating caller id unless the application sets one through the
+observability context.
+
+The OpenAI voice client also honors `COMPLETIONS_RETRY_POLICY`, since it shares
+`AIOpenAIBase`; set it to `none` to disable SDK-level retries for voice as well.
 
 ## Configuration
 

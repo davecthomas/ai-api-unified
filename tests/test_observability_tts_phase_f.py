@@ -17,6 +17,7 @@ pytest.importorskip("google.genai")
 pytest.importorskip("google.cloud.texttospeech")
 pytest.importorskip("google.cloud.speech_v1p1beta1")
 
+import ai_api_unified.ai_openai_base as ai_openai_base_module
 import ai_api_unified.voice.ai_voice_elevenlabs as ai_voice_elevenlabs_module
 import ai_api_unified.voice.ai_voice_openai as ai_voice_openai_module
 from ai_api_unified.middleware.observability import (
@@ -212,9 +213,14 @@ def _build_openai_voice_client(
         OPENAI_USER_SETTING_KEY: TEST_LEGACY_CALLER_ID,
     }.get(key, default)
 
+    # AIOpenAIBase.get_api_base_url builds its own EnvSettings from its own module,
+    # so patching only the voice module would let this read the ambient env and .env.
     with (
         patch.object(
             ai_voice_openai_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(
+            ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
         ),
         patch.object(ai_voice_openai_module, "OpenAI", return_value=SimpleNamespace()),
     ):

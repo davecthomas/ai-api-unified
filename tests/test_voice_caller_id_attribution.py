@@ -21,8 +21,10 @@ pytest.importorskip("google.genai")
 pytest.importorskip("google.cloud.texttospeech")
 pytest.importorskip("google.cloud.speech_v1p1beta1")
 
+import ai_api_unified.ai_openai_base as ai_openai_base_module
 import ai_api_unified.voice.ai_voice_openai as ai_voice_openai_module
-from ai_api_unified.ai_openai_base import OPENAI_USER_SETTING_KEY
+from ai_api_unified.ai_base import RETRY_POLICY_DEFAULT
+from ai_api_unified.ai_openai_base import OPENAI_USER_SETTING_KEY, RETRY_POLICY_KEY
 from ai_api_unified.voice.ai_voice_azure import AIVoiceAzure
 from ai_api_unified.voice.ai_voice_base import AIVoiceBase
 from ai_api_unified.voice.ai_voice_elevenlabs import AIVoiceElevenLabs
@@ -91,9 +93,14 @@ def _build_openai_voice_client() -> AIVoiceOpenAI:
         OPENAI_USER_SETTING_KEY: TEST_OPENAI_USER,
     }.get(key, default)
 
+    # AIOpenAIBase.get_api_base_url builds its own EnvSettings from its own module,
+    # so patching only the voice module would let this read the ambient env and .env.
     with (
         patch.object(
             ai_voice_openai_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(
+            ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
         ),
         patch.object(ai_voice_openai_module, "OpenAI", return_value=SimpleNamespace()),
     ):
@@ -213,6 +220,75 @@ def test_base_resolver_defaults_to_no_legacy_caller_id() -> None:
             return ""
 
     assert ConcreteVoiceClient.model_construct()._resolve_legacy_caller_id() is None
+
+
+@pytest.mark.parametrize(
+    "object_configured_retry_policy",
+    ["", "   ", None],
+    ids=["blank", "whitespace", "unset"],
+)
+def test_blank_retry_policy_setting_falls_back_to_default(
+    object_configured_retry_policy: object,
+) -> None:
+    """
+    Verify a present-but-blank COMPLETIONS_RETRY_POLICY does not break construction.
+
+    `EnvSettings.get_setting` returns the empty string rather than the default
+    when a key is present and blank, and the empty string is not a valid policy.
+
+    Args:
+        object_configured_retry_policy: Blank-ish configured retry policy value.
+
+    Returns:
+        None after asserting the client builds and reports the default policy.
+    """
+    mock_env_settings: Mock = Mock()
+    mock_env_settings.get_setting.side_effect = lambda key, default=None: {
+        "OPENAI_API_KEY": "test-openai-api-key",
+        OPENAI_USER_SETTING_KEY: TEST_OPENAI_USER,
+        RETRY_POLICY_KEY: object_configured_retry_policy,
+    }.get(key, default)
+
+    with (
+        patch.object(
+            ai_voice_openai_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(
+            ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(ai_voice_openai_module, "OpenAI", return_value=SimpleNamespace()),
+    ):
+        ai_voice_client: AIVoiceOpenAI = AIVoiceOpenAI(engine="openai")
+
+    assert ai_voice_client.retry_policy == RETRY_POLICY_DEFAULT
+
+
+def test_vendor_attributes_stay_writable_like_sibling_capabilities() -> None:
+    """
+    Verify the mirrored AIOpenAIBase attributes accept assignment.
+
+    Existing suites reassign these on completions, embeddings, and images
+    clients, so voice keeps the same writable surface.
+
+    Args:
+        None
+
+    Returns:
+        None after asserting each mirrored attribute round-trips a new value.
+    """
+    ai_voice_client: AIVoiceOpenAI = _build_openai_voice_client()
+
+    ai_voice_client.backoff_delays = [0]
+    ai_voice_client.api_key = "rotated-key"
+    ai_voice_client.user = "rotated-user"
+    ai_voice_client.retry_policy = RETRY_POLICY_DEFAULT
+    ai_voice_client.base_url = "https://example.invalid/v1"
+
+    assert ai_voice_client.backoff_delays == [0]
+    assert ai_voice_client.api_key == "rotated-key"
+    assert ai_voice_client.user == "rotated-user"
+    assert ai_voice_client._resolve_legacy_caller_id() == "rotated-user"
+    assert ai_voice_client.base_url == "https://example.invalid/v1"
 
 
 def test_openai_provider_resolves_configured_user_as_caller_id() -> None:
