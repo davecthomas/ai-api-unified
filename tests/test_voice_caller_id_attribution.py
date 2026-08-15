@@ -23,8 +23,12 @@ pytest.importorskip("google.cloud.speech_v1p1beta1")
 
 import ai_api_unified.ai_openai_base as ai_openai_base_module
 import ai_api_unified.voice.ai_voice_openai as ai_voice_openai_module
-from ai_api_unified.ai_base import RETRY_POLICY_DEFAULT
-from ai_api_unified.ai_openai_base import OPENAI_USER_SETTING_KEY, RETRY_POLICY_KEY
+from ai_api_unified.ai_base import RETRY_POLICY_DEFAULT, RETRY_POLICY_NONE
+from ai_api_unified.ai_openai_base import (
+    OPENAI_BASE_URL_OVERRIDE_SETTING,
+    OPENAI_USER_SETTING_KEY,
+    RETRY_POLICY_KEY,
+)
 from ai_api_unified.voice.ai_voice_azure import AIVoiceAzure
 from ai_api_unified.voice.ai_voice_base import AIVoiceBase
 from ai_api_unified.voice.ai_voice_elevenlabs import AIVoiceElevenLabs
@@ -32,6 +36,24 @@ from ai_api_unified.voice.ai_voice_google import AIVoiceGoogle
 from ai_api_unified.voice.ai_voice_openai import AIVoiceOpenAI
 
 TEST_OPENAI_USER: str = "voice-attribution-user"
+TEST_OPENAI_API_KEY: str = "sk-voice-attribution-test-key"
+TEST_OPENAI_BASE_URL: str = "https://voice-attribution.invalid/v1"
+
+# Every attribute AIOpenAIBase.__init__ assigns, split by how the guard below
+# proves the provider re-established it. Presence alone proves nothing now that
+# each name is backed by a class-level property with a PrivateAttr default, so
+# config-derived attributes are checked by value against distinctive inputs.
+DICT_EXPECTED_CONSTRUCTED_VALUES: dict[str, object] = {
+    "api_key": TEST_OPENAI_API_KEY,
+    "user": TEST_OPENAI_USER,
+    "base_url": TEST_OPENAI_BASE_URL,
+    "retry_policy": RETRY_POLICY_DEFAULT,
+}
+# Attributes whose constructed value legitimately equals the unconstructed
+# default, so a value assertion would prove nothing.
+FROZENSET_PRESENCE_ONLY_ATTRIBUTES: frozenset[str] = frozenset(
+    {"env", "client", "backoff_delays", "_async_client"}
+)
 
 LIST_VOICE_PROVIDER_CLASSES: list[type[AIVoiceBase]] = [
     AIVoiceOpenAI,
@@ -89,8 +111,9 @@ def _build_openai_voice_client() -> AIVoiceOpenAI:
     """
     mock_env_settings: Mock = Mock()
     mock_env_settings.get_setting.side_effect = lambda key, default=None: {
-        "OPENAI_API_KEY": "test-openai-api-key",
+        "OPENAI_API_KEY": TEST_OPENAI_API_KEY,
         OPENAI_USER_SETTING_KEY: TEST_OPENAI_USER,
+        OPENAI_BASE_URL_OVERRIDE_SETTING: TEST_OPENAI_BASE_URL,
     }.get(key, default)
 
     # AIOpenAIBase.get_api_base_url builds its own EnvSettings from its own module,
@@ -102,7 +125,7 @@ def _build_openai_voice_client() -> AIVoiceOpenAI:
         patch.object(
             ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
         ),
-        patch.object(ai_voice_openai_module, "OpenAI", return_value=SimpleNamespace()),
+        patch.object(ai_openai_base_module, "OpenAI", return_value=SimpleNamespace()),
     ):
         # Normal return with a constructor-initialized OpenAI voice client.
         return AIVoiceOpenAI(engine="openai")
@@ -163,6 +186,27 @@ def test_skipped_vendor_initializer_state_is_reestablished(
                 "and never runs. Re-establish that attribute in "
                 f"{class_voice_provider.__name__}.__init__ or the first inherited "
                 "method that reads it raises AttributeError."
+            )
+            if str_attribute_name in FROZENSET_PRESENCE_ONLY_ATTRIBUTES:
+                continue
+            assert str_attribute_name in DICT_EXPECTED_CONSTRUCTED_VALUES, (
+                f"{str_base_name}.__init__ assigns '{str_attribute_name}', which this "
+                "guard does not yet classify. Add it to "
+                "DICT_EXPECTED_CONSTRUCTED_VALUES with the value the provider should "
+                "resolve, or to FROZENSET_PRESENCE_ONLY_ATTRIBUTES when its "
+                "constructed value equals the default."
+            )
+            # Presence is satisfied by the class-level property alone, so compare
+            # against a distinctive input: this is what fails when the provider
+            # constructor stops assigning the attribute.
+            assert (
+                getattr(ai_voice_client, str_attribute_name)
+                == DICT_EXPECTED_CONSTRUCTED_VALUES[str_attribute_name]
+            ), (
+                f"{class_voice_provider.__name__}.__init__ left '{str_attribute_name}' "
+                f"at its default instead of the value {str_base_name}.__init__ would "
+                "have resolved. The attribute reads as present because a property "
+                "backs it, so only the value proves the constructor set it."
             )
 
 
@@ -256,11 +300,49 @@ def test_blank_retry_policy_setting_falls_back_to_default(
         patch.object(
             ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
         ),
-        patch.object(ai_voice_openai_module, "OpenAI", return_value=SimpleNamespace()),
+        patch.object(ai_openai_base_module, "OpenAI", return_value=SimpleNamespace()),
     ):
         ai_voice_client: AIVoiceOpenAI = AIVoiceOpenAI(engine="openai")
 
     assert ai_voice_client.retry_policy == RETRY_POLICY_DEFAULT
+
+
+def test_constructor_kwargs_reach_the_shared_initializer() -> None:
+    """
+    Verify base_url and retry_policy kwargs are honored rather than swallowed.
+
+    `AIVoiceBase` ignores unknown model kwargs, so these were silently dropped
+    while every other AIOpenAIBase consumer honored them.
+
+    Args:
+        None
+
+    Returns:
+        None after asserting both kwargs reach the constructed client.
+    """
+    mock_env_settings: Mock = Mock()
+    mock_env_settings.get_setting.side_effect = lambda key, default=None: {
+        "OPENAI_API_KEY": TEST_OPENAI_API_KEY,
+        OPENAI_USER_SETTING_KEY: TEST_OPENAI_USER,
+    }.get(key, default)
+
+    with (
+        patch.object(
+            ai_voice_openai_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(
+            ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(ai_openai_base_module, "OpenAI", return_value=SimpleNamespace()),
+    ):
+        ai_voice_client: AIVoiceOpenAI = AIVoiceOpenAI(
+            engine="openai",
+            base_url="https://gateway.invalid/v1",
+            retry_policy=RETRY_POLICY_NONE,
+        )
+
+    assert ai_voice_client.base_url == "https://gateway.invalid/v1"
+    assert ai_voice_client.retry_policy == RETRY_POLICY_NONE
 
 
 def test_vendor_attributes_stay_writable_like_sibling_capabilities() -> None:

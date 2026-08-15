@@ -222,7 +222,7 @@ def _build_openai_voice_client(
         patch.object(
             ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
         ),
-        patch.object(ai_voice_openai_module, "OpenAI", return_value=SimpleNamespace()),
+        patch.object(ai_openai_base_module, "OpenAI", return_value=SimpleNamespace()),
     ):
         ai_voice_openai: AIVoiceOpenAI = AIVoiceOpenAI(engine="openai")
 

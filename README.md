@@ -755,8 +755,22 @@ voice engines expose no vendor user setting, so their calls carry no
 originating caller id unless the application sets one through the
 observability context.
 
-The OpenAI voice client also honors `COMPLETIONS_RETRY_POLICY`, since it shares
-`AIOpenAIBase`; set it to `none` to disable SDK-level retries for voice as well.
+The OpenAI voice client shares `AIOpenAIBase` with the other OpenAI-backed
+capabilities, so it honors `COMPLETIONS_RETRY_POLICY` and `OPENAI_BASE_URL_OVERRIDE`,
+and accepts the same `retry_policy` and `base_url` constructor arguments:
+
+```python
+from ai_api_unified.voice.ai_voice_openai import AIVoiceOpenAI
+
+voice = AIVoiceOpenAI(
+    engine="openai",
+    base_url="https://gateway.example.com/v1",
+    retry_policy="none",
+)
+```
+
+A blank retry-policy setting (`COMPLETIONS_RETRY_POLICY=`) is treated as
+unconfigured and falls back to `default` across every OpenAI-backed capability.
 
 ## Configuration
 

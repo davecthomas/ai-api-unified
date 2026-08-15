@@ -8,21 +8,15 @@ from io import BytesIO
 from time import sleep
 from typing import Any, ClassVar
 
-from openai import AsyncOpenAI, BadRequestError, OpenAI, OpenAIError, RateLimitError
+from openai import AsyncOpenAI, BadRequestError, OpenAIError, RateLimitError
 from openai.types.audio import (
     TranscriptionCreateResponse,
 )
 from pydantic import Field, PrivateAttr
-from ai_api_unified.ai_base import (
-    RETRY_POLICY_DEFAULT,
-    RETRY_POLICY_NONE,
-    normalize_retry_policy,
-)
+from ai_api_unified.ai_base import RETRY_POLICY_DEFAULT
 from ai_api_unified.ai_openai_base import (
     AIOpenAIBase,
     DEFAULT_OPENAI_USER,
-    OPENAI_USER_SETTING_KEY,
-    RETRY_POLICY_KEY,
 )
 from ai_api_unified.util._lazy_pydub import AudioSegment, get_CouldntDecodeError
 
@@ -73,10 +67,11 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
 
     default_model_id: str = Field("tts-1-hd", description="Default OpenAI TTS model")
 
-    # AIOpenAIBase.__init__ never runs for this class: pydantic's BaseModel sits
-    # ahead of it in the MRO and does not chain to super(). Every attribute that
-    # initializer would assign is therefore established here instead, so the
-    # inherited AIOpenAIBase surface (async_client, organization lookup) works.
+    # AIOpenAIBase.__init__ never runs implicitly for this class: pydantic's
+    # BaseModel sits ahead of it in the MRO and does not chain to super(), so the
+    # constructor invokes it explicitly. These private attributes back the
+    # property pairs below, which is what lets that initializer's plain
+    # `self.<name> = ...` assignments land on a pydantic model.
     _env: EnvSettings | None = PrivateAttr(default=None)
     _api_key: str = PrivateAttr(default="")
     _user: str = PrivateAttr(default=DEFAULT_OPENAI_USER)
@@ -85,37 +80,26 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
     _backoff_delays: list[int] = PrivateAttr(default_factory=lambda: [1, 2, 4, 8, 16])
     _async_client: AsyncOpenAI | None = PrivateAttr(default=None)
 
-    def __init__(self, *, engine: str, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        engine: str,
+        retry_policy: str | None = None,
+        base_url: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(engine=engine, **kwargs)
-        env: EnvSettings = EnvSettings()
-        api_key: str = env.get_setting("OPENAI_API_KEY", "")
-        if not api_key:
+        if not EnvSettings().get_setting("OPENAI_API_KEY", ""):
             raise RuntimeError("OPENAI_API_KEY is not set")
 
-        base_url: str = self.get_api_base_url()
-        self._env = env
-        self._api_key = api_key
-        self._user = env.get_setting(OPENAI_USER_SETTING_KEY, DEFAULT_OPENAI_USER)
-        self._base_url = base_url
-        # A key present but blank makes get_setting return "" instead of the
-        # default, and "" is not a valid policy, so fall back explicitly.
-        object_retry_policy: object = env.get_setting(
-            RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT
+        # Invoke the shared initializer rather than copying it: a duplicate drifts
+        # from the base the moment either side changes, and every attribute it
+        # assigns routes through this class's property setters.
+        AIOpenAIBase.__init__(
+            self,
+            retry_policy=retry_policy,
+            base_url=base_url,
         )
-        str_retry_policy: str = (
-            str(object_retry_policy).strip() if object_retry_policy is not None else ""
-        )
-        self._retry_policy = normalize_retry_policy(
-            str_retry_policy or RETRY_POLICY_DEFAULT
-        )
-
-        dict_client_kwargs: dict[str, Any] = {
-            "api_key": api_key,
-            "base_url": base_url,
-        }
-        if self._retry_policy == RETRY_POLICY_NONE:
-            dict_client_kwargs["max_retries"] = 0
-        self.client: OpenAI = OpenAI(**dict_client_kwargs)
 
         # Supported formats – all 24 kHz output
         self.list_output_formats: list[AudioFormat] = [
