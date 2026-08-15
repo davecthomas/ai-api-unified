@@ -81,22 +81,23 @@ class AIOpenAIBase:
             raise ValueError("OPENAI_API_KEY environment variable must be set.")
         self.base_url = self.get_api_base_url(base_url=base_url)
 
-        # get_setting returns "" for a key that is present but blank, not the
-        # default, and "" is not a valid policy. Treat blank as unconfigured so a
-        # stray `COMPLETIONS_RETRY_POLICY=` line cannot break client construction.
-        object_configured_policy: object = (
-            retry_policy
-            if retry_policy is not None
-            else self.env.get_setting(RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT)
-        )
-        str_candidate: str = (
-            str(object_configured_policy).strip()
-            if object_configured_policy is not None
-            else ""
-        )
-        self.retry_policy: str = normalize_retry_policy(
-            str_candidate or RETRY_POLICY_DEFAULT
-        )
+        # An explicit argument is validated as given: a caller passing "" made a
+        # mistake and should hear about it. Only the environment value treats
+        # blank as unconfigured, because get_setting returns "" rather than the
+        # default for a present-but-blank key, and a stray
+        # `COMPLETIONS_RETRY_POLICY=` line must not break client construction.
+        str_candidate: str
+        if retry_policy is not None:
+            str_candidate = retry_policy
+        else:
+            object_env_policy: object = self.env.get_setting(
+                RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT
+            )
+            str_env_policy: str = (
+                str(object_env_policy).strip() if object_env_policy is not None else ""
+            )
+            str_candidate = str_env_policy or RETRY_POLICY_DEFAULT
+        self.retry_policy: str = normalize_retry_policy(str_candidate)
         dict_client_kwargs: dict[str, Any] = {
             "api_key": self.api_key,
             "base_url": self.base_url,

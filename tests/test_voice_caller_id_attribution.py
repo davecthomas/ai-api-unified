@@ -360,6 +360,37 @@ def test_constructor_kwargs_reach_the_shared_initializer() -> None:
     assert ai_voice_client.retry_policy == RETRY_POLICY_NONE
 
 
+def test_explicit_blank_retry_policy_is_still_rejected() -> None:
+    """
+    Verify the blank-is-unconfigured rule applies to config, not to a caller argument.
+
+    A caller passing an empty retry policy made a mistake; silently defaulting
+    would leave SDK retries enabled when they meant to configure them.
+
+    Args:
+        None
+
+    Returns:
+        None after asserting an explicit blank policy raises.
+    """
+    mock_env_settings: Mock = Mock()
+    mock_env_settings.get_setting.side_effect = lambda key, default=None: {
+        "OPENAI_API_KEY": TEST_OPENAI_API_KEY,
+    }.get(key, default)
+
+    with (
+        patch.object(
+            ai_voice_openai_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(
+            ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(ai_openai_base_module, "OpenAI", return_value=SimpleNamespace()),
+    ):
+        with pytest.raises(ValueError, match="Unsupported retry policy"):
+            AIVoiceOpenAI(engine="openai", retry_policy="")
+
+
 def test_vendor_attributes_stay_writable_like_sibling_capabilities() -> None:
     """
     Verify the mirrored AIOpenAIBase attributes accept assignment.

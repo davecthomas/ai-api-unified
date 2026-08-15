@@ -53,9 +53,6 @@ VIDEO_MODEL_NAME_KEY: str = "VIDEO_MODEL_NAME"
 FROZENSET_BASE_URL_OVERRIDE_COMPLETIONS_ENGINES: frozenset[str] = frozenset(
     {"claude", "openai", "openai-responses", "google-gemini"}
 )
-# Only the OpenAI voice provider shares AIOpenAIBase, so it is the one voice
-# engine whose constructor accepts a base-URL override or a retry policy.
-FROZENSET_BASE_URL_OVERRIDE_VOICE_ENGINES: frozenset[str] = frozenset({"openai"})
 VIDEO_ENGINE_KEY: str = "VIDEO_ENGINE"
 
 
@@ -580,18 +577,12 @@ class AIFactory:
             str_engine_override=voice_engine,
         )
 
+        # AIVoiceFactory owns the per-engine support check, since it is the
+        # layer that accepts and forwards these arguments.
         dict_provider_kwargs: dict[str, Any] = {}
         if base_url is not None:
-            AIFactory._require_base_url_override_support(
-                str_engine=str_voice_engine,
-                frozenset_supported=FROZENSET_BASE_URL_OVERRIDE_VOICE_ENGINES,
-            )
             dict_provider_kwargs["base_url"] = base_url
         if retry_policy is not None:
-            AIFactory._require_base_url_override_support(
-                str_engine=str_voice_engine,
-                frozenset_supported=FROZENSET_BASE_URL_OVERRIDE_VOICE_ENGINES,
-            )
             dict_provider_kwargs["retry_policy"] = retry_policy
         # Normal return with the voice client resolved by the voice factory.
         return AIVoiceFactory.create(str_voice_engine, **dict_provider_kwargs)

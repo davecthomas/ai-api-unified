@@ -114,15 +114,54 @@ class TestAiFactoryVoiceClient:
     @pytest.mark.parametrize(
         "str_unsupported_engine", ["google", "azure", "elevenlabs"]
     )
-    def test_base_url_rejected_for_engines_that_cannot_honor_it(
-        self, str_unsupported_engine: str
+    @pytest.mark.parametrize(
+        "str_kwarg_name, object_kwarg_value",
+        [("base_url", "https://gateway.invalid/v1"), ("retry_policy", "none")],
+    )
+    def test_provider_kwargs_rejected_for_engines_that_cannot_honor_them(
+        self,
+        str_unsupported_engine: str,
+        str_kwarg_name: str,
+        object_kwarg_value: object,
     ) -> None:
-        """Engines without an AIOpenAIBase constructor must reject the override."""
-        with pytest.raises(AiProviderCapabilityUnsupportedError):
+        """Engines without an AIOpenAIBase constructor must reject these arguments."""
+        with pytest.raises(AiProviderCapabilityUnsupportedError) as exception_info:
             AIFactory.get_ai_voice_client(
                 voice_engine=str_unsupported_engine,
-                base_url="https://gateway.invalid/v1",
+                **{str_kwarg_name: object_kwarg_value},
             )
+
+        # The message must name the argument the caller actually passed.
+        assert str_kwarg_name in str(exception_info.value)
+
+    @pytest.mark.parametrize(
+        "str_unsupported_engine", ["google", "azure", "elevenlabs"]
+    )
+    def test_voice_factory_create_rejects_unsupported_provider_kwargs(
+        self, str_unsupported_engine: str
+    ) -> None:
+        """The guard belongs to the factory that accepts the kwargs, not only AIFactory.
+
+        AIVoiceBase ignores unknown model fields, so an unguarded override here
+        would be dropped in silence.
+        """
+        with pytest.raises(AiProviderCapabilityUnsupportedError):
+            AIVoiceFactory.create(
+                str_unsupported_engine, base_url="https://gateway.invalid/v1"
+            )
+
+    def test_base_url_rejection_reports_its_own_reason(self) -> None:
+        """A rejected base URL must not surface as an unsupported-engine error.
+
+        Provider construction raises AiProviderConfigurationError for reasons
+        unrelated to engine resolution, and the plaintext-credential rejection
+        is one of them.
+        """
+        with pytest.raises(AiProviderConfigurationError) as exception_info:
+            AIVoiceFactory.create("openai", base_url="http://insecure.invalid/v1")
+
+        assert "https://" in str(exception_info.value)
+        assert "Unsupported AI_VOICE_ENGINE" not in str(exception_info.value)
 
     def test_voice_factory_create_remains_callable_without_arguments(self) -> None:
         """The pre-existing no-argument AIVoiceFactory.create contract must still hold."""
