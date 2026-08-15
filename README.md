@@ -737,11 +737,19 @@ Frame extraction requires the optional `video_frames` extra.
 from ai_api_unified import AIFactory, AIVoiceBase
 
 voice: AIVoiceBase = AIFactory.get_ai_voice_client()
-audio_bytes: bytes = voice.text_to_speech("Hello from ai-api-unified")
+audio_bytes: bytes = voice.text_to_voice(
+    text_to_convert="Hello from ai-api-unified",
+    voice=voice.get_default_voice(),
+    audio_format=voice.default_audio_format,
+)
 
-with open("out.wav", "wb") as output_file:
+with open(f"out{voice.default_audio_format.file_extension}", "wb") as output_file:
     output_file.write(audio_bytes)
 ```
+
+`text_to_voice` is keyword-only, and `voice` and `audio_format` are required;
+`get_default_voice()` and `default_audio_format` supply the provider's own
+defaults. Use `stream_audio(text)` for the streaming variant.
 
 `AIFactory.get_ai_voice_client()` reads `AI_VOICE_ENGINE` and accepts an
 explicit `voice_engine` override, matching the other capability constructors.
@@ -760,14 +768,16 @@ capabilities, so it honors `COMPLETIONS_RETRY_POLICY` and `OPENAI_BASE_URL_OVERR
 and accepts the same `retry_policy` and `base_url` constructor arguments:
 
 ```python
-from ai_api_unified.voice.ai_voice_openai import AIVoiceOpenAI
-
-voice = AIVoiceOpenAI(
-    engine="openai",
+voice = AIFactory.get_ai_voice_client(
+    voice_engine="openai",
     base_url="https://gateway.example.com/v1",
     retry_policy="none",
 )
 ```
+
+Only the `openai` voice engine accepts these; passing them to `google`,
+`azure`, or `elevenlabs` raises `AiProviderCapabilityUnsupportedError` rather
+than ignoring them.
 
 A blank retry-policy setting (`COMPLETIONS_RETRY_POLICY=`) is treated as
 unconfigured and falls back to `default` across every OpenAI-backed capability.

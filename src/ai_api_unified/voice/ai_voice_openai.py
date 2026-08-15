@@ -89,7 +89,14 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
         **kwargs: Any,
     ) -> None:
         super().__init__(engine=engine, **kwargs)
-        if not EnvSettings().get_setting("OPENAI_API_KEY", ""):
+        # Voice providers signal a missing key with RuntimeError (azure and
+        # elevenlabs do the same), so this runs ahead of the base's ValueError to
+        # keep that contract. Strip first: the base treats a whitespace-only key
+        # as missing, and this guard must agree or the exception type changes.
+        str_configured_api_key: str = str(
+            EnvSettings().get_setting("OPENAI_API_KEY", "") or ""
+        ).strip()
+        if not str_configured_api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
 
         # Invoke the shared initializer rather than copying it: a duplicate drifts

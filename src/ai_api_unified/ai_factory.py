@@ -53,6 +53,9 @@ VIDEO_MODEL_NAME_KEY: str = "VIDEO_MODEL_NAME"
 FROZENSET_BASE_URL_OVERRIDE_COMPLETIONS_ENGINES: frozenset[str] = frozenset(
     {"claude", "openai", "openai-responses", "google-gemini"}
 )
+# Only the OpenAI voice provider shares AIOpenAIBase, so it is the one voice
+# engine whose constructor accepts a base-URL override or a retry policy.
+FROZENSET_BASE_URL_OVERRIDE_VOICE_ENGINES: frozenset[str] = frozenset({"openai"})
 VIDEO_ENGINE_KEY: str = "VIDEO_ENGINE"
 
 
@@ -553,6 +556,8 @@ class AIFactory:
     @staticmethod
     def get_ai_voice_client(
         voice_engine: str | None = None,
+        base_url: str | None = None,
+        retry_policy: str | None = None,
     ) -> AIVoiceBase:
         """
         Instantiates the configured voice (text-to-speech) client.
@@ -562,6 +567,8 @@ class AIFactory:
 
         Args:
             voice_engine: Optional engine override; falls back to AI_VOICE_ENGINE config.
+            base_url: Optional API base-URL override for engines whose SDK accepts one.
+            retry_policy: Optional retry policy for engines whose SDK accepts one.
 
         Returns:
             Concrete AIVoiceBase implementation for the requested voice engine.
@@ -572,5 +579,19 @@ class AIFactory:
             str_engine_key=AI_VOICE_ENGINE_ENV_KEY,
             str_engine_override=voice_engine,
         )
+
+        dict_provider_kwargs: dict[str, Any] = {}
+        if base_url is not None:
+            AIFactory._require_base_url_override_support(
+                str_engine=str_voice_engine,
+                frozenset_supported=FROZENSET_BASE_URL_OVERRIDE_VOICE_ENGINES,
+            )
+            dict_provider_kwargs["base_url"] = base_url
+        if retry_policy is not None:
+            AIFactory._require_base_url_override_support(
+                str_engine=str_voice_engine,
+                frozenset_supported=FROZENSET_BASE_URL_OVERRIDE_VOICE_ENGINES,
+            )
+            dict_provider_kwargs["retry_policy"] = retry_policy
         # Normal return with the voice client resolved by the voice factory.
-        return AIVoiceFactory.create(str_voice_engine)
+        return AIVoiceFactory.create(str_voice_engine, **dict_provider_kwargs)

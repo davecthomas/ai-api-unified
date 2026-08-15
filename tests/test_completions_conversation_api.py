@@ -705,6 +705,24 @@ class TestRetryPolicyAndErrors:
 
         assert openai_base.retry_policy == "default"
 
+    @pytest.mark.parametrize("str_blank_user", ["", "   "])
+    def test_blank_env_openai_user_falls_back_to_sentinel(self, str_blank_user):
+        """A blank OPENAI_USER must not silently drop caller attribution.
+
+        get_setting returns "" rather than the sentinel for a blank key, which
+        normalizes to None downstream and loses finops attribution.
+        """
+        from ai_api_unified.ai_openai_base import AIOpenAIBase
+
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "test-key", "OPENAI_USER": str_blank_user},
+        ):
+            with patch("ai_api_unified.ai_openai_base.OpenAI"):
+                openai_base = AIOpenAIBase()
+
+        assert openai_base.user == "default_user"
+
     def test_status_error_wrapped_with_status_code(self):
         client = _build_client()
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")

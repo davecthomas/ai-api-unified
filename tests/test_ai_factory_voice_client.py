@@ -7,7 +7,10 @@ from unittest.mock import Mock, patch
 import pytest
 
 from ai_api_unified.ai_factory import AIFactory
-from ai_api_unified.ai_provider_exceptions import AiProviderConfigurationError
+from ai_api_unified.ai_provider_exceptions import (
+    AiProviderCapabilityUnsupportedError,
+    AiProviderConfigurationError,
+)
 from ai_api_unified.voice.ai_voice_factory import AIVoiceFactory
 
 
@@ -90,6 +93,36 @@ class TestAiFactoryVoiceClient:
             voice_factory_exception_info.value
         )
         assert "Unsupported AI_VOICE_ENGINE: nope" == str(factory_exception_info.value)
+
+    def test_base_url_and_retry_policy_reach_the_provider(self) -> None:
+        """Provider kwargs should be forwarded like the sibling constructors do."""
+        with patch.object(
+            AIVoiceFactory, "create", return_value=FakeVoiceClient(engine="openai")
+        ) as mock_create:
+            AIFactory.get_ai_voice_client(
+                voice_engine="openai",
+                base_url="https://gateway.invalid/v1",
+                retry_policy="none",
+            )
+
+        mock_create.assert_called_once_with(
+            "openai",
+            base_url="https://gateway.invalid/v1",
+            retry_policy="none",
+        )
+
+    @pytest.mark.parametrize(
+        "str_unsupported_engine", ["google", "azure", "elevenlabs"]
+    )
+    def test_base_url_rejected_for_engines_that_cannot_honor_it(
+        self, str_unsupported_engine: str
+    ) -> None:
+        """Engines without an AIOpenAIBase constructor must reject the override."""
+        with pytest.raises(AiProviderCapabilityUnsupportedError):
+            AIFactory.get_ai_voice_client(
+                voice_engine=str_unsupported_engine,
+                base_url="https://gateway.invalid/v1",
+            )
 
     def test_voice_factory_create_remains_callable_without_arguments(self) -> None:
         """The pre-existing no-argument AIVoiceFactory.create contract must still hold."""

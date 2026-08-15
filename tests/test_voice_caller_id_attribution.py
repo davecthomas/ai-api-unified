@@ -49,10 +49,14 @@ DICT_EXPECTED_CONSTRUCTED_VALUES: dict[str, object] = {
     "base_url": TEST_OPENAI_BASE_URL,
     "retry_policy": RETRY_POLICY_DEFAULT,
 }
+# Attributes with no distinctive configured value to compare, but which the
+# constructor must still populate: each defaults to None and is non-None after
+# construction, so the guard asserts that rather than mere presence.
+FROZENSET_MUST_BE_POPULATED_ATTRIBUTES: frozenset[str] = frozenset({"env", "client"})
 # Attributes whose constructed value legitimately equals the unconstructed
-# default, so a value assertion would prove nothing.
+# default, so neither a value nor a non-None assertion would prove anything.
 FROZENSET_PRESENCE_ONLY_ATTRIBUTES: frozenset[str] = frozenset(
-    {"env", "client", "backoff_delays", "_async_client"}
+    {"backoff_delays", "_async_client"}
 )
 
 LIST_VOICE_PROVIDER_CLASSES: list[type[AIVoiceBase]] = [
@@ -188,6 +192,17 @@ def test_skipped_vendor_initializer_state_is_reestablished(
                 "method that reads it raises AttributeError."
             )
             if str_attribute_name in FROZENSET_PRESENCE_ONLY_ATTRIBUTES:
+                continue
+            if str_attribute_name in FROZENSET_MUST_BE_POPULATED_ATTRIBUTES:
+                # These default to None, so presence alone would still pass with
+                # the attribute never populated: the SDK client is the case that
+                # would fail at the first provider call, not at construction.
+                assert getattr(ai_voice_client, str_attribute_name) is not None, (
+                    f"{class_voice_provider.__name__}.__init__ left "
+                    f"'{str_attribute_name}' as None. {str_base_name}.__init__ "
+                    "populates it, and the first inherited method that uses it "
+                    "fails on None rather than at construction."
+                )
                 continue
             assert str_attribute_name in DICT_EXPECTED_CONSTRUCTED_VALUES, (
                 f"{str_base_name}.__init__ assigns '{str_attribute_name}', which this "

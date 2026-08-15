@@ -70,7 +70,13 @@ class AIOpenAIBase:
         """
         self.env = EnvSettings()
         self.api_key = self.env.get_setting("OPENAI_API_KEY")
-        self.user = self.env.get_setting(OPENAI_USER_SETTING_KEY, DEFAULT_OPENAI_USER)
+        # Blank is unconfigured here too: a present-but-blank OPENAI_USER would
+        # otherwise resolve to "" and drop caller attribution to None, while the
+        # documented contract promises the sentinel.
+        str_configured_user: str = str(
+            self.env.get_setting(OPENAI_USER_SETTING_KEY, DEFAULT_OPENAI_USER) or ""
+        ).strip()
+        self.user = str_configured_user or DEFAULT_OPENAI_USER
         if not self.api_key or self.api_key.strip() == "":
             raise ValueError("OPENAI_API_KEY environment variable must be set.")
         self.base_url = self.get_api_base_url(base_url=base_url)

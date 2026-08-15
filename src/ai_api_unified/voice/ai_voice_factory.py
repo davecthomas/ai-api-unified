@@ -5,6 +5,7 @@ Factory for creating voice provider clients through centralized lazy loading.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from ai_api_unified.ai_provider_exceptions import (
     AiProviderConfigurationError,
@@ -31,12 +32,14 @@ class AIVoiceFactory:
     """
 
     @staticmethod
-    def create(voice_engine: str | None = None) -> AIVoiceBase:
+    def create(voice_engine: str | None = None, **kwargs: Any) -> AIVoiceBase:
         """
         Creates a voice provider client based on the configured voice engine.
 
         Args:
             voice_engine: Optional engine override; falls back to AI_VOICE_ENGINE config.
+            **kwargs: Provider-specific constructor arguments such as base_url
+                and retry_policy, forwarded to the resolved voice provider.
 
         Returns:
             Concrete AIVoiceBase implementation for the requested voice engine.
@@ -70,7 +73,7 @@ class AIVoiceFactory:
                 AIVoiceBase,
             )
             voice_provider_client: AIVoiceBase = class_ai_voice_provider(
-                engine=str_engine
+                engine=str_engine, **kwargs
             )
             # Normal return with resolved voice provider client.
             return voice_provider_client
