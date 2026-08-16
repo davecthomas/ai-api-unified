@@ -1,4 +1,4 @@
-# ai-api-unified 2.23.0
+# ai-api-unified 2.24.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -1141,6 +1141,25 @@ rate: the event carries `cached_input_tokens`, and the cached subset of
 full input rate. Providers that report cache reads separately from the input
 count (Anthropic, Bedrock) are normalized so `input_tokens` includes the cached
 subset, keeping the cost split consistent across providers.
+
+Prompt-cache **writes** are billed too. Priming a cache costs more than base
+input, and the premium depends on how long the cache lives, so each rate is
+stored per lifetime and each event carries its own count:
+
+| Field | Meaning |
+| --- | --- |
+| `cache_write_5m_tokens` | Tokens written to a 5-minute-TTL cache (Anthropic: 1.25x base input) |
+| `cache_write_1h_tokens` | Tokens written to a 1-hour-TTL cache (Anthropic: 2x base input) |
+
+Unlike cache reads, writes are **not** a subset of `input_tokens` — the provider
+reports them separately, so they add to the cost rather than re-slicing the
+prompt. Anthropic supplies the per-TTL split; Bedrock reports one
+`cacheWriteInputTokens` that is attributed to the 5-minute tier, the only
+lifetime it exposes. OpenAI charges nothing to write a cache, and Google bills
+explicit-cache storage per hour rather than per written token, so neither
+carries cache-write rates. Where a model has no configured cache-write rate the
+write bills at the base input rate, which under-reports the premium rather than
+dropping the cost.
 
 ```yaml
 middleware:

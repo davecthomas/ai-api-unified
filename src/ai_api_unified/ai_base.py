@@ -1128,6 +1128,13 @@ class AiApiObservedCompletionsResultModel(Generic[CompletionsReturnType]):
         provider_cached_input_tokens: Optional provider-reported cached-input
             token count (cache reads billed at the cached rate), a subset of
             provider_prompt_tokens. None when the provider does not report it.
+        provider_cache_write_5m_tokens: Optional provider-reported count of tokens
+            written to a 5-minute-TTL prompt cache. Billed at a premium over base
+            input and reported separately by the provider, so NOT a subset of
+            provider_prompt_tokens.
+        provider_cache_write_1h_tokens: Optional provider-reported count of tokens
+            written to a 1-hour-TTL prompt cache, at a higher premium than the
+            5-minute tier. Also not a subset of provider_prompt_tokens.
         provider_total_tokens: Optional provider-reported total token count.
         dict_metadata: Additional metadata derived from the provider path.
 
@@ -1141,6 +1148,8 @@ class AiApiObservedCompletionsResultModel(Generic[CompletionsReturnType]):
     provider_prompt_tokens: int | None = None
     provider_completion_tokens: int | None = None
     provider_cached_input_tokens: int | None = None
+    provider_cache_write_5m_tokens: int | None = None
+    provider_cache_write_1h_tokens: int | None = None
     provider_total_tokens: int | None = None
     dict_metadata: dict[str, ObservabilityMetadataValue] = field(default_factory=dict)
 
@@ -2110,6 +2119,8 @@ class AIBaseCompletions(AIBase):
             provider_prompt_tokens=observed_result.provider_prompt_tokens,
             provider_completion_tokens=observed_result.provider_completion_tokens,
             provider_cached_input_tokens=observed_result.provider_cached_input_tokens,
+            provider_cache_write_5m_tokens=observed_result.provider_cache_write_5m_tokens,
+            provider_cache_write_1h_tokens=observed_result.provider_cache_write_1h_tokens,
             provider_total_tokens=observed_result.provider_total_tokens,
             finish_reason=observed_result.finish_reason,
             dict_metadata={
@@ -3446,6 +3457,8 @@ class AIBaseCompletions(AIBase):
                     provider_prompt_tokens=observed_result.provider_prompt_tokens,
                     provider_completion_tokens=observed_result.provider_completion_tokens,
                     provider_cached_input_tokens=observed_result.provider_cached_input_tokens,
+                    provider_cache_write_5m_tokens=observed_result.provider_cache_write_5m_tokens,
+                    provider_cache_write_1h_tokens=observed_result.provider_cache_write_1h_tokens,
                     provider_total_tokens=observed_result.provider_total_tokens,
                     dict_metadata={
                         "stream_chunk_count": int_chunk_count,

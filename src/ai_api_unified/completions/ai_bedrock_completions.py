@@ -298,6 +298,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                         provider_cached_input_tokens=self._extract_bedrock_cached_tokens(
                             resp
                         ),
+                        **self._cache_write_kwargs(resp),
                         provider_total_tokens=self._extract_bedrock_total_tokens(resp),
                     )
                     # Normal return with validated Bedrock structured output and raw provider metadata.
@@ -322,6 +323,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                             provider_cached_input_tokens=self._extract_bedrock_cached_tokens(
                                 resp
                             ),
+                            **self._cache_write_kwargs(resp),
                             provider_total_tokens=self._extract_bedrock_total_tokens(
                                 resp
                             ),
@@ -479,6 +481,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                             provider_cached_input_tokens=self._extract_bedrock_cached_tokens(
                                 response
                             ),
+                            **self._cache_write_kwargs(response),
                             provider_total_tokens=self._extract_bedrock_total_tokens(
                                 response
                             ),
@@ -607,6 +610,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     provider_cached_input_tokens=self._extract_bedrock_cached_tokens(
                         dict_usage_response
                     ),
+                    **self._cache_write_kwargs(dict_usage_response),
                     provider_total_tokens=self._extract_bedrock_total_tokens(
                         dict_usage_response
                     ),
@@ -739,6 +743,28 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         usage: dict[str, Any] = response.get("usage", {})
         # Normal return with provider cache-read token usage when present.
         return usage.get("cacheReadInputTokens")
+
+    @staticmethod
+    def _cache_write_kwargs(response: dict[str, Any]) -> dict[str, int | None]:
+        """
+        Returns the cache-write result-summary kwargs for one Bedrock response.
+
+        Converse reports a single `cacheWriteInputTokens` with no TTL breakdown,
+        so the count is attributed to the 5-minute tier — the only cache lifetime
+        Bedrock exposes for the Anthropic models this engine routes to.
+
+        Args:
+            response: Bedrock converse response dictionary.
+
+        Returns:
+            Result-summary cache-write fields; both None when unreported.
+        """
+        usage: dict[str, Any] = response.get("usage", {})
+        # Normal return with cache-write usage attributed to the 5-minute tier.
+        return {
+            "provider_cache_write_5m_tokens": usage.get("cacheWriteInputTokens"),
+            "provider_cache_write_1h_tokens": None,
+        }
 
     @staticmethod
     def _extract_bedrock_completion_tokens(response: dict[str, Any]) -> int | None:

@@ -21,6 +21,10 @@ from ai_api_unified.pricing import (
     get_model_pricing,
 )
 from ai_api_unified.pricing import pricing_registry
+from ai_api_unified.pricing.pricing_registry import (
+    DICT_MODEL_INFO,
+    PROVIDER_ANTHROPIC,
+)
 
 
 class TestPricingMath:
@@ -51,6 +55,61 @@ class TestPricingMath:
             input_tokens=0, cached_input_tokens=1000
         ) == Decimal("0.00025")
 
+    @staticmethod
+    def _pricing_with_cache_writes() -> AIModelPricing:
+        return AIModelPricing(
+            unit=PricingUnit.TOKEN,
+            effective_date=__import__("datetime").date(2026, 7, 7),
+            source="https://example.test",
+            token_rates=AITokenRates(
+                input_per_1m=Decimal("2.50"),
+                output_per_1m=Decimal("15.00"),
+                cached_input_per_1m=Decimal("0.25"),
+                cache_write_5m_per_1m=Decimal("3.125"),
+                cache_write_1h_per_1m=Decimal("5.00"),
+            ),
+        )
+
+    def test_cache_writes_billed_per_ttl(self) -> None:
+        # 1000 * 3.125/1M + 2000 * 5.00/1M = 0.003125 + 0.010
+        assert self._pricing_with_cache_writes().compute_token_cost(
+            input_tokens=0, cache_write_5m_tokens=1000, cache_write_1h_tokens=2000
+        ) == Decimal("0.013125")
+
+    def test_cache_writes_add_to_input_rather_than_subset(self) -> None:
+        """Cache writes are billed on top of the prompt, not carved out of it.
+
+        Unlike cache reads, the provider reports writes separately from the
+        input count, so they must not be subtracted from input_tokens.
+        """
+        pricing = self._pricing_with_cache_writes()
+        base = pricing.compute_token_cost(input_tokens=1000)
+        with_write = pricing.compute_token_cost(
+            input_tokens=1000, cache_write_5m_tokens=1000
+        )
+
+        assert with_write == base + Decimal("0.003125")
+
+    def test_cache_write_falls_back_to_input_rate(self) -> None:
+        """A write still costs at least base input when no premium is configured."""
+        # _pricing() has no cache-write rates: 1000 * 2.50/1M
+        assert self._pricing().compute_token_cost(
+            input_tokens=0, cache_write_5m_tokens=1000
+        ) == Decimal("0.0025")
+
+    def test_no_cache_writes_leaves_cost_unchanged(self) -> None:
+        """Callers that report no writes bill exactly as before."""
+        pricing = self._pricing_with_cache_writes()
+
+        assert pricing.compute_token_cost(
+            input_tokens=1000, output_tokens=500
+        ) == pricing.compute_token_cost(
+            input_tokens=1000,
+            output_tokens=500,
+            cache_write_5m_tokens=0,
+            cache_write_1h_tokens=0,
+        )
+
     def test_blended_per_1k(self) -> None:
         # mean(2.50, 15.00) = 8.75 per 1M -> 0.00875 per 1K
         assert self._pricing().blended_per_1k_tokens() == pytest.approx(0.00875)
@@ -80,6 +139,58 @@ class TestRegistry:
 
     def test_uncatalogued_model_returns_none(self) -> None:
         assert get_model_pricing("openai", "does-not-exist") is None
+
+    def test_every_anthropic_model_carries_cache_write_rates(self) -> None:
+        """Anthropic bills every model's cache writes, so none may be unrated.
+
+        An unrated write silently falls back to the base input rate and
+        under-reports the premium, so a new model added without rates is a
+        finops defect rather than a missing nice-to-have.
+        """
+        list_missing: list[str] = [
+            model
+            for (provider, model), info in DICT_MODEL_INFO.items()
+            if provider == PROVIDER_ANTHROPIC
+            and info.pricing is not None
+            and info.pricing.token_rates is not None
+            and (
+                info.pricing.token_rates.cache_write_5m_per_1m is None
+                or info.pricing.token_rates.cache_write_1h_per_1m is None
+            )
+        ]
+
+        assert list_missing == []
+
+    def test_anthropic_cache_write_rates_match_documented_multipliers(self) -> None:
+        """Anthropic prices cache writes at 1.25x base input (5m) and 2x (1h).
+
+        The rates are stored explicitly per model rather than derived, so this
+        pins them to the documented relationship: a typo in one entry, or a
+        provider change to the multipliers, surfaces here.
+        """
+        for (provider, model), info in DICT_MODEL_INFO.items():
+            if provider != PROVIDER_ANTHROPIC or info.pricing is None:
+                continue
+            rates = info.pricing.token_rates
+            if rates is None or rates.cache_write_5m_per_1m is None:
+                continue
+            assert rates.cache_write_5m_per_1m == rates.input_per_1m * Decimal(
+                "1.25"
+            ), model
+            assert rates.cache_write_1h_per_1m == rates.input_per_1m * Decimal(
+                "2"
+            ), model
+
+    def test_providers_without_cache_write_charges_stay_unrated(self) -> None:
+        """OpenAI writes are free and Google bills cache storage, not writes."""
+        for provider, model in (
+            ("openai", "gpt-5.4"),
+            ("google", "gemini-3.5-flash"),
+        ):
+            pricing = get_model_pricing(provider, model)
+            assert pricing is not None
+            assert pricing.token_rates.cache_write_5m_per_1m is None, model
+            assert pricing.token_rates.cache_write_1h_per_1m is None, model
 
     def test_anthropic_claude_5_generation(self) -> None:
         # Added 2026-08-03 from the live models API; opus-5 matches opus-4-8

@@ -64,6 +64,8 @@ def _tok(
     tiers: list[AIPricingTier] | None = None,
     notes: str | None = None,
     effective: date = _EFFECTIVE,
+    write_5m_r: str | None = None,
+    write_1h_r: str | None = None,
 ) -> AIModelPricing:
     """Build a token-unit AIModelPricing from string decimals (per 1M tokens)."""
     return AIModelPricing(
@@ -75,6 +77,12 @@ def _tok(
             input_per_1m=Decimal(input_r),
             output_per_1m=Decimal(output_r) if output_r is not None else None,
             cached_input_per_1m=Decimal(cached_r) if cached_r is not None else None,
+            cache_write_5m_per_1m=(
+                Decimal(write_5m_r) if write_5m_r is not None else None
+            ),
+            cache_write_1h_per_1m=(
+                Decimal(write_1h_r) if write_1h_r is not None else None
+            ),
         ),
         tiers=tiers,
         notes=notes,
@@ -390,12 +398,27 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_ANTHROPIC,
             "claude-fable-5",
-            _tok("10.00", "50.00", "1.00", _SRC_ANTHROPIC),
+            _tok(
+                "10.00",
+                "50.00",
+                "1.00",
+                _SRC_ANTHROPIC,
+                write_5m_r="12.50",
+                write_1h_r="20.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-5",
-            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC, effective=_EFFECTIVE_AUG),
+            _tok(
+                "5.00",
+                "25.00",
+                "0.50",
+                _SRC_ANTHROPIC,
+                effective=_EFFECTIVE_AUG,
+                write_5m_r="6.25",
+                write_1h_r="10.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
@@ -406,6 +429,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "0.30",
                 _SRC_ANTHROPIC,
                 effective=_EFFECTIVE_AUG,
+                write_5m_r="3.75",
+                write_1h_r="6.00",
                 notes="List rates; introductory pricing ($2.00 in / $10.00 out) "
                 "runs through 2026-08-31.",
             ),
@@ -413,27 +438,62 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-8",
-            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+            _tok(
+                "5.00",
+                "25.00",
+                "0.50",
+                _SRC_ANTHROPIC,
+                write_5m_r="6.25",
+                write_1h_r="10.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-7",
-            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+            _tok(
+                "5.00",
+                "25.00",
+                "0.50",
+                _SRC_ANTHROPIC,
+                write_5m_r="6.25",
+                write_1h_r="10.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-6",
-            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+            _tok(
+                "5.00",
+                "25.00",
+                "0.50",
+                _SRC_ANTHROPIC,
+                write_5m_r="6.25",
+                write_1h_r="10.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-sonnet-4-6",
-            _tok("3.00", "15.00", "0.30", _SRC_ANTHROPIC),
+            _tok(
+                "3.00",
+                "15.00",
+                "0.30",
+                _SRC_ANTHROPIC,
+                write_5m_r="3.75",
+                write_1h_r="6.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-haiku-4-5",
-            _tok("1.00", "5.00", "0.10", _SRC_ANTHROPIC),
+            _tok(
+                "1.00",
+                "5.00",
+                "0.10",
+                _SRC_ANTHROPIC,
+                write_5m_r="1.25",
+                write_1h_r="2.00",
+            ),
         ),
         # ── Anthropic completions (retired: hard 404) ───────────────────────
         # Rates are retained on entries that were priced while active so
@@ -442,7 +502,14 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-1",
-            _tok("15.00", "75.00", "1.50", _SRC_ANTHROPIC),
+            _tok(
+                "15.00",
+                "75.00",
+                "1.50",
+                _SRC_ANTHROPIC,
+                write_5m_r="18.75",
+                write_1h_r="30.00",
+            ),
             status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 8, 5),
             replacement="claude-opus-5",

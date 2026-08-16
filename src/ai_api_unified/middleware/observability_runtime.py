@@ -169,6 +169,13 @@ class AiApiCallResultSummaryModel:
         provider_cached_input_tokens: Optional provider-reported cached-input token
             count (cache reads billed at the cached rate), a subset of
             provider_prompt_tokens. None when the provider does not report it.
+        provider_cache_write_5m_tokens: Optional provider-reported count of tokens
+            written to a 5-minute-TTL prompt cache. Billed at a premium over base
+            input and reported separately by the provider, so this is NOT a subset
+            of provider_prompt_tokens. None when the provider does not report it.
+        provider_cache_write_1h_tokens: Optional provider-reported count of tokens
+            written to a 1-hour-TTL prompt cache, billed at a higher premium than
+            the 5-minute tier. Also not a subset of provider_prompt_tokens.
         provider_total_tokens: Optional provider-reported total token count.
         finish_reason: Optional provider finish reason.
         dict_metadata: Additional scalar metadata fields safe to emit in logs.
@@ -182,6 +189,8 @@ class AiApiCallResultSummaryModel:
     provider_prompt_tokens: int | None = None
     provider_completion_tokens: int | None = None
     provider_cached_input_tokens: int | None = None
+    provider_cache_write_5m_tokens: int | None = None
+    provider_cache_write_1h_tokens: int | None = None
     provider_total_tokens: int | None = None
     finish_reason: str | None = None
     dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(

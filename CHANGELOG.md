@@ -4,6 +4,31 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.24.0
+
+- Prompt-cache **writes** are now priced and billed. Priming a cache costs more
+  than base input, so cost events previously under-reported cache-heavy
+  workloads (a call writing 20k tokens to cache under-reported by ~67%).
+- `AITokenRates` gains `cache_write_5m_per_1m` and `cache_write_1h_per_1m`. The
+  premium depends on cache lifetime, so rates are stored per TTL rather than
+  blended. Populated for all 9 Anthropic models at the documented 1.25x (5m)
+  and 2x (1h) of base input.
+- `compute_token_cost()` accepts `cache_write_5m_tokens` and
+  `cache_write_1h_tokens`. Cache writes add to the cost rather than being
+  carved out of `input_tokens` — unlike cache reads, providers report them
+  separately from the prompt count. An unset rate falls back to the base input
+  rate rather than to free.
+- Observability result summaries carry `provider_cache_write_5m_tokens` and
+  `provider_cache_write_1h_tokens`, extracted from Anthropic's per-TTL
+  `usage.cache_creation` split (falling back to the aggregate
+  `cache_creation_input_tokens` as 5-minute) and Bedrock's
+  `cacheWriteInputTokens`. Cost events emit `cache_write_5m_tokens` and
+  `cache_write_1h_tokens`.
+- A call that reports only cache writes is now costed instead of being skipped
+  as no-usage.
+- OpenAI and Google carry no cache-write rates: OpenAI writes are free, and
+  Google bills explicit-cache storage per hour rather than per written token.
+
 ## 2.23.0
 
 - Fixed OpenAI text-to-speech: every `text_to_voice` and `stream_audio` call

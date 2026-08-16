@@ -42,11 +42,20 @@ class PricingUnit(str, Enum):
 
 
 class AITokenRates(BaseModel):
-    """Per-1M-token rates. output/cached are None where a modality lacks them."""
+    """Per-1M-token rates. output/cached are None where a modality lacks them.
+
+    Cache writes are billed at a premium over base input and are priced per
+    cache lifetime, so the two supported TTLs carry separate rates. Both stay
+    None for providers that do not charge to populate a cache (OpenAI writes
+    are free; Google's explicit caching bills storage per hour rather than a
+    per-token write).
+    """
 
     input_per_1m: Decimal
     output_per_1m: Decimal | None = None  # None for embeddings (input only)
     cached_input_per_1m: Decimal | None = None
+    cache_write_5m_per_1m: Decimal | None = None
+    cache_write_1h_per_1m: Decimal | None = None
 
 
 class AIPricingTier(BaseModel):
@@ -84,6 +93,8 @@ class AIModelPricing(BaseModel):
         input_tokens: int,
         output_tokens: int = 0,
         cached_input_tokens: int = 0,
+        cache_write_5m_tokens: int = 0,
+        cache_write_1h_tokens: int = 0,
     ) -> Decimal:
         """
         Return the USD cost for measured token usage using the split rates.
@@ -92,10 +103,17 @@ class AIModelPricing(BaseModel):
         subset of input_tokens (so pass the non-cached remainder as
         input_tokens). Falls back to the input rate when no cached rate exists.
 
+        Cache-write tokens are billed at a premium over base input and are
+        reported separately by the provider, so they are NOT a subset of
+        input_tokens: pass them in addition. Each TTL bills at its own rate,
+        falling back to the input rate when the provider charges no premium.
+
         Args:
             input_tokens: Non-cached input tokens billed at the input rate.
             output_tokens: Output tokens billed at the output rate.
             cached_input_tokens: Input tokens billed at the cached-input rate.
+            cache_write_5m_tokens: Tokens written to a 5-minute-TTL cache.
+            cache_write_1h_tokens: Tokens written to a 1-hour-TTL cache.
 
         Returns:
             USD cost as a Decimal.
@@ -121,6 +139,22 @@ class AIModelPricing(BaseModel):
                 else rates.input_per_1m
             )
             cost += Decimal(cached_input_tokens) * cached_rate / TOKENS_PER_RATE_UNIT
+        # Each TTL bills at its own premium; absent a configured rate the write
+        # still costs at least base input, so fall back to that rather than free.
+        for int_write_tokens, decimal_write_rate in (
+            (cache_write_5m_tokens, rates.cache_write_5m_per_1m),
+            (cache_write_1h_tokens, rates.cache_write_1h_per_1m),
+        ):
+            if not int_write_tokens:
+                continue
+            resolved_write_rate: Decimal = (
+                decimal_write_rate
+                if decimal_write_rate is not None
+                else rates.input_per_1m
+            )
+            cost += (
+                Decimal(int_write_tokens) * resolved_write_rate / TOKENS_PER_RATE_UNIT
+            )
         # Normal return with the computed USD cost.
         return cost
 

@@ -126,6 +126,102 @@ class TestAnthropicCachedFold:
         assert (prompt, output, total, cached) == (1000, 100, 1100, 400)
 
 
+class TestAnthropicCacheWriteCapture:
+    """Cache writes bill at a premium and are reported per cache lifetime."""
+
+    @staticmethod
+    def _extract(usage_obj):
+        pytest.importorskip("anthropic")
+        from ai_api_unified.completions.ai_anthropic_completions import (
+            AiAnthropicCompletions,
+        )
+
+        return AiAnthropicCompletions._extract_anthropic_cache_write_tokens(
+            SimpleNamespace(usage=usage_obj)
+        )
+
+    def test_extracts_per_ttl_breakdown(self) -> None:
+        assert self._extract(
+            SimpleNamespace(
+                input_tokens=600,
+                cache_creation_input_tokens=3000,
+                cache_creation=SimpleNamespace(
+                    ephemeral_5m_input_tokens=2000,
+                    ephemeral_1h_input_tokens=1000,
+                ),
+            )
+        ) == (2000, 1000)
+
+    def test_falls_back_to_aggregate_as_five_minute(self) -> None:
+        """Older payloads report only the aggregate; 5m is the default TTL."""
+        assert self._extract(
+            SimpleNamespace(input_tokens=600, cache_creation_input_tokens=2500)
+        ) == (2500, None)
+
+    def test_no_cache_write_usage_reports_none(self) -> None:
+        assert self._extract(SimpleNamespace(input_tokens=600)) == (None, None)
+
+    def test_missing_usage_block_reports_none(self) -> None:
+        pytest.importorskip("anthropic")
+        from ai_api_unified.completions.ai_anthropic_completions import (
+            AiAnthropicCompletions,
+        )
+
+        assert AiAnthropicCompletions._extract_anthropic_cache_write_tokens(
+            SimpleNamespace()
+        ) == (None, None)
+
+    def test_cache_writes_are_not_folded_into_prompt_tokens(self) -> None:
+        """Writes are billed separately, so they must stay out of the prompt count.
+
+        Cache reads fold in (they are a discounted slice of the prompt); folding
+        writes in too would double-bill them at the input rate.
+        """
+        pytest.importorskip("anthropic")
+        from ai_api_unified.completions.ai_anthropic_completions import (
+            AiAnthropicCompletions,
+        )
+
+        response = SimpleNamespace(
+            usage=SimpleNamespace(
+                input_tokens=600,
+                output_tokens=100,
+                cache_read_input_tokens=400,
+                cache_creation_input_tokens=5000,
+            )
+        )
+        prompt, _, _, _ = AiAnthropicCompletions._extract_anthropic_usage(response)
+
+        # 600 input + 400 cache reads; the 5000 written tokens are excluded.
+        assert prompt == 1000
+
+
+class TestBedrockCacheWriteCapture:
+    def test_attributes_converse_writes_to_five_minute_tier(self) -> None:
+        pytest.importorskip("boto3")
+        from ai_api_unified.completions.ai_bedrock_completions import (
+            AiBedrockCompletions,
+        )
+
+        assert AiBedrockCompletions._cache_write_kwargs(
+            {"usage": {"inputTokens": 600, "cacheWriteInputTokens": 1500}}
+        ) == {
+            "provider_cache_write_5m_tokens": 1500,
+            "provider_cache_write_1h_tokens": None,
+        }
+
+    def test_absent_cache_write_usage_reports_none(self) -> None:
+        pytest.importorskip("boto3")
+        from ai_api_unified.completions.ai_bedrock_completions import (
+            AiBedrockCompletions,
+        )
+
+        assert AiBedrockCompletions._cache_write_kwargs({"usage": {}}) == {
+            "provider_cache_write_5m_tokens": None,
+            "provider_cache_write_1h_tokens": None,
+        }
+
+
 class TestBedrockCachedFold:
     def test_prompt_folds_cache_reads(self) -> None:
         pytest.importorskip("boto3")
