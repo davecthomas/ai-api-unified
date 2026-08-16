@@ -516,15 +516,22 @@ print(pricing.token_rates.input_per_1m, pricing.token_rates.output_per_1m)
 
 usd = client.compute_completion_cost(input_tokens=1200, output_tokens=800)
 
-# Cache-aware: reads are a discounted subset of input; writes add on top.
+# Cache-aware. Pass the NON-CACHED remainder as input_tokens: of 1200 prompt
+# tokens with 400 served from cache, 800 bill at the input rate and 400 at the
+# cached rate. Cache writes are counted separately by the provider, so they add
+# on top rather than coming out of the prompt count.
 usd = client.compute_completion_cost(
-    input_tokens=1200,
+    input_tokens=800,          # 1200 prompt tokens minus the 400 cache reads
     output_tokens=800,
     cached_input_tokens=400,
     cache_write_5m_tokens=2000,
     cache_write_1h_tokens=1000,
 )
 ```
+
+Note the difference from the cost event, where `input_tokens` *includes* the
+cached subset because that is what providers report. This API takes the split
+already applied.
 
 Embeddings clients expose `compute_embedding_cost(input_tokens=...)`. The rate
 tables live in a single pricing registry (`ai_api_unified.pricing`) keyed by
@@ -1167,10 +1174,12 @@ prompt. They are likewise excluded from the provider's own total token count, so
 cache-priming call; include the cache-write counts in the denominator. Anthropic supplies the per-TTL split; Bedrock reports one
 `cacheWriteInputTokens` that is attributed to the 5-minute tier, the only
 lifetime it exposes. OpenAI charges nothing to write a cache, and Google bills
-explicit-cache storage per hour rather than per written token, so neither
-carries cache-write rates. Where a model has no configured cache-write rate the
-write bills at the base input rate, which under-reports the premium rather than
-dropping the cost.
+explicit-cache storage per hour rather than per written token, so both carry an
+explicit zero write rate. The two states are recorded distinctly: a rate of
+zero means the provider charges nothing to populate a cache, and writes bill as
+free. An absent rate means the write is charged but not yet rated — it falls
+back to the base input rate, under-reporting the premium rather than dropping
+the cost. Only the Bedrock-hosted Claude entry is in that second state today.
 
 ```yaml
 middleware:

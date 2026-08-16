@@ -32,8 +32,11 @@ version lives in `pyproject.toml` (see the README release section).
   `cache_write_1h_tokens`, so result objects agree with the cost stream.
 - An unknown future cache TTL tier reconciles against the aggregate write count
   and bills at the 5-minute rate instead of billing as free.
-- OpenAI and Google carry no cache-write rates: OpenAI writes are free, and
-  Google bills explicit-cache storage per hour rather than per written token.
+- Free-by-design and not-yet-rated are recorded distinctly. OpenAI and Google
+  carry an explicit zero cache-write rate (OpenAI writes are free; Google bills
+  explicit-cache storage per hour rather than per written token), so their
+  writes bill as free. An absent rate means charged-but-unrated and falls back
+  to the base input rate; only the Bedrock-hosted Claude entry is in that state.
 
 ## 2.23.0
 

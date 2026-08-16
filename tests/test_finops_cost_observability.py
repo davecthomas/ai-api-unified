@@ -135,19 +135,35 @@ class TestCostEmission:
         mw = LoggerBackedObservabilityMiddleware(
             ObservabilitySettingsModel(emit_cost=True)
         )
+        ctx = _context(model_name="claude-opus-5", provider="anthropic")
+        mw.after_call(ctx, _summary(prompt=1000, completion=500))
+        cost_without = Decimal(_cost_fields(cost_capture)["usd_cost"])
+
+        cost_capture.records.clear()
+        mw.after_call(ctx, _summary(prompt=1000, completion=500, cache_write_5m=1000))
+        fields = _cost_fields(cost_capture)
+
+        # claude-opus-5 bills 5m writes at 6.25/1M: the prompt cost is
+        # unchanged and the write adds on top.
+        assert Decimal(fields["usd_cost"]) == cost_without + Decimal("0.00625")
+        assert fields["input_tokens"] == 1000
+
+    def test_free_write_provider_adds_no_cost(self, cost_capture) -> None:
+        """OpenAI charges nothing to populate a cache, so a write is free."""
+        mw = LoggerBackedObservabilityMiddleware(
+            ObservabilitySettingsModel(emit_cost=True)
+        )
         mw.after_call(_context(), _summary(prompt=1000, completion=500))
         cost_without = Decimal(_cost_fields(cost_capture)["usd_cost"])
 
         cost_capture.records.clear()
         mw.after_call(
-            _context(), _summary(prompt=1000, completion=500, cache_write_5m=1000)
+            _context(), _summary(prompt=1000, completion=500, cache_write_5m=50_000)
         )
         fields = _cost_fields(cost_capture)
 
-        # gpt-5.4 has no cache-write rate, so the write falls back to base
-        # input (2.50/1M): the prompt cost is unchanged and the write adds.
-        assert Decimal(fields["usd_cost"]) == cost_without + Decimal("0.0025")
-        assert fields["input_tokens"] == 1000
+        assert Decimal(fields["usd_cost"]) == cost_without
+        assert fields["cache_write_5m_tokens"] == 50_000
 
     def test_cache_write_only_call_still_costs(self, cost_capture) -> None:
         """A call reporting only cache writes must not be skipped as no-usage."""
@@ -155,7 +171,8 @@ class TestCostEmission:
             ObservabilitySettingsModel(emit_cost=True)
         )
         mw.after_call(
-            _context(), _summary(prompt=None, completion=None, cache_write_5m=1000)
+            _context(model_name="claude-opus-5", provider="anthropic"),
+            _summary(prompt=None, completion=None, cache_write_5m=1000),
         )
         fields = _cost_fields(cost_capture)
 

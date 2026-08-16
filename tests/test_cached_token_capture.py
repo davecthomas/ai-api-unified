@@ -416,21 +416,36 @@ class TestCacheWriteWiringCompleteness:
 
     @staticmethod
     def _unwired_sites(module_filename: str) -> list[int]:
-        import inspect
+        """Return line numbers of result constructions missing cache-write kwargs.
+
+        Walks the AST rather than grepping source text: a formatter reflow must
+        not fail this, and a nearby comment mentioning cache_write must not make
+        a genuinely unwired site pass.
+        """
+        import ast
         import importlib
+        import inspect
 
         module = importlib.import_module(
             f"ai_api_unified.completions.{module_filename}"
         )
-        lines = inspect.getsource(module).split("\n")
+        tree = ast.parse(inspect.getsource(module))
         list_unwired: list[int] = []
-        for index, line in enumerate(lines):
-            if "provider_cached_input_tokens=" not in line:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
                 continue
-            # The cache-write splat sits adjacent to the cached-read kwarg.
-            window = "\n".join(lines[index : index + 4])
-            if "cache_write" not in window:
-                list_unwired.append(index + 1)
+            func = node.func
+            str_name = getattr(func, "id", None) or getattr(func, "attr", None)
+            if str_name != "AiApiObservedCompletionsResultModel":
+                continue
+            set_kwargs = {kw.arg for kw in node.keywords if kw.arg is not None}
+            if "provider_cached_input_tokens" not in set_kwargs:
+                continue
+            # A **splat carries arg=None; those sites pass the kwargs as a dict.
+            bool_has_splat = any(kw.arg is None for kw in node.keywords)
+            bool_has_explicit = "provider_cache_write_5m_tokens" in set_kwargs
+            if not (bool_has_splat or bool_has_explicit):
+                list_unwired.append(node.lineno)
         return list_unwired
 
     def test_anthropic_reports_writes_wherever_it_reports_reads(self) -> None:

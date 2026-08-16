@@ -202,16 +202,58 @@ class TestRegistry:
                 "explaining the gap"
             )
 
-    def test_providers_without_cache_write_charges_stay_unrated(self) -> None:
-        """OpenAI writes are free and Google bills cache storage, not writes."""
+    def test_free_write_providers_carry_an_explicit_zero_rate(self) -> None:
+        """Free-by-design must be zero, not unset.
+
+        Unset means charged-but-unrated and falls back to the base input rate,
+        which would bill a free write at 100% of input.
+        """
         for provider, model in (
             ("openai", "gpt-5.4"),
+            ("openai", "gpt-5"),
             ("google", "gemini-3.5-flash"),
+            ("google", "gemini-2.5-pro"),
         ):
             pricing = get_model_pricing(provider, model)
             assert pricing is not None
-            assert pricing.token_rates.cache_write_5m_per_1m is None, model
-            assert pricing.token_rates.cache_write_1h_per_1m is None, model
+            assert pricing.token_rates.cache_write_5m_per_1m == Decimal("0"), model
+            assert pricing.token_rates.cache_write_1h_per_1m == Decimal("0"), model
+
+    def test_every_caching_capable_openai_google_model_is_free_rated(self) -> None:
+        """A caching-capable model left unset would silently bill writes."""
+        list_unset: list[str] = [
+            f"{provider}/{model}"
+            for (provider, model), info in DICT_MODEL_INFO.items()
+            if provider in ("openai", "google")
+            and info.pricing is not None
+            and info.pricing.token_rates is not None
+            and info.pricing.token_rates.cached_input_per_1m is not None
+            and info.pricing.token_rates.cache_write_5m_per_1m is None
+        ]
+
+        assert list_unset == []
+
+    def test_free_writes_cost_nothing(self) -> None:
+        """The whole point of the zero rate: a free write bills zero."""
+        pricing = get_model_pricing("openai", "gpt-5.4")
+        assert pricing is not None
+
+        assert pricing.compute_token_cost(
+            input_tokens=0, cache_write_5m_tokens=1_000_000
+        ) == Decimal("0")
+
+    def test_unrated_writes_still_fall_back_to_input(self) -> None:
+        """Charged-but-unrated keeps the safe under-reporting fallback."""
+        pricing = get_model_pricing(
+            "bedrock", "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+        )
+        assert pricing is not None
+        assert pricing.token_rates.cache_write_5m_per_1m is None
+
+        # Falls back to the 0.80/1M input rate rather than billing zero.
+        assert pricing.compute_token_cost(
+            input_tokens=0, cache_write_5m_tokens=1_000_000
+        ) == Decimal("0.80")
 
     def test_anthropic_claude_5_generation(self) -> None:
         # Added 2026-08-03 from the live models API; opus-5 matches opus-4-8

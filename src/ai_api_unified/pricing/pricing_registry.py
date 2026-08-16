@@ -47,6 +47,12 @@ _SRC_BEDROCK: str = "https://aws.amazon.com/bedrock/pricing/"
 _SRC_ANTHROPIC: str = "https://platform.claude.com/docs/en/about-claude/models/overview"
 _SRC_VOYAGE: str = "https://docs.voyageai.com/docs/pricing"
 
+# Cache-write rate for providers that charge nothing to populate a cache.
+# Distinct from None, which means "charged but not yet rated" and falls
+# back to the base input rate. Zero must be explicit so a free-write model
+# is never billed at that fallback.
+_FREE_WRITES: str = "0"
+
 # Provider labels used as the first half of registry keys.
 PROVIDER_OPENAI: str = "openai"
 PROVIDER_GOOGLE: str = "google"
@@ -114,38 +120,185 @@ def _info(
 DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
     [
         # ── OpenAI completions ──────────────────────────────────────────────
-        _info(PROVIDER_OPENAI, "gpt-5.5", _tok("5.00", "30.00", "0.50", _SRC_OPENAI)),
-        _info(PROVIDER_OPENAI, "gpt-5.4", _tok("2.50", "15.00", "0.25", _SRC_OPENAI)),
         _info(
-            PROVIDER_OPENAI, "gpt-5.4-mini", _tok("0.75", "4.50", "0.075", _SRC_OPENAI)
+            PROVIDER_OPENAI,
+            "gpt-5.5",
+            _tok(
+                "5.00",
+                "30.00",
+                "0.50",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
-            PROVIDER_OPENAI, "gpt-5.4-nano", _tok("0.20", "1.25", "0.02", _SRC_OPENAI)
+            PROVIDER_OPENAI,
+            "gpt-5.4",
+            _tok(
+                "2.50",
+                "15.00",
+                "0.25",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
-        _info(PROVIDER_OPENAI, "gpt-5.2", _tok("1.75", "14.00", "0.175", _SRC_OPENAI)),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.4-mini",
+            _tok(
+                "0.75",
+                "4.50",
+                "0.075",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.4-nano",
+            _tok(
+                "0.20",
+                "1.25",
+                "0.02",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.2",
+            _tok(
+                "1.75",
+                "14.00",
+                "0.175",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
         _info(
             PROVIDER_OPENAI,
             "gpt-5.1-codex-max",
-            _tok("1.25", "10.00", "0.125", _SRC_OPENAI),
-        ),
-        _info(PROVIDER_OPENAI, "gpt-5", _tok("1.25", "10.00", "0.125", _SRC_OPENAI)),
-        _info(
-            PROVIDER_OPENAI, "gpt-5-mini", _tok("0.25", "2.00", "0.025", _SRC_OPENAI)
-        ),
-        _info(
-            PROVIDER_OPENAI, "gpt-5-nano", _tok("0.05", "0.40", "0.005", _SRC_OPENAI)
-        ),
-        _info(PROVIDER_OPENAI, "gpt-4.1", _tok("2.00", "8.00", "0.50", _SRC_OPENAI)),
-        _info(
-            PROVIDER_OPENAI, "gpt-4.1-mini", _tok("0.40", "1.60", "0.10", _SRC_OPENAI)
+            _tok(
+                "1.25",
+                "10.00",
+                "0.125",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
-            PROVIDER_OPENAI, "gpt-4.1-nano", _tok("0.10", "0.40", "0.025", _SRC_OPENAI)
+            PROVIDER_OPENAI,
+            "gpt-5",
+            _tok(
+                "1.25",
+                "10.00",
+                "0.125",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
-        _info(PROVIDER_OPENAI, "o4-mini", _tok("1.10", "4.40", "0.275", _SRC_OPENAI)),
-        _info(PROVIDER_OPENAI, "gpt-4o", _tok("2.50", "10.00", "1.25", _SRC_OPENAI)),
         _info(
-            PROVIDER_OPENAI, "gpt-4o-mini", _tok("0.15", "0.60", "0.075", _SRC_OPENAI)
+            PROVIDER_OPENAI,
+            "gpt-5-mini",
+            _tok(
+                "0.25",
+                "2.00",
+                "0.025",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5-nano",
+            _tok(
+                "0.05",
+                "0.40",
+                "0.005",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4.1",
+            _tok(
+                "2.00",
+                "8.00",
+                "0.50",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4.1-mini",
+            _tok(
+                "0.40",
+                "1.60",
+                "0.10",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4.1-nano",
+            _tok(
+                "0.10",
+                "0.40",
+                "0.025",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "o4-mini",
+            _tok(
+                "1.10",
+                "4.40",
+                "0.275",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4o",
+            _tok(
+                "2.50",
+                "10.00",
+                "1.25",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4o-mini",
+            _tok(
+                "0.15",
+                "0.60",
+                "0.075",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         # ── OpenAI embeddings (input only) ──────────────────────────────────
         _info(
@@ -198,17 +351,41 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-3.6-flash",
-            _tok("1.50", "7.50", "0.15", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+            _tok(
+                "1.50",
+                "7.50",
+                "0.15",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_AUG,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
             PROVIDER_GOOGLE,
             "gemini-3.5-flash",
-            _tok("1.50", "9.00", "0.15", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+            _tok(
+                "1.50",
+                "9.00",
+                "0.15",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_AUG,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
             PROVIDER_GOOGLE,
             "gemini-3.5-flash-lite",
-            _tok("0.30", "2.50", "0.03", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+            _tok(
+                "0.30",
+                "2.50",
+                "0.03",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_AUG,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
             PROVIDER_GOOGLE,
@@ -218,6 +395,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "1.50",
                 "0.025",
                 _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
                 effective=_EFFECTIVE_AUG,
                 notes="Audio input priced higher ($0.50/1M).",
             ),
@@ -230,6 +409,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "12.00",
                 "0.20",
                 _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
                 effective=_EFFECTIVE_AUG,
                 tiers=[
                     AIPricingTier(
@@ -253,6 +434,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "10.00",
                 "0.13",
                 _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
                 tiers=[
                     AIPricingTier(
                         label="context>200k",
@@ -274,13 +457,22 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "2.50",
                 "0.03",
                 _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
                 notes="Audio input priced higher ($1.00/1M).",
             ),
         ),
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.5-flash-lite",
-            _tok("0.10", "0.40", "0.01", _SRC_GOOGLE),
+            _tok(
+                "0.10",
+                "0.40",
+                "0.01",
+                _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         # ── Google completions (deprecated: shutdown date passed) ───────────
         _info(

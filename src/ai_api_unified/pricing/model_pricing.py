@@ -45,10 +45,11 @@ class AITokenRates(BaseModel):
     """Per-1M-token rates. output/cached are None where a modality lacks them.
 
     Cache writes are billed at a premium over base input and are priced per
-    cache lifetime, so the two supported TTLs carry separate rates. Both stay
-    None for providers that do not charge to populate a cache (OpenAI writes
-    are free; Google's explicit caching bills storage per hour rather than a
-    per-token write).
+    cache lifetime, so the two supported TTLs carry separate rates. A rate of
+    zero records that the provider charges nothing to populate a cache (OpenAI
+    writes are free; Google's explicit caching bills storage per hour rather
+    than a per-token write). None is reserved for a write that is charged but
+    not yet rated, which bills at the base input rate.
     """
 
     input_per_1m: Decimal
@@ -105,8 +106,10 @@ class AIModelPricing(BaseModel):
 
         Cache-write tokens are billed at a premium over base input and are
         reported separately by the provider, so they are NOT a subset of
-        input_tokens: pass them in addition. Each TTL bills at its own rate,
-        falling back to the input rate when the provider charges no premium.
+        input_tokens: pass them in addition. Each TTL bills at its own rate;
+        a zero rate means writes are free on that provider, while an absent
+        rate means the write is charged but unrated and falls back to the
+        base input rate.
 
         Args:
             input_tokens: Non-cached input tokens billed at the input rate.
@@ -139,8 +142,10 @@ class AIModelPricing(BaseModel):
                 else rates.input_per_1m
             )
             cost += Decimal(cached_input_tokens) * cached_rate / TOKENS_PER_RATE_UNIT
-        # Each TTL bills at its own premium; absent a configured rate the write
-        # still costs at least base input, so fall back to that rather than free.
+        # Each TTL bills at its own rate. A rate of zero means the provider
+        # charges nothing to populate a cache and is billed as free. A rate of
+        # None means the write is charged but not yet rated, so it falls back
+        # to base input — under-reporting the premium rather than dropping it.
         for int_write_tokens, decimal_write_rate in (
             (cache_write_5m_tokens, rates.cache_write_5m_per_1m),
             (cache_write_1h_tokens, rates.cache_write_1h_per_1m),

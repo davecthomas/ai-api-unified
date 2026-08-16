@@ -152,9 +152,10 @@ topic.
    `provider_prompt_tokens` — the provider counts them separately, so folding
    them in would bill them twice. OpenAI charges nothing to write a cache and
    Google bills explicit-cache *storage* per hour rather than a per-token write,
-   so both leave the rates unset. An unset rate falls back to the base input
-   rate rather than to free, so an unrated model under-reports the premium
-   instead of dropping the cost entirely.
+   so both carry an explicit zero rate. Zero and unset are deliberately
+   distinct: zero bills as free, while unset means charged-but-unrated and
+   falls back to the base input rate, under-reporting the premium instead of
+   dropping the cost entirely.
 
 5. **Aggregation: none in-library.** Per-call events only, correlated via the
    `caller_id` / session / workflow ids already on the context. Rollups are the
