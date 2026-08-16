@@ -182,16 +182,24 @@ class TestRegistry:
                 "2"
             ), model
 
-    def test_bedrock_claude_models_are_rated_or_explicitly_noted(self) -> None:
-        """Bedrock bills cache writes, so an unrated Claude entry must say why.
+    def test_bedrock_models_are_rated_or_explicitly_noted(self) -> None:
+        """Bedrock bills cache writes, so an unrated entry must say why.
 
-        Bedrock is partner-priced, so its rates cannot be derived from the
-        Anthropic multipliers. An unrated entry silently bills writes at base
-        input; requiring a note keeps that a recorded decision rather than an
-        oversight the next model inherits.
+        The engine reports cacheWriteInputTokens for every Bedrock completions
+        model, not only the Claude ones, so this covers them all. An unrated
+        entry silently bills writes at base input; requiring a note keeps that
+        a recorded decision rather than an oversight the next model inherits.
+        Embeddings models are excluded — they have no prompt cache to prime,
+        which an absent output rate identifies.
         """
         for (provider, model), info in DICT_MODEL_INFO.items():
-            if provider != PROVIDER_BEDROCK or "anthropic" not in model:
+            if provider != PROVIDER_BEDROCK:
+                continue
+            if (
+                info.pricing is not None
+                and info.pricing.token_rates is not None
+                and info.pricing.token_rates.output_per_1m is None
+            ):
                 continue
             if info.pricing is None or info.pricing.token_rates is None:
                 continue
@@ -229,6 +237,26 @@ class TestRegistry:
             and info.pricing.token_rates is not None
             and info.pricing.token_rates.cached_input_per_1m is not None
             and info.pricing.token_rates.cache_write_5m_per_1m is None
+        ]
+
+        assert list_unset == []
+
+    def test_conditional_tier_rates_carry_cache_write_columns(self) -> None:
+        """Tier rates must not drop the write columns their base entry carries.
+
+        `compute_token_cost` does not consult tiers yet, so a gap here is
+        latent rather than live — but tier-aware pricing is exactly what the
+        tiers exist for, and a free-write model whose tier rates are unset
+        would bill writes at the tier input rate once it lands.
+        """
+        list_unset: list[str] = [
+            f"{provider}/{model} tier={tier.label!r}"
+            for (provider, model), info in DICT_MODEL_INFO.items()
+            if info.pricing is not None and info.pricing.tiers
+            for tier in info.pricing.tiers
+            if tier.token_rates is not None
+            and tier.token_rates.cached_input_per_1m is not None
+            and tier.token_rates.cache_write_5m_per_1m is None
         ]
 
         assert list_unset == []

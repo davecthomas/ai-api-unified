@@ -419,6 +419,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                             input_per_1m=Decimal("4.00"),
                             output_per_1m=Decimal("18.00"),
                             cached_input_per_1m=Decimal("0.40"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
                         ),
                     )
                 ],
@@ -443,6 +445,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                             input_per_1m=Decimal("2.50"),
                             output_per_1m=Decimal("15.00"),
                             cached_input_per_1m=Decimal("0.25"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
                         ),
                     )
                 ],
@@ -558,26 +562,53 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             sunset=date(2026, 8, 17),
             replacement="a current-generation Gemini image model",
         ),
-        # ── Bedrock completions ─────────────────────────────────────────────
+        # ── Bedrock completions (the engine reports cacheWriteInputTokens for
+        # every model here, so each carries either an explicit write rate or a
+        # note recording why it is unrated; unrated writes bill at base input,
+        # which under-reports a premium rather than dropping the cost) ───────
         _info(
             PROVIDER_BEDROCK,
             "amazon.nova-micro-v1:0",
-            _tok("0.035", "0.14", None, _SRC_BEDROCK),
+            _tok(
+                "0.035",
+                "0.14",
+                None,
+                _SRC_BEDROCK,
+                notes="AWS bills Nova cache writes at the standard input price, so the unset cache-write rate resolves to the correct amount via the base-input fallback rather than needing its own column.",
+            ),
         ),
         _info(
             PROVIDER_BEDROCK,
             "amazon.nova-lite-v1:0",
-            _tok("0.06", "0.24", None, _SRC_BEDROCK),
+            _tok(
+                "0.06",
+                "0.24",
+                None,
+                _SRC_BEDROCK,
+                notes="AWS bills Nova cache writes at the standard input price, so the unset cache-write rate resolves to the correct amount via the base-input fallback rather than needing its own column.",
+            ),
         ),
         _info(
             PROVIDER_BEDROCK,
             "amazon.nova-pro-v1:0",
-            _tok("0.80", "3.20", None, _SRC_BEDROCK),
+            _tok(
+                "0.80",
+                "3.20",
+                None,
+                _SRC_BEDROCK,
+                notes="AWS bills Nova cache writes at the standard input price, so the unset cache-write rate resolves to the correct amount via the base-input fallback rather than needing its own column.",
+            ),
         ),
         _info(
             PROVIDER_BEDROCK,
             "amazon.nova-premier-v1:0",
-            _tok("2.50", "12.50", None, _SRC_BEDROCK),
+            _tok(
+                "2.50",
+                "12.50",
+                None,
+                _SRC_BEDROCK,
+                notes="AWS bills Nova cache writes at the standard input price, so the unset cache-write rate resolves to the correct amount via the base-input fallback rather than needing its own column.",
+            ),
         ),
         _info(
             PROVIDER_BEDROCK,

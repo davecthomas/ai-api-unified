@@ -195,7 +195,9 @@ class AITokenRates(BaseModel):
     input_per_1m: Decimal
     output_per_1m: Decimal | None = None       # None for embeddings
     cached_input_per_1m: Decimal | None = None
-    cache_write_5m_per_1m: Decimal | None = None  # None where writes are free
+    # Decimal("0") = provider charges nothing to populate a cache.
+    # None = charged but not yet rated; falls back to input_per_1m.
+    cache_write_5m_per_1m: Decimal | None = None
     cache_write_1h_per_1m: Decimal | None = None
 
 class AIPricingTier(BaseModel):
