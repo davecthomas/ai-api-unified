@@ -222,6 +222,46 @@ class TestBedrockCacheWriteCapture:
         }
 
 
+class TestCacheWriteWiringCompleteness:
+    """Every path that reports cache reads must also report cache writes.
+
+    The two are extracted from the same usage payload, so a result-summary
+    construction that reports one and not the other is an oversight: the call
+    bills its cache discount but silently drops the write premium. This caught
+    two Bedrock paths (the Converse tool-loop turn and the structured-output
+    provider) that a first pass missed.
+    """
+
+    @staticmethod
+    def _unwired_sites(module_filename: str) -> list[int]:
+        import inspect
+        import importlib
+
+        module = importlib.import_module(
+            f"ai_api_unified.completions.{module_filename}"
+        )
+        lines = inspect.getsource(module).split("\n")
+        list_unwired: list[int] = []
+        for index, line in enumerate(lines):
+            if "provider_cached_input_tokens=" not in line:
+                continue
+            # The cache-write splat sits adjacent to the cached-read kwarg.
+            window = "\n".join(lines[index : index + 4])
+            if "cache_write" not in window:
+                list_unwired.append(index + 1)
+        return list_unwired
+
+    def test_anthropic_reports_writes_wherever_it_reports_reads(self) -> None:
+        pytest.importorskip("anthropic")
+
+        assert self._unwired_sites("ai_anthropic_completions") == []
+
+    def test_bedrock_reports_writes_wherever_it_reports_reads(self) -> None:
+        pytest.importorskip("boto3")
+
+        assert self._unwired_sites("ai_bedrock_completions") == []
+
+
 class TestBedrockCachedFold:
     def test_prompt_folds_cache_reads(self) -> None:
         pytest.importorskip("boto3")

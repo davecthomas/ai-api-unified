@@ -390,11 +390,22 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_BEDROCK,
             "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-            _tok("0.80", "4.00", None, _SRC_BEDROCK),
+            _tok(
+                "0.80",
+                "4.00",
+                None,
+                _SRC_BEDROCK,
+                notes="Bedrock bills cache writes (cacheWriteInputTokens) but is "
+                "partner-priced, and no authoritative AWS cache-write rate has "
+                "been sourced. Writes therefore fall back to the base input "
+                "rate, under-reporting the premium rather than dropping it. "
+                "Add write_5m_r once the AWS rate is confirmed.",
+            ),
         ),
         # ── Anthropic completions (native API; cached rate is the documented
-        # 0.1x prompt-cache read multiplier; 5-minute cache writes bill 1.25x
-        # and are not modeled) ───────────────────────────────────────────────
+        # 0.1x prompt-cache read multiplier. Cache writes bill above base input
+        # and are priced per cache lifetime: 1.25x for the 5-minute TTL and 2x
+        # for the 1-hour TTL) ────────────────────────────────────────────────
         _info(
             PROVIDER_ANTHROPIC,
             "claude-fable-5",

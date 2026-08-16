@@ -176,7 +176,12 @@ class AiApiCallResultSummaryModel:
         provider_cache_write_1h_tokens: Optional provider-reported count of tokens
             written to a 1-hour-TTL prompt cache, billed at a higher premium than
             the 5-minute tier. Also not a subset of provider_prompt_tokens.
-        provider_total_tokens: Optional provider-reported total token count.
+        provider_total_tokens: Optional provider-reported total token count. This
+            is the provider's own total (prompt + completion) and excludes
+            cache-write tokens, which the provider counts separately. Cost
+            includes those writes, so usd_cost / provider_total_tokens is not a
+            valid effective rate on a cache-priming call; add the cache-write
+            fields to the denominator when computing one.
         finish_reason: Optional provider finish reason.
         dict_metadata: Additional scalar metadata fields safe to emit in logs.
     """

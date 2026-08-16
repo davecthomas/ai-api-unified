@@ -24,6 +24,7 @@ from ai_api_unified.pricing import pricing_registry
 from ai_api_unified.pricing.pricing_registry import (
     DICT_MODEL_INFO,
     PROVIDER_ANTHROPIC,
+    PROVIDER_BEDROCK,
 )
 
 
@@ -180,6 +181,26 @@ class TestRegistry:
             assert rates.cache_write_1h_per_1m == rates.input_per_1m * Decimal(
                 "2"
             ), model
+
+    def test_bedrock_claude_models_are_rated_or_explicitly_noted(self) -> None:
+        """Bedrock bills cache writes, so an unrated Claude entry must say why.
+
+        Bedrock is partner-priced, so its rates cannot be derived from the
+        Anthropic multipliers. An unrated entry silently bills writes at base
+        input; requiring a note keeps that a recorded decision rather than an
+        oversight the next model inherits.
+        """
+        for (provider, model), info in DICT_MODEL_INFO.items():
+            if provider != PROVIDER_BEDROCK or "anthropic" not in model:
+                continue
+            if info.pricing is None or info.pricing.token_rates is None:
+                continue
+            if info.pricing.token_rates.cache_write_5m_per_1m is not None:
+                continue
+            assert info.pricing.notes and "cache write" in info.pricing.notes, (
+                f"{model} bills cache writes but carries no rate and no note "
+                "explaining the gap"
+            )
 
     def test_providers_without_cache_write_charges_stay_unrated(self) -> None:
         """OpenAI writes are free and Google bills cache storage, not writes."""

@@ -1153,7 +1153,9 @@ stored per lifetime and each event carries its own count:
 
 Unlike cache reads, writes are **not** a subset of `input_tokens` — the provider
 reports them separately, so they add to the cost rather than re-slicing the
-prompt. Anthropic supplies the per-TTL split; Bedrock reports one
+prompt. They are likewise excluded from the provider's own total token count, so
+`usd_cost / provider_total_tokens` is not a valid effective rate on a
+cache-priming call; include the cache-write counts in the denominator. Anthropic supplies the per-TTL split; Bedrock reports one
 `cacheWriteInputTokens` that is attributed to the 5-minute tier, the only
 lifetime it exposes. OpenAI charges nothing to write a cache, and Google bills
 explicit-cache storage per hour rather than per written token, so neither

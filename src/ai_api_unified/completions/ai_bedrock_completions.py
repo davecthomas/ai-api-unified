@@ -1063,6 +1063,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             provider_prompt_tokens=turn_result.usage.input_tokens,
             provider_completion_tokens=turn_result.usage.output_tokens,
             provider_cached_input_tokens=turn_result.usage.cached_input_tokens,
+            **self._cache_write_kwargs(dict_response),
             provider_total_tokens=turn_result.usage.total_tokens,
             dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
         )
@@ -1302,6 +1303,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 provider_prompt_tokens=usage.input_tokens,
                 provider_completion_tokens=usage.output_tokens,
                 provider_cached_input_tokens=usage.cached_input_tokens,
+                **self._cache_write_kwargs(dict_response),
                 provider_total_tokens=usage.total_tokens,
             )
 
