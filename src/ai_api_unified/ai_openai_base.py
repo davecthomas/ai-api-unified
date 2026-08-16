@@ -15,7 +15,7 @@ from ai_api_unified.ai_base import (
     ORG_INFO_SOURCE_RESPONSE_HEADER,
     RETRY_POLICY_DEFAULT,
     RETRY_POLICY_NONE,
-    normalize_retry_policy,
+    resolve_retry_policy,
 )
 from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
 from ai_api_unified.util.env_settings import EnvSettings
@@ -24,6 +24,8 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 RETRY_POLICY_KEY: str = "COMPLETIONS_RETRY_POLICY"
 OPENAI_BASE_URL_OVERRIDE_SETTING: str = "OPENAI_BASE_URL_OVERRIDE"
+OPENAI_USER_SETTING_KEY: str = "OPENAI_USER"
+DEFAULT_OPENAI_USER: str = "default_user"
 OPENAI_ME_PATH: str = "/me"
 OPENAI_ORG_ID_RESPONSE_HEADER: str = "openai-organization"
 ORG_RESOLUTION_TIMEOUT_SECONDS: float = 10.0
@@ -68,17 +70,23 @@ class AIOpenAIBase:
         """
         self.env = EnvSettings()
         self.api_key = self.env.get_setting("OPENAI_API_KEY")
-        self.user = self.env.get_setting("OPENAI_USER", "default_user")
+        # Blank is unconfigured here too: a present-but-blank OPENAI_USER would
+        # otherwise resolve to "" and drop caller attribution to None, while the
+        # documented contract promises the sentinel.
+        str_configured_user: str = str(
+            self.env.get_setting(OPENAI_USER_SETTING_KEY, DEFAULT_OPENAI_USER) or ""
+        ).strip()
+        self.user = str_configured_user or DEFAULT_OPENAI_USER
         if not self.api_key or self.api_key.strip() == "":
             raise ValueError("OPENAI_API_KEY environment variable must be set.")
         self.base_url = self.get_api_base_url(base_url=base_url)
 
-        str_candidate: str = (
-            retry_policy
-            if retry_policy is not None
-            else str(self.env.get_setting(RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT))
+        self.retry_policy: str = resolve_retry_policy(
+            str_explicit=retry_policy,
+            object_configured=self.env.get_setting(
+                RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT
+            ),
         )
-        self.retry_policy: str = normalize_retry_policy(str_candidate)
         dict_client_kwargs: dict[str, Any] = {
             "api_key": self.api_key,
             "base_url": self.base_url,

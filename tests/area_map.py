@@ -149,6 +149,8 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     # Voice
     "test_audio_dependency_isolation.py": ("core", "voice", "engine_anthropic"),
     "test_ai_voice_factory_provider_loading.py": ("voice",),
+    "test_ai_factory_voice_client.py": ("core", "voice"),
+    "test_voice_caller_id_attribution.py": ("voice", "middleware"),
     "test_voice_env_settings.py": ("voice",),
     "test_voice_nonmock.py": ("voice",),
 }

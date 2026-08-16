@@ -4,6 +4,33 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.23.0
+
+- Fixed OpenAI text-to-speech: every `text_to_voice` and `stream_audio` call
+  raised `AttributeError` because pydantic's MRO skipped
+  `AIOpenAIBase.__init__`. The voice constructor now invokes that shared
+  initializer, so the inherited surface (`async_client`, organization lookup,
+  `OPENAI_USER` caller attribution) works.
+- Fixed OpenAI `stream_audio` passing an unsupported `stream=True` argument;
+  streaming now uses the SDK's `with_streaming_response` API.
+- Fixed a latent `AttributeError` in OpenAI `speech_to_text` rate-limit
+  backoff (`time.sleep` called on the `time` function).
+- Added `AIFactory.get_ai_voice_client(voice_engine=None, base_url=None,
+  retry_policy=None)`; `AIVoiceFactory.create()` gains the same optional
+  arguments and stays callable with none. The `base_url` and `retry_policy`
+  arguments apply to the `openai` engine and are rejected with
+  `AiProviderCapabilityUnsupportedError` on engines that cannot honor them.
+- Voice caller attribution now flows through
+  `AIVoiceBase._resolve_legacy_caller_id()`: OpenAI attributes to
+  `OPENAI_USER` (falling back to `default_user`), other voice engines stay
+  unattributed unless the application sets an observability context.
+- A present-but-blank `COMPLETIONS_RETRY_POLICY` or `OPENAI_USER` is now
+  treated as unconfigured across all engines instead of raising or silently
+  dropping attribution; explicit blank constructor arguments still raise.
+- Fixed `get_default_voice()` dropping `language`, `locale`, `accent`, and
+  `gender` from the returned selection, which mislabeled synthesis language
+  on Azure and Google.
+
 ## 2.22.0
 
 - `claude-opus-4-1` is now RETIRED (Anthropic withdrew it 2026-08-05) with

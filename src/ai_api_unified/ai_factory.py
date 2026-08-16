@@ -30,6 +30,8 @@ from .ai_provider_registry import (
     get_ai_provider_spec,
 )
 from .util.env_settings import EnvSettings
+from .voice.ai_voice_base import AIVoiceBase
+from .voice.ai_voice_factory import AI_VOICE_ENGINE_ENV_KEY, AIVoiceFactory
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -547,3 +549,40 @@ class AIFactory:
             raise
         except AiProviderRuntimeError:
             raise
+
+    @staticmethod
+    def get_ai_voice_client(
+        voice_engine: str | None = None,
+        base_url: str | None = None,
+        retry_policy: str | None = None,
+    ) -> AIVoiceBase:
+        """
+        Instantiates the configured voice (text-to-speech) client.
+
+        Delegates to AIVoiceFactory, which owns voice provider construction, so
+        every capability is reachable from the same factory.
+
+        Args:
+            voice_engine: Optional engine override; falls back to AI_VOICE_ENGINE config.
+            base_url: Optional API base-URL override for engines whose SDK accepts one.
+            retry_policy: Optional retry policy for engines whose SDK accepts one.
+
+        Returns:
+            Concrete AIVoiceBase implementation for the requested voice engine.
+        """
+        env_settings: EnvSettings = EnvSettings()
+        str_voice_engine: str = AIFactory._resolve_required_engine(
+            env_settings=env_settings,
+            str_engine_key=AI_VOICE_ENGINE_ENV_KEY,
+            str_engine_override=voice_engine,
+        )
+
+        # AIVoiceFactory owns the per-engine support check, since it is the
+        # layer that accepts and forwards these arguments.
+        dict_provider_kwargs: dict[str, Any] = {}
+        if base_url is not None:
+            dict_provider_kwargs["base_url"] = base_url
+        if retry_policy is not None:
+            dict_provider_kwargs["retry_policy"] = retry_policy
+        # Normal return with the voice client resolved by the voice factory.
+        return AIVoiceFactory.create(str_voice_engine, **dict_provider_kwargs)

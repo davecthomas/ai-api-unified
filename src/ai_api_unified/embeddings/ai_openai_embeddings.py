@@ -9,7 +9,11 @@ import httpx
 from openai import BadRequestError, OpenAI
 from openai.types import CreateEmbeddingResponse, EmbeddingCreateParams
 
-from ai_api_unified.ai_openai_base import AIOpenAIBase
+from ai_api_unified.ai_openai_base import (
+    AIOpenAIBase,
+    DEFAULT_OPENAI_USER,
+    OPENAI_USER_SETTING_KEY,
+)
 
 from ..ai_base import (
     AIBaseEmbeddings,
@@ -112,7 +116,13 @@ class AiOpenAIEmbeddings(AIBaseEmbeddings, AIOpenAIBase):
         self.base_url = self.get_api_base_url()
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         self.backoff_delays = [1, 2, 4, 8, 16]
-        self.user = env.get_setting("OPENAI_USER", "default_user")
+        # Blank is unconfigured, matching AIOpenAIBase: a present-but-blank
+        # OPENAI_USER would otherwise resolve to "" and normalize to None,
+        # dropping caller attribution only for embeddings.
+        str_configured_user: str = str(
+            env.get_setting(OPENAI_USER_SETTING_KEY, DEFAULT_OPENAI_USER) or ""
+        ).strip()
+        self.user = str_configured_user or DEFAULT_OPENAI_USER
 
     @property
     def model_name(self) -> str:

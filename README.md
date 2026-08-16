@@ -1,4 +1,4 @@
-# ai-api-unified 2.22.0
+# ai-api-unified 2.23.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -31,7 +31,7 @@ The public entry points are the stable base interfaces and factories:
 - `AIFactory.get_ai_embedding_client()`
 - `AIFactory.get_ai_images_client()`
 - `AIFactory.get_ai_video_client()`
-- `AIVoiceFactory.create()`
+- `AIFactory.get_ai_voice_client()` (or `AIVoiceFactory.create()`)
 
 ## Capabilities
 
@@ -734,14 +734,53 @@ Frame extraction requires the optional `video_frames` extra.
 ### Voice
 
 ```python
-from ai_api_unified import AIVoiceBase, AIVoiceFactory
+from ai_api_unified import AIFactory, AIVoiceBase
 
-voice: AIVoiceBase = AIVoiceFactory.create()
-audio_bytes: bytes = voice.text_to_speech("Hello from ai-api-unified")
+voice: AIVoiceBase = AIFactory.get_ai_voice_client()
+audio_bytes: bytes = voice.text_to_voice(
+    text_to_convert="Hello from ai-api-unified",
+    voice=voice.get_default_voice(),
+    audio_format=voice.default_audio_format,
+)
 
-with open("out.wav", "wb") as output_file:
+with open(f"out{voice.default_audio_format.file_extension}", "wb") as output_file:
     output_file.write(audio_bytes)
 ```
+
+`text_to_voice` is keyword-only, and `voice` and `audio_format` are required;
+`get_default_voice()` and `default_audio_format` supply the provider's own
+defaults. Use `stream_audio(text)` for the streaming variant.
+
+`AIFactory.get_ai_voice_client()` reads `AI_VOICE_ENGINE` and accepts an
+explicit `voice_engine` override, matching the other capability constructors.
+It delegates to `AIVoiceFactory.create()`, which remains supported and callable
+with no arguments.
+
+Calls are attributed to `OPENAI_USER` on the OpenAI engine, falling back to the
+`default_user` sentinel when it is unset — the same behavior the OpenAI
+completions, embeddings, images, and videos clients already have. The other
+voice engines expose no vendor user setting, so their calls carry no
+originating caller id unless the application sets one through the
+observability context.
+
+The OpenAI voice client shares `AIOpenAIBase` with the other OpenAI-backed
+capabilities, so it honors `COMPLETIONS_RETRY_POLICY` and `OPENAI_BASE_URL_OVERRIDE`,
+and accepts the same `retry_policy` and `base_url` constructor arguments:
+
+```python
+voice = AIFactory.get_ai_voice_client(
+    voice_engine="openai",
+    base_url="https://gateway.example.com/v1",
+    retry_policy="none",
+)
+```
+
+Only the `openai` voice engine accepts these; passing them to `google`,
+`azure`, or `elevenlabs` raises `AiProviderCapabilityUnsupportedError` rather
+than ignoring them.
+
+A blank retry-policy setting (`COMPLETIONS_RETRY_POLICY=`) is treated as
+unconfigured and falls back to `default` across every OpenAI-backed capability.
 
 ## Configuration
 
@@ -1004,7 +1043,7 @@ Factory entry points:
 - `AIFactory.get_ai_embedding_client()`
 - `AIFactory.get_ai_images_client()`
 - `AIFactory.get_ai_video_client()`
-- `AIVoiceFactory.create()`
+- `AIFactory.get_ai_voice_client()` (or `AIVoiceFactory.create()`)
 
 Concrete providers are no longer re-exported from package `__init__.py` modules. If you need a concrete class directly, import it from its implementation module, for example:
 

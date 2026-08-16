@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -15,6 +17,7 @@ pytest.importorskip("google.genai")
 pytest.importorskip("google.cloud.texttospeech")
 pytest.importorskip("google.cloud.speech_v1p1beta1")
 
+import ai_api_unified.ai_openai_base as ai_openai_base_module
 import ai_api_unified.voice.ai_voice_elevenlabs as ai_voice_elevenlabs_module
 import ai_api_unified.voice.ai_voice_openai as ai_voice_openai_module
 from ai_api_unified.middleware.observability import (
@@ -37,6 +40,7 @@ from ai_api_unified.voice.ai_voice_google import (
     AIVoiceGoogle,
     AIVoiceSelectionGoogle,
 )
+from ai_api_unified.ai_openai_base import OPENAI_USER_SETTING_KEY
 from ai_api_unified.voice.ai_voice_openai import (
     AIVoiceOpenAI,
     AIVoiceSelectionOpenAI,
@@ -186,40 +190,54 @@ def _build_openai_voice_client(
     *,
     middleware: RecordingObservabilityMiddleware,
     callable_create: Callable[..., Any],
+    callable_streaming_create: Callable[..., Any] | None = None,
 ) -> AIVoiceOpenAI:
     """
-    Builds a partially initialized OpenAI voice client for observability tests.
+    Builds an OpenAI voice client through its real constructor for observability tests.
+
+    Construction must run the provider's own `__init__`: attribution state such as
+    the OPENAI_USER caller id is resolved there, and a `model_construct` shortcut
+    that injects that state by hand cannot fail when the constructor stops setting it.
 
     Args:
         middleware: Recording observability middleware used to capture lifecycle events.
         callable_create: Fake OpenAI speech creation callable used by the provider code.
+        callable_streaming_create: Optional fake streaming-response creation callable.
 
     Returns:
         AIVoiceOpenAI instance with fake SDK dependencies injected.
     """
-    selected_voice: AIVoiceSelectionOpenAI = AIVoiceSelectionOpenAI(
-        voice_id="alloy",
-        voice_name="Alloy",
-        locale="en-US",
-    )
-    default_audio_format: AudioFormat = _build_audio_format(
-        key="flac_24000",
-        file_extension=".flac",
-        sample_rate_hz=24_000,
-    )
-    ai_voice_openai: AIVoiceOpenAI = AIVoiceOpenAI.model_construct(
-        engine="openai",
-        default_model_id=TEST_OPENAI_MODEL,
-        selected_model=SimpleNamespace(name=TEST_OPENAI_MODEL),
-        default_audio_format=default_audio_format,
-        selected_voice=selected_voice,
-    )
-    object.__setattr__(ai_voice_openai, "user", TEST_LEGACY_CALLER_ID)
+    mock_env_settings: Mock = Mock()
+    mock_env_settings.get_setting.side_effect = lambda key, default=None: {
+        "OPENAI_API_KEY": "test-openai-api-key",
+        OPENAI_USER_SETTING_KEY: TEST_LEGACY_CALLER_ID,
+    }.get(key, default)
+
+    # AIOpenAIBase.get_api_base_url builds its own EnvSettings from its own module,
+    # so patching only the voice module would let this read the ambient env and .env.
+    with (
+        patch.object(
+            ai_voice_openai_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(
+            ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
+        ),
+        patch.object(ai_openai_base_module, "OpenAI", return_value=SimpleNamespace()),
+    ):
+        ai_voice_openai: AIVoiceOpenAI = AIVoiceOpenAI(engine="openai")
+
     object.__setattr__(
         ai_voice_openai,
         "client",
         SimpleNamespace(
-            audio=SimpleNamespace(speech=SimpleNamespace(create=callable_create))
+            audio=SimpleNamespace(
+                speech=SimpleNamespace(
+                    create=callable_create,
+                    with_streaming_response=SimpleNamespace(
+                        create=callable_streaming_create
+                    ),
+                )
+            )
         ),
     )
     object.__setattr__(ai_voice_openai, "_observability_middleware", middleware)
@@ -448,7 +466,8 @@ def test_openai_stream_audio_emits_streaming_metadata(
     middleware = RecordingObservabilityMiddleware()
     dict_captured_params: dict[str, Any] = {}
 
-    def _fake_create(**params: Any) -> Any:
+    @contextmanager
+    def _fake_streaming_create(**params: Any) -> Any:
         """
         Capture OpenAI streaming request parameters and return deterministic byte chunks.
 
@@ -456,27 +475,49 @@ def test_openai_stream_audio_emits_streaming_metadata(
             **params: Provider request parameters supplied by the client under test.
 
         Returns:
-            Fake streaming response object exposing an `iter_bytes` iterator.
+            Context-managed fake streaming response exposing an `iter_bytes` iterator.
         """
         dict_captured_params.update(params)
-        # Normal return with a deterministic fake streaming response object.
-        return SimpleNamespace(
+        # Normal yield of a deterministic fake streaming response object.
+        yield SimpleNamespace(
             iter_bytes=lambda: iter([b"openai-", b"stream-", b"audio"])
+        )
+
+    def _unexpected_create(**_: Any) -> Any:
+        """
+        Fail the test when streaming synthesis calls the non-streaming endpoint.
+
+        Args:
+            **_: Ignored provider request parameters.
+
+        Returns:
+            Never returns; always raises AssertionError.
+        """
+        raise AssertionError(
+            "stream_audio must use audio.speech.with_streaming_response.create"
         )
 
     monkeypatch.setattr(ai_voice_openai_module, "is_hex_enabled", lambda: True)
     ai_voice_client: AIVoiceOpenAI = _build_openai_voice_client(
         middleware=middleware,
-        callable_create=_fake_create,
+        callable_create=_unexpected_create,
+        callable_streaming_create=_fake_streaming_create,
     )
 
     audio_bytes: bytes = ai_voice_client.stream_audio(TEST_TEXT_TO_CONVERT)
 
     assert audio_bytes == TEST_OPENAI_STREAM_BYTES
-    assert dict_captured_params["stream"] is True
+    # `stream` is not a parameter of the OpenAI speech endpoint in any 2.x release;
+    # passing it raises TypeError against the real SDK.
+    assert "stream" not in dict_captured_params
+    assert dict_captured_params["model"] == TEST_OPENAI_MODEL
     assert len(middleware.list_before_contexts) == 1
     assert len(middleware.list_after_events) == 1
     assert middleware.list_before_contexts[0].dict_metadata["streaming_mode"] is True
+    assert (
+        middleware.list_before_contexts[0].originating_caller_id
+        == TEST_LEGACY_CALLER_ID
+    )
 
 
 def test_google_emotion_prompt_emits_metadata_only_once() -> None:

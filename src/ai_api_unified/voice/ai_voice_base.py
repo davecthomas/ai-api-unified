@@ -294,14 +294,19 @@ class AIVoiceBase(BaseModel, ABC):
         Args:
             operation: Public operation name such as `text_to_voice` or `stream_audio`.
             dict_metadata: Optional scalar metadata describing the request side of the call.
-            legacy_caller_id: Optional explicit legacy caller hint supplied by existing config.
+            legacy_caller_id: Optional explicit legacy caller hint overriding the provider default.
 
         Returns:
             AiApiCallContextModel containing shared metadata for input, output, and error events.
         """
         observability_context = get_observability_context()
+        effective_legacy_caller_id: str | None = (
+            legacy_caller_id
+            if legacy_caller_id is not None
+            else self._resolve_legacy_caller_id()
+        )
         resolved_caller_id, caller_id_source = resolve_originating_caller(
-            legacy_caller_id=legacy_caller_id
+            legacy_caller_id=effective_legacy_caller_id
         )
         dict_context_metadata: dict[str, ObservabilityMetadataValue] = dict(
             dict_metadata or {}
@@ -483,6 +488,24 @@ class AIVoiceBase(BaseModel, ABC):
         # Early return because no voice model identifier is currently available.
         return None
 
+    def _resolve_legacy_caller_id(self) -> str | None:
+        """
+        Resolves the vendor-configured legacy caller identifier for observability attribution.
+
+        Voice providers are pydantic models, so a vendor base class listed after
+        `AIVoiceBase` in the MRO never has its `__init__` run and never gets to
+        assign attributes such as `user`. Providers therefore override this hook
+        instead of reading vendor state directly at the call site.
+
+        Args:
+            None
+
+        Returns:
+            Vendor-configured legacy caller identifier, or None when the vendor has no such setting.
+        """
+        # Normal return because the vendor exposes no legacy caller identifier by default.
+        return None
+
     def _resolve_observability_provider_vendor(self) -> str:
         """
         Resolves a best-effort provider vendor label for shared observability metadata.
@@ -640,10 +663,11 @@ class AIVoiceBase(BaseModel, ABC):
                 "No voices available. Call get_available_voices() first."
             )
         first_voice: AIVoiceSelectionBase = self.list_available_voices[0]
-        return AIVoiceSelectionBase(
-            voice_id=first_voice.voice_id,
-            voice_name=first_voice.voice_name,
-        )
+        # Copy the catalog entry whole: rebuilding from voice_id and voice_name
+        # dropped language, locale, accent, and gender, and Azure and Google
+        # read locale during synthesis, so the rebuilt default synthesized a
+        # non-English voice under an en-US language tag.
+        return first_voice.model_copy()
 
     def get_available_voices(self) -> list[AIVoiceSelectionBase]:
         """Return the cached list of voices."""

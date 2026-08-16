@@ -60,6 +60,7 @@ from ..ai_base import (
     RETRY_POLICY_NONE,
     SupportedDataType,
     normalize_retry_policy,
+    resolve_retry_policy,
 )
 from ..ai_provider_exceptions import AiProviderRequestError
 from ..middleware.observability_runtime import (
@@ -164,14 +165,12 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         AIGoogleBase.__init__(self, **kwargs)
         self._str_base_url_override: str | None = base_url
         self.env: EnvSettings = EnvSettings()
-        str_retry_candidate: str = (
-            retry_policy
-            if retry_policy is not None
-            else str(
-                self.env.get_setting("COMPLETIONS_RETRY_POLICY", RETRY_POLICY_DEFAULT)
-            )
+        self.retry_policy: str = resolve_retry_policy(
+            str_explicit=retry_policy,
+            object_configured=self.env.get_setting(
+                "COMPLETIONS_RETRY_POLICY", RETRY_POLICY_DEFAULT
+            ),
         )
-        self.retry_policy: str = normalize_retry_policy(str_retry_candidate)
         self.geo_residency: str | None = self.env.get_geo_residency()
         if self.geo_residency:
             _LOGGER.warning(

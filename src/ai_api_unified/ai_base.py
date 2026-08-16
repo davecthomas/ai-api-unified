@@ -470,6 +470,44 @@ def normalize_retry_policy(retry_policy: str) -> str:
     return str_normalized
 
 
+def resolve_retry_policy(
+    *,
+    str_explicit: str | None,
+    object_configured: object,
+) -> str:
+    """
+    Resolves one retry policy from an explicit argument or configuration.
+
+    Every engine reads the same COMPLETIONS_RETRY_POLICY key, so they must agree
+    on what a blank value means. Configuration that is present but blank is
+    unconfigured: settings accessors return "" rather than the default for such a
+    key, and a stray `COMPLETIONS_RETRY_POLICY=` line must not break construction.
+    An argument a caller typed is validated as given, because passing "" is a
+    mistake worth reporting rather than silently defaulting.
+
+    Takes the already-read configuration value rather than an accessor, since
+    engines source it from either EnvSettings or a settings mapping.
+
+    Args:
+        str_explicit: Retry policy supplied by the caller, or None when absent.
+        object_configured: Raw configured value read from environment or settings.
+
+    Returns:
+        Normalized retry policy token ("default" or "none").
+
+    Raises:
+        ValueError: When an explicit or non-blank configured value is unrecognized.
+    """
+    if str_explicit is not None:
+        # Early return validating the caller's argument exactly as supplied.
+        return normalize_retry_policy(str_explicit)
+    str_configured: str = (
+        str(object_configured).strip() if object_configured is not None else ""
+    )
+    # Normal return treating a blank configured value as unconfigured.
+    return normalize_retry_policy(str_configured or RETRY_POLICY_DEFAULT)
+
+
 class AIFinishReason(str, Enum):
     """
     Normalized reason a completions turn stopped, uniform across engines.

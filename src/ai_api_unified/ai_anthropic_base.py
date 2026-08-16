@@ -25,7 +25,7 @@ from ai_api_unified.ai_base import (
     ORG_INFO_SOURCE_RESPONSE_HEADER,
     RETRY_POLICY_DEFAULT,
     RETRY_POLICY_NONE,
-    normalize_retry_policy,
+    resolve_retry_policy,
 )
 from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
 from ai_api_unified.util.env_settings import EnvSettings
@@ -143,13 +143,13 @@ class AIAnthropicBase:
         Raises:
             ValueError: When an unrecognized retry policy value is supplied.
         """
-        str_candidate: str = (
-            retry_policy
-            if retry_policy is not None
-            else str(self.env.get_setting(RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT))
-        )
         # Normal return with the normalized retry policy token.
-        return normalize_retry_policy(str_candidate)
+        return resolve_retry_policy(
+            str_explicit=retry_policy,
+            object_configured=self.env.get_setting(
+                RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT
+            ),
+        )
 
     @property
     def async_client(self) -> AsyncAnthropic:

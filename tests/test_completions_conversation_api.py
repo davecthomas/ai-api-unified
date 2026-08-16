@@ -684,6 +684,89 @@ class TestRetryPolicyAndErrors:
             with pytest.raises(ValueError, match="Unsupported retry policy"):
                 AiAnthropicCompletions(model="claude-opus-4-8", retry_policy="maybe")
 
+    @pytest.mark.parametrize("str_blank_policy", ["", "   "])
+    def test_blank_env_retry_policy_falls_back_to_default(self, str_blank_policy):
+        """A present-but-blank setting must not break client construction.
+
+        EnvSettings returns "" rather than the default for a blank key, and ""
+        is not a valid policy, so every capability reading it would raise.
+        """
+        from ai_api_unified.ai_openai_base import AIOpenAIBase
+
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "test-key",
+                "COMPLETIONS_RETRY_POLICY": str_blank_policy,
+            },
+        ):
+            with patch("ai_api_unified.ai_openai_base.OpenAI"):
+                openai_base = AIOpenAIBase()
+
+        assert openai_base.retry_policy == "default"
+
+    @pytest.mark.parametrize("str_blank_policy", ["", "   "])
+    def test_blank_env_retry_policy_is_uniform_across_engines(self, str_blank_policy):
+        """Every engine reads COMPLETIONS_RETRY_POLICY, so all must agree on blank.
+
+        Divergence from one shared key is harder to diagnose than a uniform
+        failure: an operator sees one engine build and another raise.
+        """
+        from ai_api_unified.ai_anthropic_base import AIAnthropicBase
+        from ai_api_unified.ai_openai_base import AIOpenAIBase
+
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "test-key",
+                "ANTHROPIC_API_KEY": "test-key",
+                "COMPLETIONS_RETRY_POLICY": str_blank_policy,
+            },
+        ):
+            with patch("ai_api_unified.ai_openai_base.OpenAI"):
+                str_openai_policy = AIOpenAIBase().retry_policy
+            with patch("ai_api_unified.ai_anthropic_base.Anthropic"):
+                str_anthropic_policy = AIAnthropicBase().retry_policy
+
+        assert str_openai_policy == str_anthropic_policy == "default"
+
+    @pytest.mark.parametrize("str_blank_policy", ["", "   "])
+    def test_explicit_blank_retry_policy_is_rejected_not_defaulted(
+        self, str_blank_policy
+    ):
+        """The blank-is-unconfigured rule covers config, never a caller argument."""
+        from ai_api_unified.ai_base import resolve_retry_policy
+
+        with pytest.raises(ValueError, match="Unsupported retry policy"):
+            resolve_retry_policy(
+                str_explicit=str_blank_policy, object_configured="default"
+            )
+
+    def test_resolver_rejects_an_invalid_configured_value(self):
+        """A non-blank invalid configured value must still raise."""
+        from ai_api_unified.ai_base import resolve_retry_policy
+
+        with pytest.raises(ValueError, match="Unsupported retry policy"):
+            resolve_retry_policy(str_explicit=None, object_configured="bogus")
+
+    @pytest.mark.parametrize("str_blank_user", ["", "   "])
+    def test_blank_env_openai_user_falls_back_to_sentinel(self, str_blank_user):
+        """A blank OPENAI_USER must not silently drop caller attribution.
+
+        get_setting returns "" rather than the sentinel for a blank key, which
+        normalizes to None downstream and loses finops attribution.
+        """
+        from ai_api_unified.ai_openai_base import AIOpenAIBase
+
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "test-key", "OPENAI_USER": str_blank_user},
+        ):
+            with patch("ai_api_unified.ai_openai_base.OpenAI"):
+                openai_base = AIOpenAIBase()
+
+        assert openai_base.user == "default_user"
+
     def test_status_error_wrapped_with_status_code(self):
         client = _build_client()
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")

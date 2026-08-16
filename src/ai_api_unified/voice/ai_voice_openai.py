@@ -5,15 +5,19 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from time import time
+from time import sleep
 from typing import Any, ClassVar
 
-from openai import BadRequestError, OpenAI, OpenAIError, RateLimitError
+from openai import AsyncOpenAI, BadRequestError, OpenAIError, RateLimitError
 from openai.types.audio import (
     TranscriptionCreateResponse,
 )
-from pydantic import Field
-from ai_api_unified.ai_openai_base import AIOpenAIBase
+from pydantic import Field, PrivateAttr
+from ai_api_unified.ai_base import RETRY_POLICY_DEFAULT
+from ai_api_unified.ai_openai_base import (
+    AIOpenAIBase,
+    DEFAULT_OPENAI_USER,
+)
 from ai_api_unified.util._lazy_pydub import AudioSegment, get_CouldntDecodeError
 
 from .ai_voice_base import (
@@ -63,15 +67,46 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
 
     default_model_id: str = Field("tts-1-hd", description="Default OpenAI TTS model")
 
-    def __init__(self, *, engine: str, **kwargs: Any) -> None:
+    # AIOpenAIBase.__init__ never runs implicitly for this class: pydantic's
+    # BaseModel sits ahead of it in the MRO and does not chain to super(), so the
+    # constructor invokes it explicitly. These private attributes back the
+    # property pairs below, which is what lets that initializer's plain
+    # `self.<name> = ...` assignments land on a pydantic model.
+    _env: EnvSettings | None = PrivateAttr(default=None)
+    _api_key: str = PrivateAttr(default="")
+    _user: str = PrivateAttr(default=DEFAULT_OPENAI_USER)
+    _base_url: str = PrivateAttr(default="")
+    _retry_policy: str = PrivateAttr(default=RETRY_POLICY_DEFAULT)
+    _backoff_delays: list[int] = PrivateAttr(default_factory=lambda: [1, 2, 4, 8, 16])
+    _async_client: AsyncOpenAI | None = PrivateAttr(default=None)
+
+    def __init__(
+        self,
+        *,
+        engine: str,
+        retry_policy: str | None = None,
+        base_url: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(engine=engine, **kwargs)
-        env: EnvSettings = EnvSettings()
-        api_key: str = env.get_setting("OPENAI_API_KEY", "")
-        if not api_key:
+        # Voice providers signal a missing key with RuntimeError (azure and
+        # elevenlabs do the same), so this runs ahead of the base's ValueError to
+        # keep that contract. Strip first: the base treats a whitespace-only key
+        # as missing, and this guard must agree or the exception type changes.
+        str_configured_api_key: str = str(
+            EnvSettings().get_setting("OPENAI_API_KEY", "") or ""
+        ).strip()
+        if not str_configured_api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
 
-        base_url: str = self.get_api_base_url()
-        self.client: OpenAI = OpenAI(api_key=api_key, base_url=base_url)
+        # Invoke the shared initializer rather than copying it: a duplicate drifts
+        # from the base the moment either side changes, and every attribute it
+        # assigns routes through this class's property setters.
+        AIOpenAIBase.__init__(
+            self,
+            retry_policy=retry_policy,
+            base_url=base_url,
+        )
 
         # Supported formats – all 24 kHz output
         self.list_output_formats: list[AudioFormat] = [
@@ -144,6 +179,80 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
         self.list_models_capabilities = self._initialize_models_and_capabilities()
 
         self.selected_model: AIVoiceModelBase = self.get_default_model()
+
+    # These mirror the plain instance attributes AIOpenAIBase.__init__ assigns on
+    # every other OpenAI-backed client. They stay writable so the surface matches:
+    # existing suites reassign backoff_delays and api_key on sibling capabilities.
+    @property
+    def env(self) -> EnvSettings | None:
+        """Environment accessor resolved at construction, mirroring AIOpenAIBase."""
+        return self._env
+
+    @env.setter
+    def env(self, env_settings: EnvSettings | None) -> None:
+        self._env = env_settings
+
+    @property
+    def api_key(self) -> str:
+        """OpenAI API key resolved at construction, mirroring AIOpenAIBase."""
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, str_api_key: str) -> None:
+        self._api_key = str_api_key
+
+    @property
+    def user(self) -> str:
+        """Configured OPENAI_USER value, mirroring AIOpenAIBase."""
+        return self._user
+
+    @user.setter
+    def user(self, str_user: str) -> None:
+        self._user = str_user
+
+    @property
+    def base_url(self) -> str:
+        """Resolved OpenAI base URL, mirroring AIOpenAIBase."""
+        return self._base_url
+
+    @base_url.setter
+    def base_url(self, str_base_url: str) -> None:
+        self._base_url = str_base_url
+
+    @property
+    def retry_policy(self) -> str:
+        """Normalized retry policy applied to the SDK clients, mirroring AIOpenAIBase."""
+        return self._retry_policy
+
+    @retry_policy.setter
+    def retry_policy(self, str_retry_policy: str) -> None:
+        self._retry_policy = str_retry_policy
+
+    @property
+    def backoff_delays(self) -> list[int]:
+        """Caller-owned backoff schedule, mirroring AIOpenAIBase."""
+        return self._backoff_delays
+
+    @backoff_delays.setter
+    def backoff_delays(self, list_backoff_delays: list[int]) -> None:
+        self._backoff_delays = list_backoff_delays
+
+    def _resolve_legacy_caller_id(self) -> str | None:
+        """
+        Resolves the OPENAI_USER attribution value captured during construction.
+
+        Matches the other OpenAI-backed capabilities: when OPENAI_USER is unset,
+        this reports the DEFAULT_OPENAI_USER sentinel rather than None, so voice
+        events carry the same caller id completions and embeddings already emit.
+
+        Args:
+            None
+
+        Returns:
+            Configured OPENAI_USER value, or the DEFAULT_OPENAI_USER sentinel when unset.
+        """
+        # Normal return with the OPENAI_USER value resolved at construction time.
+        return self.user
 
     def _initialize_models_and_capabilities(self) -> list[AIVoiceModelBase]:
         """
@@ -284,16 +393,19 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
         model_id: str = (
             self.selected_model.name if self.selected_model else self.default_model_id
         )
-        response = self.client.audio.speech.create(
+        # Streaming goes through with_streaming_response; speech.create() takes no
+        # `stream` argument in any openai 2.x release and raises TypeError if given one.
+        with self.client.audio.speech.with_streaming_response.create(
             model=model_id,
             voice=voice.voice_id,
             input=text_to_convert,
             response_format=self._format_to_response_key(audio_format),
             speed=1.0,
-            stream=True,
             instructions=self.DEFAULT_INSTRUCTIONS,
-        )
-        combined_audio_bytes: bytes = b"".join(chunk for chunk in response.iter_bytes())
+        ) as response:
+            combined_audio_bytes: bytes = b"".join(
+                chunk for chunk in response.iter_bytes()
+            )
         if not is_hex_enabled():
             self._play_bytes(combined_audio_bytes)
         # Normal return with the fully aggregated streaming audio payload.
@@ -333,7 +445,6 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
                 ),
                 provider_elapsed_ms=provider_elapsed_ms,
             ),
-            legacy_caller_id=self.user,
         )
         # Normal return with caller-facing audio bytes after optional observability wrapping.
         return audio_bytes
@@ -369,7 +480,6 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
                 ),
                 provider_elapsed_ms=provider_elapsed_ms,
             ),
-            legacy_caller_id=self.user,
         )
         # Normal return with aggregated streaming audio bytes after optional observability wrapping.
         return audio_bytes
@@ -451,7 +561,7 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
                         backoff,
                         attempt,
                     )
-                    time.sleep(backoff)
+                    sleep(backoff)
                     buf.seek(0)
                     continue
                 except OpenAIError as exc:
