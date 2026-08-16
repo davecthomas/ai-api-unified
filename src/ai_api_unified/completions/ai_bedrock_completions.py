@@ -997,12 +997,15 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
         Builds the provider-neutral usage model from one Converse response.
         """
+        dict_writes: dict[str, int | None] = self._cache_write_kwargs(dict_response)
         # Normal return with the provider-neutral token usage model.
         return AITokenUsage(
             input_tokens=self._extract_bedrock_prompt_tokens(dict_response),
             output_tokens=self._extract_bedrock_completion_tokens(dict_response),
             cached_input_tokens=self._extract_bedrock_cached_tokens(dict_response),
             total_tokens=self._extract_bedrock_total_tokens(dict_response),
+            cache_write_5m_tokens=dict_writes.get("provider_cache_write_5m_tokens"),
+            cache_write_1h_tokens=dict_writes.get("provider_cache_write_1h_tokens"),
         )
 
     def _build_turn_result_from_converse(

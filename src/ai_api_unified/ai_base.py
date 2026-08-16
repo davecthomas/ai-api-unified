@@ -566,13 +566,20 @@ class AITokenUsage(BaseModel):
         input_tokens: Prompt-side tokens, including cached input as a subset.
         output_tokens: Completion-side tokens.
         cached_input_tokens: Cached prompt tokens billed at the cached rate.
-        total_tokens: Provider-reported or derived total token count.
+        total_tokens: Provider-reported or derived total token count. Excludes
+            cache-write tokens, which the provider counts separately.
+        cache_write_5m_tokens: Tokens written to a 5-minute-TTL prompt cache,
+            billed above base input. Not a subset of input_tokens.
+        cache_write_1h_tokens: Tokens written to a 1-hour-TTL prompt cache, at
+            a higher premium than the 5-minute tier.
     """
 
     input_tokens: int | None = None
     output_tokens: int | None = None
     cached_input_tokens: int | None = None
     total_tokens: int | None = None
+    cache_write_5m_tokens: int | None = None
+    cache_write_1h_tokens: int | None = None
 
 
 class AITurnResult(BaseModel):
@@ -1148,10 +1155,12 @@ class AiApiObservedCompletionsResultModel(Generic[CompletionsReturnType]):
     provider_prompt_tokens: int | None = None
     provider_completion_tokens: int | None = None
     provider_cached_input_tokens: int | None = None
-    provider_cache_write_5m_tokens: int | None = None
-    provider_cache_write_1h_tokens: int | None = None
     provider_total_tokens: int | None = None
     dict_metadata: dict[str, ObservabilityMetadataValue] = field(default_factory=dict)
+    # Appended after the pre-2.24 fields so positional construction keeps its
+    # original argument mapping.
+    provider_cache_write_5m_tokens: int | None = None
+    provider_cache_write_1h_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -2159,6 +2168,8 @@ class AIBaseCompletions(AIBase):
         input_tokens: int,
         output_tokens: int = 0,
         cached_input_tokens: int = 0,
+        cache_write_5m_tokens: int = 0,
+        cache_write_1h_tokens: int = 0,
     ) -> float:
         """
         Return the USD cost for measured token usage using split model rates.
@@ -2170,6 +2181,11 @@ class AIBaseCompletions(AIBase):
             input_tokens: Non-cached input tokens billed at the input rate.
             output_tokens: Output tokens billed at the output rate.
             cached_input_tokens: Input tokens billed at the cached-input rate.
+            cache_write_5m_tokens: Tokens written to a 5-minute-TTL prompt
+                cache, billed at the model's 5-minute write rate. Not a subset
+                of input_tokens; pass them in addition.
+            cache_write_1h_tokens: Tokens written to a 1-hour-TTL prompt cache,
+                billed at the model's 1-hour write rate.
 
         Returns:
             USD cost as a float; 0.0 when the model has no token pricing.
@@ -2184,6 +2200,8 @@ class AIBaseCompletions(AIBase):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cached_input_tokens=cached_input_tokens,
+                cache_write_5m_tokens=cache_write_5m_tokens,
+                cache_write_1h_tokens=cache_write_1h_tokens,
             )
         )
 

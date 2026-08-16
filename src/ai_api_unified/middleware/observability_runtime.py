@@ -194,13 +194,15 @@ class AiApiCallResultSummaryModel:
     provider_prompt_tokens: int | None = None
     provider_completion_tokens: int | None = None
     provider_cached_input_tokens: int | None = None
-    provider_cache_write_5m_tokens: int | None = None
-    provider_cache_write_1h_tokens: int | None = None
     provider_total_tokens: int | None = None
     finish_reason: str | None = None
     dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(
         default_factory=dict
     )
+    # Appended after the pre-2.24 fields so positional construction by external
+    # middleware or test doubles keeps its original argument mapping.
+    provider_cache_write_5m_tokens: int | None = None
+    provider_cache_write_1h_tokens: int | None = None
 
     def __post_init__(self) -> None:
         """

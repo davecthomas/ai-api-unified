@@ -515,6 +515,15 @@ pricing = client.capabilities.pricing
 print(pricing.token_rates.input_per_1m, pricing.token_rates.output_per_1m)
 
 usd = client.compute_completion_cost(input_tokens=1200, output_tokens=800)
+
+# Cache-aware: reads are a discounted subset of input; writes add on top.
+usd = client.compute_completion_cost(
+    input_tokens=1200,
+    output_tokens=800,
+    cached_input_tokens=400,
+    cache_write_5m_tokens=2000,
+    cache_write_1h_tokens=1000,
+)
 ```
 
 Embeddings clients expose `compute_embedding_cost(input_tokens=...)`. The rate

@@ -26,6 +26,12 @@ version lives in `pyproject.toml` (see the README release section).
   `cache_write_1h_tokens`.
 - A call that reports only cache writes is now costed instead of being skipped
   as no-usage.
+- `compute_completion_cost()` (the public real-cost API) accepts the same
+  cache-write arguments, and `AITokenUsage` on `AITurnResult` /
+  `AIStructuredOutputResult` carries `cache_write_5m_tokens` /
+  `cache_write_1h_tokens`, so result objects agree with the cost stream.
+- An unknown future cache TTL tier reconciles against the aggregate write count
+  and bills at the 5-minute rate instead of billing as free.
 - OpenAI and Google carry no cache-write rates: OpenAI writes are free, and
   Google bills explicit-cache storage per hour rather than per written token.
 

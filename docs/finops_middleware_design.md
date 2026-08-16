@@ -79,7 +79,8 @@ The cost event fields:
 
 ```
 call_id, event_time_utc, provider, model, capability, operation, caller_id,
-input_tokens, output_tokens, cached_input_tokens (None in v1),
+input_tokens, output_tokens, cached_input_tokens (since 2.12.0),
+cache_write_5m_tokens, cache_write_1h_tokens (since 2.24.0),
 usd_cost (Decimal), currency,
 pricing_effective_date, pricing_source, pricing_confidence
 ```

@@ -299,18 +299,35 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         if usage is None:
             # Early return because the response carried no usage block.
             return None, None
+
+        def _as_count(value: Any) -> int | None:
+            # Non-integer values (absent fields, SDK sentinels, test doubles)
+            # are treated as unreported rather than fed into arithmetic.
+            return value if isinstance(value, int) else None
+
+        int_aggregate: int | None = _as_count(
+            getattr(usage, "cache_creation_input_tokens", None)
+        )
         cache_creation = getattr(usage, "cache_creation", None)
         if cache_creation is not None:
-            int_5m: int | None = getattr(
-                cache_creation, "ephemeral_5m_input_tokens", None
+            int_5m: int | None = _as_count(
+                getattr(cache_creation, "ephemeral_5m_input_tokens", None)
             )
-            int_1h: int | None = getattr(
-                cache_creation, "ephemeral_1h_input_tokens", None
+            int_1h: int | None = _as_count(
+                getattr(cache_creation, "ephemeral_1h_input_tokens", None)
             )
             if int_5m is not None or int_1h is not None:
+                # Reconcile against the aggregate: if the provider adds a TTL
+                # tier this code does not know, its tokens appear in the
+                # aggregate but not the split and would otherwise bill as free.
+                # Attribute any remainder to the 5-minute tier — the lowest
+                # write premium — so unknown-tier writes under-report rather
+                # than vanish.
+                int_split_sum: int = (int_5m or 0) + (int_1h or 0)
+                if int_aggregate is not None and int_aggregate > int_split_sum:
+                    int_5m = (int_5m or 0) + (int_aggregate - int_split_sum)
                 # Normal return with the provider's per-TTL breakdown.
                 return int_5m, int_1h
-        int_aggregate: int | None = getattr(usage, "cache_creation_input_tokens", None)
         if int_aggregate is None:
             # Early return because no cache-write usage was reported.
             return None, None
@@ -529,19 +546,29 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     def _usage_from_tuple(
         self,
         tuple_usage: tuple[int | None, int | None, int | None, int | None],
+        dict_cache_write: dict[str, int | None] | None = None,
     ) -> AITokenUsage:
         """
         Builds the provider-neutral usage model from the engine usage tuple.
+
+        Args:
+            tuple_usage: (prompt, output, total, cached) token counts.
+            dict_cache_write: Optional result-summary-shaped cache-write kwargs
+                (from _cache_write_kwargs) so turn results expose the same
+                write counts the cost stream bills.
         """
         int_prompt_tokens, int_output_tokens, int_total_tokens, int_cached_tokens = (
             tuple_usage
         )
+        dict_writes: dict[str, int | None] = dict_cache_write or {}
         # Normal return with the provider-neutral token usage model.
         return AITokenUsage(
             input_tokens=int_prompt_tokens,
             output_tokens=int_output_tokens,
             cached_input_tokens=int_cached_tokens,
             total_tokens=int_total_tokens,
+            cache_write_5m_tokens=dict_writes.get("provider_cache_write_5m_tokens"),
+            cache_write_1h_tokens=dict_writes.get("provider_cache_write_1h_tokens"),
         )
 
     def _build_turn_result(self, response: Any) -> AITurnResult:
@@ -577,7 +604,10 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             tool_calls=list_tool_calls,
             finish_reason=finish_reason,
             raw_content=list_raw_blocks,
-            usage=self._usage_from_tuple(self._extract_anthropic_usage(response)),
+            usage=self._usage_from_tuple(
+                self._extract_anthropic_usage(response),
+                dict_cache_write=self._cache_write_kwargs(response),
+            ),
         )
 
     def _build_structured_messages(
@@ -1296,6 +1326,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         raw_output_text: str,
         str_stop_reason: str | None,
         tuple_usage: tuple[int | None, int | None, int | None, int | None],
+        dict_cache_write: dict[str, int | None] | None = None,
     ) -> AIStructuredOutputResult:
         """
         Maps one structured response onto the provider-neutral result model.
@@ -1307,7 +1338,9 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         finish_reason: AIFinishReason = self._normalize_finish_reason(
             str_stop_reason, self.DICT_FINISH_REASON_MAP
         )
-        usage: AITokenUsage = self._usage_from_tuple(tuple_usage)
+        usage: AITokenUsage = self._usage_from_tuple(
+            tuple_usage, dict_cache_write=dict_cache_write
+        )
         if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
             # Early return so callers branch on finish_reason instead of parsing.
             # raw_text passes through output redaction like every other model
@@ -1408,6 +1441,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                         str(str_stop_reason) if str_stop_reason is not None else None
                     ),
                     tuple_usage=tuple_usage,
+                    dict_cache_write=dict_cache_write,
                 )
             )
             # Normal return with the observed structured output result.
@@ -1493,6 +1527,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                         str(str_stop_reason) if str_stop_reason is not None else None
                     ),
                     tuple_usage=tuple_usage,
+                    dict_cache_write=dict_cache_write,
                 )
             )
             # Normal return with the observed structured output result.

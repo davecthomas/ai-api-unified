@@ -152,6 +152,36 @@ class TestAnthropicCacheWriteCapture:
             )
         ) == (2000, 1000)
 
+    def test_unknown_ttl_remainder_attributed_to_five_minute(self) -> None:
+        """A TTL tier this code does not know must not bill as free.
+
+        Its tokens appear in the aggregate but not the known split; the
+        remainder is attributed to the 5-minute tier (the lowest premium) so
+        it under-reports rather than vanishes.
+        """
+        assert self._extract(
+            SimpleNamespace(
+                input_tokens=600,
+                cache_creation_input_tokens=3500,  # 500 from an unknown tier
+                cache_creation=SimpleNamespace(
+                    ephemeral_5m_input_tokens=2000,
+                    ephemeral_1h_input_tokens=1000,
+                ),
+            )
+        ) == (2500, 1000)
+
+    def test_split_matching_aggregate_is_unchanged(self) -> None:
+        assert self._extract(
+            SimpleNamespace(
+                input_tokens=600,
+                cache_creation_input_tokens=3000,
+                cache_creation=SimpleNamespace(
+                    ephemeral_5m_input_tokens=2000,
+                    ephemeral_1h_input_tokens=1000,
+                ),
+            )
+        ) == (2000, 1000)
+
     def test_falls_back_to_aggregate_as_five_minute(self) -> None:
         """Older payloads report only the aggregate; 5m is the default TTL."""
         assert self._extract(
@@ -220,6 +250,158 @@ class TestBedrockCacheWriteCapture:
             "provider_cache_write_5m_tokens": None,
             "provider_cache_write_1h_tokens": None,
         }
+
+
+class TestTurnResultCacheWriteExposure:
+    """Result objects must expose the same write counts the cost stream bills.
+
+    Consumers pricing calls from AITurnResult.usage rather than the cost log
+    would otherwise have no way to see cache-priming tokens.
+    """
+
+    def test_anthropic_turn_usage_carries_cache_writes(self) -> None:
+        pytest.importorskip("anthropic")
+        from ai_api_unified.completions.ai_anthropic_completions import (
+            AiAnthropicCompletions,
+        )
+
+        response = SimpleNamespace(
+            usage=SimpleNamespace(
+                input_tokens=600,
+                output_tokens=100,
+                cache_read_input_tokens=400,
+                cache_creation_input_tokens=3000,
+                cache_creation=SimpleNamespace(
+                    ephemeral_5m_input_tokens=2000,
+                    ephemeral_1h_input_tokens=1000,
+                ),
+            )
+        )
+        usage = AiAnthropicCompletions._usage_from_tuple(
+            AiAnthropicCompletions,  # unbound instance-method call in a test
+            AiAnthropicCompletions._extract_anthropic_usage(response),
+            dict_cache_write=AiAnthropicCompletions._cache_write_kwargs(response),
+        )
+
+        assert usage.cache_write_5m_tokens == 2000
+        assert usage.cache_write_1h_tokens == 1000
+        # Writes stay out of the prompt-side counts.
+        assert usage.input_tokens == 1000
+
+    def test_bedrock_turn_usage_carries_cache_writes(self) -> None:
+        pytest.importorskip("boto3")
+        from ai_api_unified.completions.ai_bedrock_completions import (
+            AiBedrockCompletions,
+        )
+
+        usage = AiBedrockCompletions._usage_from_converse(
+            AiBedrockCompletions,
+            {
+                "usage": {
+                    "inputTokens": 600,
+                    "outputTokens": 100,
+                    "totalTokens": 700,
+                    "cacheWriteInputTokens": 1500,
+                }
+            },
+        )
+
+        assert usage.cache_write_5m_tokens == 1500
+        assert usage.cache_write_1h_tokens is None
+
+    def test_public_cost_api_accepts_cache_writes(self) -> None:
+        """compute_completion_cost prices writes like the cost middleware does."""
+        from decimal import Decimal
+        from datetime import date
+        from ai_api_unified.pricing import (
+            AIModelPricing,
+            AITokenRates,
+            PricingUnit,
+        )
+
+        pricing = AIModelPricing(
+            unit=PricingUnit.TOKEN,
+            effective_date=date(2026, 7, 7),
+            source="x",
+            token_rates=AITokenRates(
+                input_per_1m=Decimal("5.00"),
+                output_per_1m=Decimal("25.00"),
+                cache_write_5m_per_1m=Decimal("6.25"),
+                cache_write_1h_per_1m=Decimal("10.00"),
+            ),
+        )
+
+        class _Capabilities:
+            def __init__(self) -> None:
+                self.pricing = pricing
+
+        class _Client:
+            capabilities = _Capabilities()
+
+        from ai_api_unified.ai_base import AIBaseCompletions
+
+        cost = AIBaseCompletions.compute_completion_cost(
+            _Client(),
+            input_tokens=1000,
+            output_tokens=500,
+            cache_write_5m_tokens=2000,
+            cache_write_1h_tokens=1000,
+        )
+
+        # 1000*5/1M + 500*25/1M + 2000*6.25/1M + 1000*10/1M = 0.0400
+        assert cost == 0.0400
+
+
+class TestResultModelPositionalCompatibility:
+    """New dataclass fields append after the pre-2.24 layout.
+
+    External middleware or test doubles constructing these positionally must
+    keep their original argument mapping in a minor release.
+    """
+
+    def test_call_result_summary_field_order_prefix_unchanged(self) -> None:
+        import dataclasses
+        from ai_api_unified.middleware.observability_runtime import (
+            AiApiCallResultSummaryModel,
+        )
+
+        names = [f.name for f in dataclasses.fields(AiApiCallResultSummaryModel)]
+        assert names[: len(_PRE_224_SUMMARY_FIELDS)] == _PRE_224_SUMMARY_FIELDS
+
+    def test_observed_completions_field_order_prefix_unchanged(self) -> None:
+        import dataclasses
+        from ai_api_unified.ai_base import AiApiObservedCompletionsResultModel
+
+        names = [
+            f.name for f in dataclasses.fields(AiApiObservedCompletionsResultModel)
+        ]
+        assert names[: len(_PRE_224_OBSERVED_FIELDS)] == _PRE_224_OBSERVED_FIELDS
+
+
+_PRE_224_SUMMARY_FIELDS = [
+    "provider_elapsed_ms",
+    "input_token_count",
+    "input_token_count_source",
+    "output_token_count",
+    "output_token_count_source",
+    "provider_prompt_tokens",
+    "provider_completion_tokens",
+    "provider_cached_input_tokens",
+    "provider_total_tokens",
+    "finish_reason",
+    "dict_metadata",
+]
+
+_PRE_224_OBSERVED_FIELDS = [
+    "return_value",
+    "raw_output_text",
+    "finish_reason",
+    "provider_prompt_tokens",
+    "provider_completion_tokens",
+    "provider_cached_input_tokens",
+    "provider_total_tokens",
+    "dict_metadata",
+]
 
 
 class TestCacheWriteWiringCompleteness:
