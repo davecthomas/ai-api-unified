@@ -663,10 +663,11 @@ class AIVoiceBase(BaseModel, ABC):
                 "No voices available. Call get_available_voices() first."
             )
         first_voice: AIVoiceSelectionBase = self.list_available_voices[0]
-        return AIVoiceSelectionBase(
-            voice_id=first_voice.voice_id,
-            voice_name=first_voice.voice_name,
-        )
+        # Copy the catalog entry whole: rebuilding from voice_id and voice_name
+        # dropped language, locale, accent, and gender, and Azure and Google
+        # read locale during synthesis, so the rebuilt default synthesized a
+        # non-English voice under an en-US language tag.
+        return first_voice.model_copy()
 
     def get_available_voices(self) -> list[AIVoiceSelectionBase]:
         """Return the cached list of voices."""

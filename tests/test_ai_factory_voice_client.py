@@ -155,10 +155,27 @@ class TestAiFactoryVoiceClient:
 
         Provider construction raises AiProviderConfigurationError for reasons
         unrelated to engine resolution, and the plaintext-credential rejection
-        is one of them.
+        is one of them. The API key is supplied through patched EnvSettings so
+        construction reaches base-URL validation on a clean clone with no .env.
         """
-        with pytest.raises(AiProviderConfigurationError) as exception_info:
-            AIVoiceFactory.create("openai", base_url="http://insecure.invalid/v1")
+        import ai_api_unified.ai_openai_base as ai_openai_base_module
+        import ai_api_unified.voice.ai_voice_openai as ai_voice_openai_module
+
+        mock_env_settings: Mock = Mock()
+        mock_env_settings.get_setting.side_effect = lambda key, default=None: {
+            "OPENAI_API_KEY": "test-openai-api-key",
+        }.get(key, default)
+
+        with (
+            patch.object(
+                ai_voice_openai_module, "EnvSettings", return_value=mock_env_settings
+            ),
+            patch.object(
+                ai_openai_base_module, "EnvSettings", return_value=mock_env_settings
+            ),
+        ):
+            with pytest.raises(AiProviderConfigurationError) as exception_info:
+                AIVoiceFactory.create("openai", base_url="http://insecure.invalid/v1")
 
         assert "https://" in str(exception_info.value)
         assert "Unsupported AI_VOICE_ENGINE" not in str(exception_info.value)
