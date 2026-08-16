@@ -28,7 +28,7 @@ from ..ai_base import (
     RETRY_POLICY_DEFAULT,
     RETRY_POLICY_NONE,
     SupportedDataType,
-    normalize_retry_policy,
+    resolve_retry_policy,
 )
 from ..ai_provider_exceptions import (
     AiProviderDependencyUnavailableError,
@@ -153,14 +153,12 @@ class AiVoyageEmbeddings(AIBaseEmbeddings):
         )
         int_dimensions: int = dimensions or self._capabilities.default_dimensions
         super().__init__(model=self.embedding_model, dimensions=int_dimensions)
-        str_retry_candidate: str = (
-            retry_policy
-            if retry_policy is not None
-            else str(
-                self.env.get_setting("COMPLETIONS_RETRY_POLICY", RETRY_POLICY_DEFAULT)
-            )
+        self.retry_policy: str = resolve_retry_policy(
+            str_explicit=retry_policy,
+            object_configured=self.env.get_setting(
+                "COMPLETIONS_RETRY_POLICY", RETRY_POLICY_DEFAULT
+            ),
         )
-        self.retry_policy: str = normalize_retry_policy(str_retry_candidate)
         # SDK clients are created lazily so the voyageai import happens only
         # on first use; construction works without the extra installed.
         self._client: Any | None = None

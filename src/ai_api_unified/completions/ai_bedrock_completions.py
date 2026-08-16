@@ -24,6 +24,7 @@ from ..ai_base import (
     RETRY_POLICY_NONE,
     SupportedDataType,
     normalize_retry_policy,
+    resolve_retry_policy,
 )
 from ..ai_bedrock_base import AIBedrockBase, BotoCoreError, ClientError
 from ..ai_provider_exceptions import (
@@ -118,12 +119,12 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         )
         self.completions_model: str = resolved_model
         enforce_model_lifecycle(PROVIDER_BEDROCK, resolved_model)
-        str_retry_candidate: str = (
-            retry_policy
-            if retry_policy is not None
-            else str(settings.get("COMPLETIONS_RETRY_POLICY", RETRY_POLICY_DEFAULT))
+        self.retry_policy: str = resolve_retry_policy(
+            str_explicit=retry_policy,
+            object_configured=settings.get(
+                "COMPLETIONS_RETRY_POLICY", RETRY_POLICY_DEFAULT
+            ),
         )
-        self.retry_policy: str = normalize_retry_policy(str_retry_candidate)
         AIBedrockBase.__init__(self, model=resolved_model, **kwargs)
         AIBaseCompletions.__init__(self, model=resolved_model, **kwargs)
         # Reuse the existing retry schedule from the base but allow overrides via kwargs

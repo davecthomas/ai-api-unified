@@ -15,7 +15,7 @@ from ai_api_unified.ai_base import (
     ORG_INFO_SOURCE_RESPONSE_HEADER,
     RETRY_POLICY_DEFAULT,
     RETRY_POLICY_NONE,
-    normalize_retry_policy,
+    resolve_retry_policy,
 )
 from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
 from ai_api_unified.util.env_settings import EnvSettings
@@ -81,23 +81,12 @@ class AIOpenAIBase:
             raise ValueError("OPENAI_API_KEY environment variable must be set.")
         self.base_url = self.get_api_base_url(base_url=base_url)
 
-        # An explicit argument is validated as given: a caller passing "" made a
-        # mistake and should hear about it. Only the environment value treats
-        # blank as unconfigured, because get_setting returns "" rather than the
-        # default for a present-but-blank key, and a stray
-        # `COMPLETIONS_RETRY_POLICY=` line must not break client construction.
-        str_candidate: str
-        if retry_policy is not None:
-            str_candidate = retry_policy
-        else:
-            object_env_policy: object = self.env.get_setting(
+        self.retry_policy: str = resolve_retry_policy(
+            str_explicit=retry_policy,
+            object_configured=self.env.get_setting(
                 RETRY_POLICY_KEY, RETRY_POLICY_DEFAULT
-            )
-            str_env_policy: str = (
-                str(object_env_policy).strip() if object_env_policy is not None else ""
-            )
-            str_candidate = str_env_policy or RETRY_POLICY_DEFAULT
-        self.retry_policy: str = normalize_retry_policy(str_candidate)
+            ),
+        )
         dict_client_kwargs: dict[str, Any] = {
             "api_key": self.api_key,
             "base_url": self.base_url,
