@@ -68,6 +68,8 @@ SET_STR_PROVIDER_USAGE_EVENT_KEYS: set[str] = {
     "provider_prompt_tokens",
     "provider_completion_tokens",
     "provider_cached_input_tokens",
+    "provider_cache_write_5m_tokens",
+    "provider_cache_write_1h_tokens",
     "provider_total_tokens",
 }
 SET_STR_TOKEN_COUNT_EVENT_KEYS: set[str] = {
@@ -377,17 +379,32 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         int_cached_input_tokens: int | None = (
             call_result_summary.provider_cached_input_tokens
         )
-        if int_input_tokens is None and int_output_tokens is None:
+        int_cache_write_5m_tokens: int | None = (
+            call_result_summary.provider_cache_write_5m_tokens
+        )
+        int_cache_write_1h_tokens: int | None = (
+            call_result_summary.provider_cache_write_1h_tokens
+        )
+        if (
+            int_input_tokens is None
+            and int_output_tokens is None
+            and int_cache_write_5m_tokens is None
+            and int_cache_write_1h_tokens is None
+        ):
             # Early return because there is no usage to cost.
             return None
         # Cached input tokens are a subset of provider_prompt_tokens billed at
-        # the cached rate; the remainder bills at the full input rate.
+        # the cached rate; the remainder bills at the full input rate. Cache
+        # writes are reported separately by the provider and are not part of
+        # the prompt count, so they are added rather than subtracted.
         int_cached: int = int_cached_input_tokens or 0
         int_non_cached_input: int = max((int_input_tokens or 0) - int_cached, 0)
         usd_cost = pricing.compute_token_cost(
             input_tokens=int_non_cached_input,
             output_tokens=int_output_tokens or 0,
             cached_input_tokens=int_cached,
+            cache_write_5m_tokens=int_cache_write_5m_tokens or 0,
+            cache_write_1h_tokens=int_cache_write_1h_tokens or 0,
         )
         dict_cost_fields: dict[str, object] = {
             "call_id": call_context.call_id,
@@ -403,6 +420,8 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             "input_tokens": int_input_tokens,
             "output_tokens": int_output_tokens,
             "cached_input_tokens": int_cached_input_tokens,
+            "cache_write_5m_tokens": int_cache_write_5m_tokens,
+            "cache_write_1h_tokens": int_cache_write_1h_tokens,
             "usd_cost": str(usd_cost),
             "currency": pricing.currency,
             "pricing_effective_date": pricing.effective_date.isoformat(),
@@ -713,6 +732,14 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         if call_result_summary.provider_cached_input_tokens is not None:
             dict_event_fields["provider_cached_input_tokens"] = (
                 call_result_summary.provider_cached_input_tokens
+            )
+        if call_result_summary.provider_cache_write_5m_tokens is not None:
+            dict_event_fields["provider_cache_write_5m_tokens"] = (
+                call_result_summary.provider_cache_write_5m_tokens
+            )
+        if call_result_summary.provider_cache_write_1h_tokens is not None:
+            dict_event_fields["provider_cache_write_1h_tokens"] = (
+                call_result_summary.provider_cache_write_1h_tokens
             )
         if call_result_summary.provider_total_tokens is not None:
             dict_event_fields["provider_total_tokens"] = (

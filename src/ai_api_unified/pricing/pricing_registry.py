@@ -47,6 +47,12 @@ _SRC_BEDROCK: str = "https://aws.amazon.com/bedrock/pricing/"
 _SRC_ANTHROPIC: str = "https://platform.claude.com/docs/en/about-claude/models/overview"
 _SRC_VOYAGE: str = "https://docs.voyageai.com/docs/pricing"
 
+# Cache-write rate for providers that charge nothing to populate a cache.
+# Distinct from None, which means "charged but not yet rated" and falls
+# back to the base input rate. Zero must be explicit so a free-write model
+# is never billed at that fallback.
+_FREE_WRITES: str = "0"
+
 # Provider labels used as the first half of registry keys.
 PROVIDER_OPENAI: str = "openai"
 PROVIDER_GOOGLE: str = "google"
@@ -64,6 +70,8 @@ def _tok(
     tiers: list[AIPricingTier] | None = None,
     notes: str | None = None,
     effective: date = _EFFECTIVE,
+    write_5m_r: str | None = None,
+    write_1h_r: str | None = None,
 ) -> AIModelPricing:
     """Build a token-unit AIModelPricing from string decimals (per 1M tokens)."""
     return AIModelPricing(
@@ -75,6 +83,12 @@ def _tok(
             input_per_1m=Decimal(input_r),
             output_per_1m=Decimal(output_r) if output_r is not None else None,
             cached_input_per_1m=Decimal(cached_r) if cached_r is not None else None,
+            cache_write_5m_per_1m=(
+                Decimal(write_5m_r) if write_5m_r is not None else None
+            ),
+            cache_write_1h_per_1m=(
+                Decimal(write_1h_r) if write_1h_r is not None else None
+            ),
         ),
         tiers=tiers,
         notes=notes,
@@ -106,38 +120,185 @@ def _info(
 DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
     [
         # ── OpenAI completions ──────────────────────────────────────────────
-        _info(PROVIDER_OPENAI, "gpt-5.5", _tok("5.00", "30.00", "0.50", _SRC_OPENAI)),
-        _info(PROVIDER_OPENAI, "gpt-5.4", _tok("2.50", "15.00", "0.25", _SRC_OPENAI)),
         _info(
-            PROVIDER_OPENAI, "gpt-5.4-mini", _tok("0.75", "4.50", "0.075", _SRC_OPENAI)
+            PROVIDER_OPENAI,
+            "gpt-5.5",
+            _tok(
+                "5.00",
+                "30.00",
+                "0.50",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
-            PROVIDER_OPENAI, "gpt-5.4-nano", _tok("0.20", "1.25", "0.02", _SRC_OPENAI)
+            PROVIDER_OPENAI,
+            "gpt-5.4",
+            _tok(
+                "2.50",
+                "15.00",
+                "0.25",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
-        _info(PROVIDER_OPENAI, "gpt-5.2", _tok("1.75", "14.00", "0.175", _SRC_OPENAI)),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.4-mini",
+            _tok(
+                "0.75",
+                "4.50",
+                "0.075",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.4-nano",
+            _tok(
+                "0.20",
+                "1.25",
+                "0.02",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.2",
+            _tok(
+                "1.75",
+                "14.00",
+                "0.175",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
         _info(
             PROVIDER_OPENAI,
             "gpt-5.1-codex-max",
-            _tok("1.25", "10.00", "0.125", _SRC_OPENAI),
-        ),
-        _info(PROVIDER_OPENAI, "gpt-5", _tok("1.25", "10.00", "0.125", _SRC_OPENAI)),
-        _info(
-            PROVIDER_OPENAI, "gpt-5-mini", _tok("0.25", "2.00", "0.025", _SRC_OPENAI)
-        ),
-        _info(
-            PROVIDER_OPENAI, "gpt-5-nano", _tok("0.05", "0.40", "0.005", _SRC_OPENAI)
-        ),
-        _info(PROVIDER_OPENAI, "gpt-4.1", _tok("2.00", "8.00", "0.50", _SRC_OPENAI)),
-        _info(
-            PROVIDER_OPENAI, "gpt-4.1-mini", _tok("0.40", "1.60", "0.10", _SRC_OPENAI)
+            _tok(
+                "1.25",
+                "10.00",
+                "0.125",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
-            PROVIDER_OPENAI, "gpt-4.1-nano", _tok("0.10", "0.40", "0.025", _SRC_OPENAI)
+            PROVIDER_OPENAI,
+            "gpt-5",
+            _tok(
+                "1.25",
+                "10.00",
+                "0.125",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
-        _info(PROVIDER_OPENAI, "o4-mini", _tok("1.10", "4.40", "0.275", _SRC_OPENAI)),
-        _info(PROVIDER_OPENAI, "gpt-4o", _tok("2.50", "10.00", "1.25", _SRC_OPENAI)),
         _info(
-            PROVIDER_OPENAI, "gpt-4o-mini", _tok("0.15", "0.60", "0.075", _SRC_OPENAI)
+            PROVIDER_OPENAI,
+            "gpt-5-mini",
+            _tok(
+                "0.25",
+                "2.00",
+                "0.025",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5-nano",
+            _tok(
+                "0.05",
+                "0.40",
+                "0.005",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4.1",
+            _tok(
+                "2.00",
+                "8.00",
+                "0.50",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4.1-mini",
+            _tok(
+                "0.40",
+                "1.60",
+                "0.10",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4.1-nano",
+            _tok(
+                "0.10",
+                "0.40",
+                "0.025",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "o4-mini",
+            _tok(
+                "1.10",
+                "4.40",
+                "0.275",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4o",
+            _tok(
+                "2.50",
+                "10.00",
+                "1.25",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-4o-mini",
+            _tok(
+                "0.15",
+                "0.60",
+                "0.075",
+                _SRC_OPENAI,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         # ── OpenAI embeddings (input only) ──────────────────────────────────
         _info(
@@ -190,17 +351,41 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-3.6-flash",
-            _tok("1.50", "7.50", "0.15", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+            _tok(
+                "1.50",
+                "7.50",
+                "0.15",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_AUG,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
             PROVIDER_GOOGLE,
             "gemini-3.5-flash",
-            _tok("1.50", "9.00", "0.15", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+            _tok(
+                "1.50",
+                "9.00",
+                "0.15",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_AUG,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
             PROVIDER_GOOGLE,
             "gemini-3.5-flash-lite",
-            _tok("0.30", "2.50", "0.03", _SRC_GOOGLE, effective=_EFFECTIVE_AUG),
+            _tok(
+                "0.30",
+                "2.50",
+                "0.03",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_AUG,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         _info(
             PROVIDER_GOOGLE,
@@ -210,6 +395,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "1.50",
                 "0.025",
                 _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
                 effective=_EFFECTIVE_AUG,
                 notes="Audio input priced higher ($0.50/1M).",
             ),
@@ -222,6 +409,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "12.00",
                 "0.20",
                 _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
                 effective=_EFFECTIVE_AUG,
                 tiers=[
                     AIPricingTier(
@@ -230,6 +419,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                             input_per_1m=Decimal("4.00"),
                             output_per_1m=Decimal("18.00"),
                             cached_input_per_1m=Decimal("0.40"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
                         ),
                     )
                 ],
@@ -245,6 +436,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "10.00",
                 "0.13",
                 _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
                 tiers=[
                     AIPricingTier(
                         label="context>200k",
@@ -252,6 +445,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                             input_per_1m=Decimal("2.50"),
                             output_per_1m=Decimal("15.00"),
                             cached_input_per_1m=Decimal("0.25"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
                         ),
                     )
                 ],
@@ -266,19 +461,36 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "2.50",
                 "0.03",
                 _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
                 notes="Audio input priced higher ($1.00/1M).",
             ),
         ),
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.5-flash-lite",
-            _tok("0.10", "0.40", "0.01", _SRC_GOOGLE),
+            _tok(
+                "0.10",
+                "0.40",
+                "0.01",
+                _SRC_GOOGLE,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
         ),
         # ── Google completions (deprecated: shutdown date passed) ───────────
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash",
-            _tok("0.10", "0.40", None, _SRC_GOOGLE, confidence="medium"),
+            _tok(
+                "0.10",
+                "0.40",
+                None,
+                _SRC_GOOGLE,
+                confidence="medium",
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash",
@@ -286,7 +498,15 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash-001",
-            _tok("0.10", "0.40", None, _SRC_GOOGLE, confidence="medium"),
+            _tok(
+                "0.10",
+                "0.40",
+                None,
+                _SRC_GOOGLE,
+                confidence="medium",
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash",
@@ -294,7 +514,15 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash-lite",
-            _tok("0.075", "0.30", None, _SRC_GOOGLE, confidence="medium"),
+            _tok(
+                "0.075",
+                "0.30",
+                None,
+                _SRC_GOOGLE,
+                confidence="medium",
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash-lite",
@@ -302,7 +530,15 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash-lite-001",
-            _tok("0.075", "0.30", None, _SRC_GOOGLE, confidence="medium"),
+            _tok(
+                "0.075",
+                "0.30",
+                None,
+                _SRC_GOOGLE,
+                confidence="medium",
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash-lite",
@@ -358,44 +594,97 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             sunset=date(2026, 8, 17),
             replacement="a current-generation Gemini image model",
         ),
-        # ── Bedrock completions ─────────────────────────────────────────────
+        # ── Bedrock completions (the engine reports cacheWriteInputTokens for
+        # every model here, so each carries either an explicit write rate or a
+        # note recording why it is unrated; unrated writes bill at base input,
+        # which under-reports a premium rather than dropping the cost) ───────
         _info(
             PROVIDER_BEDROCK,
             "amazon.nova-micro-v1:0",
-            _tok("0.035", "0.14", None, _SRC_BEDROCK),
+            _tok(
+                "0.035",
+                "0.14",
+                None,
+                _SRC_BEDROCK,
+                notes="Bedrock reports cacheWriteInputTokens for this model but is partner-priced, and no authoritative AWS cache-write rate has been sourced. Writes fall back to the base input rate; if AWS charges a premium, that under-reports it. Add write_5m_r once the rate is confirmed.",
+            ),
         ),
         _info(
             PROVIDER_BEDROCK,
             "amazon.nova-lite-v1:0",
-            _tok("0.06", "0.24", None, _SRC_BEDROCK),
+            _tok(
+                "0.06",
+                "0.24",
+                None,
+                _SRC_BEDROCK,
+                notes="Bedrock reports cacheWriteInputTokens for this model but is partner-priced, and no authoritative AWS cache-write rate has been sourced. Writes fall back to the base input rate; if AWS charges a premium, that under-reports it. Add write_5m_r once the rate is confirmed.",
+            ),
         ),
         _info(
             PROVIDER_BEDROCK,
             "amazon.nova-pro-v1:0",
-            _tok("0.80", "3.20", None, _SRC_BEDROCK),
+            _tok(
+                "0.80",
+                "3.20",
+                None,
+                _SRC_BEDROCK,
+                notes="Bedrock reports cacheWriteInputTokens for this model but is partner-priced, and no authoritative AWS cache-write rate has been sourced. Writes fall back to the base input rate; if AWS charges a premium, that under-reports it. Add write_5m_r once the rate is confirmed.",
+            ),
         ),
         _info(
             PROVIDER_BEDROCK,
             "amazon.nova-premier-v1:0",
-            _tok("2.50", "12.50", None, _SRC_BEDROCK),
+            _tok(
+                "2.50",
+                "12.50",
+                None,
+                _SRC_BEDROCK,
+                notes="Bedrock reports cacheWriteInputTokens for this model but is partner-priced, and no authoritative AWS cache-write rate has been sourced. Writes fall back to the base input rate; if AWS charges a premium, that under-reports it. Add write_5m_r once the rate is confirmed.",
+            ),
         ),
         _info(
             PROVIDER_BEDROCK,
             "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-            _tok("0.80", "4.00", None, _SRC_BEDROCK),
+            _tok(
+                "0.80",
+                "4.00",
+                None,
+                _SRC_BEDROCK,
+                notes="Bedrock bills cache writes (cacheWriteInputTokens) but is "
+                "partner-priced, and no authoritative AWS cache-write rate has "
+                "been sourced. Writes therefore fall back to the base input "
+                "rate, under-reporting the premium rather than dropping it. "
+                "Add write_5m_r once the AWS rate is confirmed.",
+            ),
         ),
         # ── Anthropic completions (native API; cached rate is the documented
-        # 0.1x prompt-cache read multiplier; 5-minute cache writes bill 1.25x
-        # and are not modeled) ───────────────────────────────────────────────
+        # 0.1x prompt-cache read multiplier. Cache writes bill above base input
+        # and are priced per cache lifetime: 1.25x for the 5-minute TTL and 2x
+        # for the 1-hour TTL) ────────────────────────────────────────────────
         _info(
             PROVIDER_ANTHROPIC,
             "claude-fable-5",
-            _tok("10.00", "50.00", "1.00", _SRC_ANTHROPIC),
+            _tok(
+                "10.00",
+                "50.00",
+                "1.00",
+                _SRC_ANTHROPIC,
+                write_5m_r="12.50",
+                write_1h_r="20.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-5",
-            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC, effective=_EFFECTIVE_AUG),
+            _tok(
+                "5.00",
+                "25.00",
+                "0.50",
+                _SRC_ANTHROPIC,
+                effective=_EFFECTIVE_AUG,
+                write_5m_r="6.25",
+                write_1h_r="10.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
@@ -406,6 +695,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "0.30",
                 _SRC_ANTHROPIC,
                 effective=_EFFECTIVE_AUG,
+                write_5m_r="3.75",
+                write_1h_r="6.00",
                 notes="List rates; introductory pricing ($2.00 in / $10.00 out) "
                 "runs through 2026-08-31.",
             ),
@@ -413,27 +704,62 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-8",
-            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+            _tok(
+                "5.00",
+                "25.00",
+                "0.50",
+                _SRC_ANTHROPIC,
+                write_5m_r="6.25",
+                write_1h_r="10.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-7",
-            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+            _tok(
+                "5.00",
+                "25.00",
+                "0.50",
+                _SRC_ANTHROPIC,
+                write_5m_r="6.25",
+                write_1h_r="10.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-6",
-            _tok("5.00", "25.00", "0.50", _SRC_ANTHROPIC),
+            _tok(
+                "5.00",
+                "25.00",
+                "0.50",
+                _SRC_ANTHROPIC,
+                write_5m_r="6.25",
+                write_1h_r="10.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-sonnet-4-6",
-            _tok("3.00", "15.00", "0.30", _SRC_ANTHROPIC),
+            _tok(
+                "3.00",
+                "15.00",
+                "0.30",
+                _SRC_ANTHROPIC,
+                write_5m_r="3.75",
+                write_1h_r="6.00",
+            ),
         ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-haiku-4-5",
-            _tok("1.00", "5.00", "0.10", _SRC_ANTHROPIC),
+            _tok(
+                "1.00",
+                "5.00",
+                "0.10",
+                _SRC_ANTHROPIC,
+                write_5m_r="1.25",
+                write_1h_r="2.00",
+            ),
         ),
         # ── Anthropic completions (retired: hard 404) ───────────────────────
         # Rates are retained on entries that were priced while active so
@@ -442,7 +768,14 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_ANTHROPIC,
             "claude-opus-4-1",
-            _tok("15.00", "75.00", "1.50", _SRC_ANTHROPIC),
+            _tok(
+                "15.00",
+                "75.00",
+                "1.50",
+                _SRC_ANTHROPIC,
+                write_5m_r="18.75",
+                write_1h_r="30.00",
+            ),
             status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 8, 5),
             replacement="claude-opus-5",

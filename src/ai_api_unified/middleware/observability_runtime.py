@@ -169,7 +169,19 @@ class AiApiCallResultSummaryModel:
         provider_cached_input_tokens: Optional provider-reported cached-input token
             count (cache reads billed at the cached rate), a subset of
             provider_prompt_tokens. None when the provider does not report it.
-        provider_total_tokens: Optional provider-reported total token count.
+        provider_cache_write_5m_tokens: Optional provider-reported count of tokens
+            written to a 5-minute-TTL prompt cache. Billed at a premium over base
+            input and reported separately by the provider, so this is NOT a subset
+            of provider_prompt_tokens. None when the provider does not report it.
+        provider_cache_write_1h_tokens: Optional provider-reported count of tokens
+            written to a 1-hour-TTL prompt cache, billed at a higher premium than
+            the 5-minute tier. Also not a subset of provider_prompt_tokens.
+        provider_total_tokens: Optional provider-reported total token count. This
+            is the provider's own total (prompt + completion) and excludes
+            cache-write tokens, which the provider counts separately. Cost
+            includes those writes, so usd_cost / provider_total_tokens is not a
+            valid effective rate on a cache-priming call; add the cache-write
+            fields to the denominator when computing one.
         finish_reason: Optional provider finish reason.
         dict_metadata: Additional scalar metadata fields safe to emit in logs.
     """
@@ -187,6 +199,10 @@ class AiApiCallResultSummaryModel:
     dict_metadata: Mapping[str, ObservabilityMetadataValue] = field(
         default_factory=dict
     )
+    # Appended after the pre-2.24 fields so positional construction by external
+    # middleware or test doubles keeps its original argument mapping.
+    provider_cache_write_5m_tokens: int | None = None
+    provider_cache_write_1h_tokens: int | None = None
 
     def __post_init__(self) -> None:
         """

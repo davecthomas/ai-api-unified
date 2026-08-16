@@ -1,4 +1,4 @@
-# ai-api-unified 2.23.0
+# ai-api-unified 2.24.0
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -515,7 +515,23 @@ pricing = client.capabilities.pricing
 print(pricing.token_rates.input_per_1m, pricing.token_rates.output_per_1m)
 
 usd = client.compute_completion_cost(input_tokens=1200, output_tokens=800)
+
+# Cache-aware. Pass the NON-CACHED remainder as input_tokens: of 1200 prompt
+# tokens with 400 served from cache, 800 bill at the input rate and 400 at the
+# cached rate. Cache writes are counted separately by the provider, so they add
+# on top rather than coming out of the prompt count.
+usd = client.compute_completion_cost(
+    input_tokens=800,          # 1200 prompt tokens minus the 400 cache reads
+    output_tokens=800,
+    cached_input_tokens=400,
+    cache_write_5m_tokens=2000,
+    cache_write_1h_tokens=1000,
+)
 ```
+
+Note the difference from the cost event, where `input_tokens` *includes* the
+cached subset because that is what providers report. This API takes the split
+already applied.
 
 Embeddings clients expose `compute_embedding_cost(input_tokens=...)`. The rate
 tables live in a single pricing registry (`ai_api_unified.pricing`) keyed by
@@ -1141,6 +1157,31 @@ rate: the event carries `cached_input_tokens`, and the cached subset of
 full input rate. Providers that report cache reads separately from the input
 count (Anthropic, Bedrock) are normalized so `input_tokens` includes the cached
 subset, keeping the cost split consistent across providers.
+
+Prompt-cache **writes** are billed too. Priming a cache costs more than base
+input, and the premium depends on how long the cache lives, so each rate is
+stored per lifetime and each event carries its own count:
+
+| Field | Meaning |
+| --- | --- |
+| `cache_write_5m_tokens` | Tokens written to a 5-minute-TTL cache (Anthropic: 1.25x base input) |
+| `cache_write_1h_tokens` | Tokens written to a 1-hour-TTL cache (Anthropic: 2x base input) |
+
+Unlike cache reads, writes are **not** a subset of `input_tokens` — the provider
+reports them separately, so they add to the cost rather than re-slicing the
+prompt. They are likewise excluded from the provider's own total token count, so
+`usd_cost / provider_total_tokens` is not a valid effective rate on a
+cache-priming call; include the cache-write counts in the denominator. Anthropic supplies the per-TTL split; Bedrock reports one
+`cacheWriteInputTokens` that is attributed to the 5-minute tier, the only
+lifetime it exposes. OpenAI charges nothing to write a cache, and Google bills
+explicit-cache storage per hour rather than per written token, so both carry an
+explicit zero write rate. The two states are recorded distinctly: a rate of
+zero means the provider charges nothing to populate a cache, and writes bill as
+free. An absent rate means the write is charged but not yet rated — it falls
+back to the base input rate, under-reporting the premium rather than dropping
+the cost. Five Bedrock entries are in that second state today: the hosted Claude
+model and the four Amazon Nova models, all partner-priced with no
+authoritative AWS cache-write rate sourced.
 
 ```yaml
 middleware:

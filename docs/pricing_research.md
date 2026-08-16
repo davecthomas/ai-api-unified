@@ -91,8 +91,10 @@ of the table. † claude-sonnet-5 shows list rates; introductory pricing
 ($2.00 in / $10.00 out) runs through 2026-08-31. gemini-3.1-pro-preview is the
 latest pro tier served by the Gemini API (preview-only as of 2026-08).
 Anthropic rates are the native-API list (added 2026-07 with the `claude`
-engine); the cached-input column is the documented 0.1x prompt-cache read rate,
-and 5-minute cache writes bill 1.25x input (not modeled). Anthropic lifecycle
+engine); the cached-input column is the documented 0.1x prompt-cache read rate.
+Cache writes bill above base input and are priced per cache lifetime — 1.25x
+for the 5-minute TTL and 2x for the 1-hour TTL — modeled since 2.24.0 as
+`cache_write_5m_per_1m` / `cache_write_1h_per_1m` on `AITokenRates`. Anthropic lifecycle
 entries also cover claude-opus-4-1 (retired 2026-08-05, replace with
 claude-opus-5) and the retired claude-3-7-sonnet, claude-3-5-haiku, and
 claude-3-opus snapshots. Retired entries that were priced while active keep
@@ -193,6 +195,10 @@ class AITokenRates(BaseModel):
     input_per_1m: Decimal
     output_per_1m: Decimal | None = None       # None for embeddings
     cached_input_per_1m: Decimal | None = None
+    # Decimal("0") = provider charges nothing to populate a cache.
+    # None = charged but not yet rated; falls back to input_per_1m.
+    cache_write_5m_per_1m: Decimal | None = None
+    cache_write_1h_per_1m: Decimal | None = None
 
 class AIPricingTier(BaseModel):
     label: str                                  # "context>200k", "quality:high", "1080p"

@@ -79,7 +79,8 @@ The cost event fields:
 
 ```
 call_id, event_time_utc, provider, model, capability, operation, caller_id,
-input_tokens, output_tokens, cached_input_tokens (None in v1),
+input_tokens, output_tokens, cached_input_tokens (since 2.12.0),
+cache_write_5m_tokens, cache_write_1h_tokens (since 2.24.0),
 usd_cost (Decimal), currency,
 pricing_effective_date, pricing_source, pricing_confidence
 ```
@@ -137,13 +138,26 @@ topic.
    `provider_prompt_tokens` so the cached subset is uniform across providers.
    The cost middleware bills the cached subset at the cached rate and the
    remainder at the full input rate, and the cost event carries
-   `cached_input_tokens`. Scope is cache *reads*: cache *writes* (priming a
-   cache, billed above the base input rate — Bedrock exposes them as
-   `cacheWriteInputTokens`) are not captured or billed yet, because the pricing
-   registry does not model a cache-write rate. That is a follow-on once a
-   cache-write rate column lands.
+   `cached_input_tokens`. Cache *writes* followed in Phase 4.
 
-4. **Aggregation: none in-library.** Per-call events only, correlated via the
+4. **Cache-write billing: shipped in Phase 4 (2.24.0).** Priming a cache costs
+   more than base input, and the premium depends on the cache lifetime, so
+   `AITokenRates` carries a rate per TTL (`cache_write_5m_per_1m`,
+   `cache_write_1h_per_1m`) rather than one blended write rate. The result
+   summary carries `provider_cache_write_5m_tokens` and
+   `provider_cache_write_1h_tokens`; Anthropic supplies the per-TTL split from
+   `usage.cache_creation`, and Bedrock's Converse reports a single
+   `cacheWriteInputTokens` that is attributed to the 5-minute tier (the only
+   lifetime it exposes). Unlike cache reads, writes are **not** folded into
+   `provider_prompt_tokens` — the provider counts them separately, so folding
+   them in would bill them twice. OpenAI charges nothing to write a cache and
+   Google bills explicit-cache *storage* per hour rather than a per-token write,
+   so both carry an explicit zero rate. Zero and unset are deliberately
+   distinct: zero bills as free, while unset means charged-but-unrated and
+   falls back to the base input rate, under-reporting the premium instead of
+   dropping the cost entirely.
+
+5. **Aggregation: none in-library.** Per-call events only, correlated via the
    `caller_id` / session / workflow ids already on the context. Rollups are the
    consumer's job.
 
@@ -158,4 +172,7 @@ topic.
 - **Phase 3 (shipped, 2.12.0)** — cached-token capture in the result summary
   (per provider) so cost reflects cache discounts. `provider_cached_input_tokens`
   on the result summary; the cost middleware splits cached from full-rate input.
+- **Phase 4 (shipped, 2.24.0)** — cache-write billing. Per-TTL cache-write rates
+  in the pricing registry, per-TTL write counts on the result summary, and the
+  premium folded into the emitted cost.
 - **Later** — budgets/alerting on the event stream, if wanted.
