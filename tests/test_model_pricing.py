@@ -205,7 +205,8 @@ class TestRegistry:
                 continue
             if info.pricing.token_rates.cache_write_5m_per_1m is not None:
                 continue
-            assert info.pricing.notes and "cache write" in info.pricing.notes, (
+            str_notes: str = (info.pricing.notes or "").replace("-", " ").lower()
+            assert "cache write" in str_notes, (
                 f"{model} bills cache writes but carries no rate and no note "
                 "explaining the gap"
             )
@@ -235,7 +236,10 @@ class TestRegistry:
             if provider in ("openai", "google")
             and info.pricing is not None
             and info.pricing.token_rates is not None
-            and info.pricing.token_rates.cached_input_per_1m is not None
+            # Completions models only: an absent output rate marks embeddings,
+            # which have no prompt cache to prime. Keying off the cached rate
+            # instead would skip entries missing both columns.
+            and info.pricing.token_rates.output_per_1m is not None
             and info.pricing.token_rates.cache_write_5m_per_1m is None
         ]
 

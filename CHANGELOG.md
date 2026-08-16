@@ -36,7 +36,9 @@ version lives in `pyproject.toml` (see the README release section).
   carry an explicit zero cache-write rate (OpenAI writes are free; Google bills
   explicit-cache storage per hour rather than per written token), so their
   writes bill as free. An absent rate means charged-but-unrated and falls back
-  to the base input rate; only the Bedrock-hosted Claude entry is in that state.
+  to the base input rate; the five Bedrock completions entries (hosted Claude
+  plus the four Nova models) are in that state, pending an authoritative AWS
+  cache-write rate.
 
 ## 2.23.0
 

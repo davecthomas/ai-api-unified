@@ -482,7 +482,15 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash",
-            _tok("0.10", "0.40", None, _SRC_GOOGLE, confidence="medium"),
+            _tok(
+                "0.10",
+                "0.40",
+                None,
+                _SRC_GOOGLE,
+                confidence="medium",
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash",
@@ -490,7 +498,15 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash-001",
-            _tok("0.10", "0.40", None, _SRC_GOOGLE, confidence="medium"),
+            _tok(
+                "0.10",
+                "0.40",
+                None,
+                _SRC_GOOGLE,
+                confidence="medium",
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash",
@@ -498,7 +514,15 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash-lite",
-            _tok("0.075", "0.30", None, _SRC_GOOGLE, confidence="medium"),
+            _tok(
+                "0.075",
+                "0.30",
+                None,
+                _SRC_GOOGLE,
+                confidence="medium",
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash-lite",
@@ -506,7 +530,15 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash-lite-001",
-            _tok("0.075", "0.30", None, _SRC_GOOGLE, confidence="medium"),
+            _tok(
+                "0.075",
+                "0.30",
+                None,
+                _SRC_GOOGLE,
+                confidence="medium",
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+            ),
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash-lite",
@@ -574,7 +606,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "0.14",
                 None,
                 _SRC_BEDROCK,
-                notes="AWS bills Nova cache writes at the standard input price, so the unset cache-write rate resolves to the correct amount via the base-input fallback rather than needing its own column.",
+                notes="Bedrock reports cacheWriteInputTokens for this model but is partner-priced, and no authoritative AWS cache-write rate has been sourced. Writes fall back to the base input rate; if AWS charges a premium, that under-reports it. Add write_5m_r once the rate is confirmed.",
             ),
         ),
         _info(
@@ -585,7 +617,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "0.24",
                 None,
                 _SRC_BEDROCK,
-                notes="AWS bills Nova cache writes at the standard input price, so the unset cache-write rate resolves to the correct amount via the base-input fallback rather than needing its own column.",
+                notes="Bedrock reports cacheWriteInputTokens for this model but is partner-priced, and no authoritative AWS cache-write rate has been sourced. Writes fall back to the base input rate; if AWS charges a premium, that under-reports it. Add write_5m_r once the rate is confirmed.",
             ),
         ),
         _info(
@@ -596,7 +628,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "3.20",
                 None,
                 _SRC_BEDROCK,
-                notes="AWS bills Nova cache writes at the standard input price, so the unset cache-write rate resolves to the correct amount via the base-input fallback rather than needing its own column.",
+                notes="Bedrock reports cacheWriteInputTokens for this model but is partner-priced, and no authoritative AWS cache-write rate has been sourced. Writes fall back to the base input rate; if AWS charges a premium, that under-reports it. Add write_5m_r once the rate is confirmed.",
             ),
         ),
         _info(
@@ -607,7 +639,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "12.50",
                 None,
                 _SRC_BEDROCK,
-                notes="AWS bills Nova cache writes at the standard input price, so the unset cache-write rate resolves to the correct amount via the base-input fallback rather than needing its own column.",
+                notes="Bedrock reports cacheWriteInputTokens for this model but is partner-priced, and no authoritative AWS cache-write rate has been sourced. Writes fall back to the base input rate; if AWS charges a premium, that under-reports it. Add write_5m_r once the rate is confirmed.",
             ),
         ),
         _info(

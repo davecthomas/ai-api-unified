@@ -1179,7 +1179,9 @@ explicit zero write rate. The two states are recorded distinctly: a rate of
 zero means the provider charges nothing to populate a cache, and writes bill as
 free. An absent rate means the write is charged but not yet rated — it falls
 back to the base input rate, under-reporting the premium rather than dropping
-the cost. Only the Bedrock-hosted Claude entry is in that second state today.
+the cost. Five Bedrock entries are in that second state today: the hosted Claude
+model and the four Amazon Nova models, all partner-priced with no
+authoritative AWS cache-write rate sourced.
 
 ```yaml
 middleware:
