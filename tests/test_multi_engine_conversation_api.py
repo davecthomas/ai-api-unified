@@ -493,6 +493,71 @@ class TestGeminiConversation:
         text = await client.asend_prompt("hi", max_response_tokens=128)
         assert text == "async ok"
 
+    def test_unknown_provider_options_key_dropped_and_logged(self, caplog):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("ok")]
+        )
+        messages = [{"role": "user", "parts": [{"text": "hi"}]}]
+        # Anthropic-shaped thinking control: GenerateContentConfig has no
+        # "thinking" field, so forwarding it verbatim raises ValidationError.
+        with caplog.at_level("WARNING"):
+            turn = client.send_conversation(
+                "sys", messages, provider_options={"thinking": {"type": "disabled"}}
+            )
+        assert turn.text == "ok"
+        assert "thinking" in caplog.text
+        config = mock_client.models.generate_content.call_args.kwargs["config"]
+        assert not hasattr(config, "thinking")
+
+    def test_recognized_provider_options_forwarded_by_name_and_alias(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("ok")]
+        )
+        messages = [{"role": "user", "parts": [{"text": "hi"}]}]
+        client.send_conversation(
+            "sys",
+            messages,
+            provider_options={"thinking_config": {"thinking_budget": 0}},
+        )
+        config = mock_client.models.generate_content.call_args.kwargs["config"]
+        assert config.thinking_config.thinking_budget == 0
+        # The SDK model also accepts camelCase aliases; those pass through too.
+        client.send_conversation(
+            "sys",
+            messages,
+            provider_options={"thinkingConfig": {"thinking_budget": 128}},
+        )
+        config = mock_client.models.generate_content.call_args.kwargs["config"]
+        assert config.thinking_config.thinking_budget == 128
+
+    def test_unknown_provider_options_key_dropped_on_structured_output(self, caplog):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        payload = {"nodes": []}
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part(json.dumps(payload))]
+        )
+        with caplog.at_level("WARNING"):
+            result = client.send_structured_output(
+                "Compile.",
+                response_schema=GRAPH_SCHEMA,
+                provider_options={"thinking": {"type": "disabled"}},
+            )
+        assert result.data == payload
+        assert "thinking" in caplog.text
+
+    def test_retry_policy_key_survives_option_filtering(self):
+        client = _build_gemini_client(Mock())
+        dict_merge_options, str_retry_policy = client._split_provider_options(
+            {"retry_policy": "none", "thinking": {}, "temperature": 0.5}
+        )
+        assert str_retry_policy == "none"
+        assert dict_merge_options == {"temperature": 0.5}
+
     def test_retry_policy_none_single_attempt(self):
         mock_client = Mock()
         client = _build_gemini_client(mock_client, retry_policy="none")

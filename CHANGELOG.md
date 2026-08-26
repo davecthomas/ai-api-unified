@@ -4,6 +4,19 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.24.2
+
+- The google-gemini completions engine now honors the documented
+  `provider_options` contract: engines ignore keys they do not understand.
+  Previously every `provider_options` key merged verbatim into
+  `GenerateContentConfig`, whose pydantic model forbids unknown fields, so a
+  cross-engine value (for example the Anthropic-shaped
+  `{"thinking": {"type": "disabled"}}`) raised a `ValidationError` before any
+  request was sent. Unknown keys are now dropped with a warning log; keys the
+  SDK model accepts — by snake_case field name or camelCase alias, such as
+  Gemini's own `{"thinking_config": {"thinking_budget": 0}}` — still merge
+  into the request, and the reserved `retry_policy` key keeps working.
+
 ## 2.24.0
 
 - Prompt-cache **writes** are now priced and billed. Priming a cache costs more

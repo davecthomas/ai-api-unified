@@ -1062,6 +1062,74 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             usage=self._usage_from_gemini(response),
         )
 
+    @staticmethod
+    def _gemini_config_key_names() -> frozenset[str] | None:
+        """
+        Collects the key names GenerateContentConfig accepts.
+
+        Includes both pydantic field names (snake_case) and their camelCase
+        aliases, since the SDK model accepts either. Returns None when the
+        SDK model exposes no field metadata (a mocked SDK in tests), in which
+        case no filtering happens.
+        """
+        model_fields: Any = getattr(
+            genai.types.GenerateContentConfig, "model_fields", None
+        )
+        if not isinstance(model_fields, dict) or not model_fields:
+            # Early return because there is no field metadata to filter with.
+            return None
+        set_keys: set[str] = set()
+        # Loop over fields so each contributes its name and optional alias.
+        for str_name, field in model_fields.items():
+            set_keys.add(str_name)
+            str_alias: str | None = getattr(field, "alias", None)
+            if str_alias:
+                set_keys.add(str_alias)
+        # Normal return with the recognized key names.
+        return frozenset(set_keys)
+
+    def _split_provider_options(
+        self, provider_options: dict[str, Any] | None
+    ) -> tuple[dict[str, Any], str | None]:
+        """
+        Splits provider_options, dropping keys this engine does not understand.
+
+        The base contract promises that engines ignore provider_options keys
+        they do not understand, but GenerateContentConfig forbids unknown
+        fields, so merging unrecognized keys verbatim raises a pydantic
+        ValidationError before any request is sent (for example an
+        Anthropic-shaped {"thinking": ...} supplied by a cross-engine
+        caller). Unknown keys are logged and dropped instead of forwarded.
+
+        Args:
+            provider_options: Optional engine-specific escape hatch supplied
+                per call.
+
+        Returns:
+            Tuple of (kwargs GenerateContentConfig accepts, optional per-call
+            retry policy override).
+        """
+        dict_merge_options, str_retry_policy = super()._split_provider_options(
+            provider_options
+        )
+        set_known_keys: frozenset[str] | None = self._gemini_config_key_names()
+        if not dict_merge_options or set_known_keys is None:
+            # Early return because there is nothing to filter.
+            return dict_merge_options, str_retry_policy
+        dict_recognized: dict[str, Any] = {}
+        # Loop over options so unknown keys are dropped with a log line.
+        for str_key, option_value in dict_merge_options.items():
+            if str_key in set_known_keys:
+                dict_recognized[str_key] = option_value
+            else:
+                _LOGGER.warning(
+                    "Ignoring provider_options key %r: not a "
+                    "GenerateContentConfig field on the google-gemini engine.",
+                    str_key,
+                )
+        # Normal return with recognized options and the retry override.
+        return dict_recognized, str_retry_policy
+
     def _build_gemini_conversation_config_kwargs(
         self,
         *,
