@@ -22,14 +22,19 @@ version lives in `pyproject.toml` (see the README release section).
 - The configured model is always listed, so `model_name` never goes missing
   from its own engine's list: the constructor accepted it, and Google serves
   deprecated models it has stopped listing.
-- A successful answer is cached per client instance, so a pooled client pays
-  one catalogue pull rather than one per call. Transient listing failures
-  retry on a short budget, since a single rate-limit blip would otherwise
-  downgrade the answer to the static list with no signal in the return value.
+- **Reading `list_model_names` on this engine can now make a blocking network
+  call**, where every other engine returns a static literal. Callers should
+  read it off the event loop, as the HTTP service already does. Both outcomes
+  are cached per client instance and keyed on the configured model, so the
+  cost is one round trip per TTL window (15 minutes on success, 1 minute
+  after a failure) rather than one per read. Transient listing failures retry
+  on a short budget, since a single rate-limit blip would otherwise downgrade
+  the answer to the static list with no signal in the return value.
 - When the listing call fails (offline, restricted credentials, mocked SDK)
   or names none of the spec entries, the property returns the full static
-  list unchanged and logs the reason; nothing is cached, so a later access
-  retries.
+  list unchanged and logs the reason. That outcome is cached only for the
+  short failure window, so a recovered provider is picked up quickly while a
+  provider that cannot answer at all stops costing a round trip per read.
 - `AIGoogleBase.list_models` gains optional `required_action`,
   `bool_strip_resource_prefix`, and `bool_propagate_errors` parameters, so the
   completions engine reuses that pager instead of carrying a second copy.

@@ -583,17 +583,55 @@ class TestGeminiModelListing:
         assert first == second == ["gemini-2.5-flash"]
         assert mock_client.models.list.call_count == 1
 
-    def test_failed_listing_is_not_cached(self):
+    def test_failed_listing_is_cached_only_for_the_failure_window(self):
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GEMINI_MODEL_SPECS,
+        )
+
         mock_client = Mock()
         client = _build_gemini_client(mock_client)
         mock_client.models.list.side_effect = RuntimeError("no network")
-        client.list_model_names
-        # The provider may recover, so a failure must not pin the fallback.
+        assert client.list_model_names == list(GEMINI_MODEL_SPECS.keys())
+        # A provider that cannot answer costs one round trip per window, not
+        # one per read.
+        assert client.list_model_names == list(GEMINI_MODEL_SPECS.keys())
+        assert mock_client.models.list.call_count == 1
+
+        # Once the short failure window expires, a recovered provider is used.
+        str_model, _, list_cached = client._list_model_names_cache
+        client._list_model_names_cache = (str_model, 0.0, list_cached)
         mock_client.models.list.side_effect = None
         mock_client.models.list.return_value = [
             _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
         ]
         assert client.list_model_names == ["gemini-2.5-flash"]
+
+    def test_expired_success_cache_is_refreshed(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        assert client.list_model_names == ["gemini-2.5-flash"]
+        str_model, _, list_cached = client._list_model_names_cache
+        client._list_model_names_cache = (str_model, 0.0, list_cached)
+        # Google publishes models over time, so a cached list cannot be final.
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+            _gemini_catalogue_model("models/gemini-2.5-pro", ["generateContent"]),
+        ]
+        assert client.list_model_names == ["gemini-2.5-pro", "gemini-2.5-flash"]
+
+    def test_cache_is_keyed_on_the_configured_model(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        assert client.list_model_names == ["gemini-2.5-flash"]
+        # Repointing the client must not serve the previous model's answer.
+        client.completions_model = "gemini-2.0-flash"
+        assert client.list_model_names == ["gemini-2.5-flash", "gemini-2.0-flash"]
 
     def test_configured_model_is_always_listed(self):
         mock_client = Mock()

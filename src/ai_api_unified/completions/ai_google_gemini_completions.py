@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from collections.abc import Iterator
 from typing import Any, Type
 
@@ -92,6 +93,12 @@ GENERATE_CONTENT_ACTION: str = "generateContent"
 # Catalogue queries block a metadata call, so they retry on a shorter budget
 # than the completions default.
 LIST_MODELS_MAX_RETRIES: int = 2
+# How long a resolved model list stays good. The failure window is short so a
+# recovered provider is picked up quickly, and non-zero so a provider that
+# cannot answer at all costs one round trip per window rather than one per
+# call.
+LIST_MODELS_CACHE_TTL_SECONDS: float = 900.0
+LIST_MODELS_FAILURE_TTL_SECONDS: float = 60.0
 
 # Model specifications based on https://ai.google.dev/gemini-api/docs/models#model-variations
 # Pricing source: Vertex AI Generative AI pricing tables (online, <=200K input tokens tier).
@@ -244,19 +251,56 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         listed globally but not served in the configured region still passes
         and can still answer 404 on generateContent.
 
-        A successful answer is cached per client instance. When the query
+        Unlike the other engines, whose lists are static literals, reading
+        this property can make a blocking network call and can sleep on a
+        transient error (bounded by LIST_MODELS_MAX_RETRIES). Both outcomes
+        are cached per client instance and keyed on the configured model, so
+        the cost is one round trip per TTL window rather than one per read.
+        Call it off the event loop, as the HTTP service does. When the query
         fails (offline, restricted credentials, mocked SDK) or names none of
-        the spec entries, the static spec list is returned and nothing is
-        cached, so a later access retries.
+        the spec entries, the static spec list is returned and that outcome
+        is cached for the shorter failure window.
         """
-        list_cached: list[str] | None = getattr(self, "_list_model_names_cache", None)
-        if list_cached is not None:
-            # Early return with the cached live-checked answer.
-            return list(list_cached)
+        tuple_cache: tuple[str, float, list[str] | None] | None = getattr(
+            self, "_list_model_names_cache", None
+        )
+        if tuple_cache is not None:
+            str_cached_model, float_expires_at, list_cached = tuple_cache
+            if (
+                str_cached_model == self.completions_model
+                and time.monotonic() < float_expires_at
+            ):
+                # Early return with the unexpired cached outcome; None means
+                # the live query could not answer, so the static list stands.
+                return list(GEMINI_MODEL_SPECS if list_cached is None else list_cached)
+        list_resolved: list[str] | None = self._resolve_live_model_names()
+        float_ttl_seconds: float = (
+            LIST_MODELS_CACHE_TTL_SECONDS
+            if list_resolved is not None
+            else LIST_MODELS_FAILURE_TTL_SECONDS
+        )
+        self._list_model_names_cache = (
+            self.completions_model,
+            time.monotonic() + float_ttl_seconds,
+            list_resolved,
+        )
+        # Normal return with the live-checked entries, or the static list when
+        # the catalogue could not answer.
+        return list(GEMINI_MODEL_SPECS if list_resolved is None else list_resolved)
+
+    def _resolve_live_model_names(self) -> list[str] | None:
+        """
+        Resolves the live-checked model list for one cache fill.
+
+        Returns:
+            Spec entries the catalogue lists, in spec order, plus the
+            configured model. None when the catalogue could not answer, so
+            the caller serves the static spec list.
+        """
         set_live_names: set[str] | None = self._list_catalogue_model_names()
         if set_live_names is None:
-            # Early return with the static list because the live query failed.
-            return list(GEMINI_MODEL_SPECS.keys())
+            # Early return because the live query failed and already logged.
+            return None
         list_verified: list[str] = [
             str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_live_names
         ]
@@ -266,20 +310,16 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 "falling back to the static spec list.",
                 len(GEMINI_MODEL_SPECS),
             )
-            # Early return with the static list: sharing no names reads as a
-            # catalogue whose naming scheme did not match, not as zero models.
-            return list(GEMINI_MODEL_SPECS.keys())
+            # Early return: sharing no names reads as a catalogue whose naming
+            # scheme did not match, not as zero callable models.
+            return None
         # The configured model is always listed. The constructor accepted it,
         # and Google serves deprecated models it has stopped listing, so
         # dropping it here would leave model_name absent from its own
         # engine's list while send_prompt still reaches it.
         set_listable: set[str] = set(set_live_names) | {self.completions_model}
-        list_names: list[str] = [
-            str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_listable
-        ]
-        self._list_model_names_cache = list_names
         # Normal return with the live-checked spec entries.
-        return list(list_names)
+        return [str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_listable]
 
     def _list_catalogue_model_names(self) -> set[str] | None:
         """
