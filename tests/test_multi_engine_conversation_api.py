@@ -1142,8 +1142,13 @@ class TestBedrockMessageShape:
         sent = client.client.converse.call_args.kwargs["messages"]
         assert sent[0] == {"role": "user", "content": [{"text": "Ready?"}]}
 
-    def test_block_key_constant_matches_the_service_model(self):
-        """The allowlist must not drift from the bedrock-runtime model."""
+    def test_block_keys_come_from_the_installed_service_model(self):
+        """The allowlist tracks the SDK, so a botocore upgrade cannot stale it.
+
+        Asserting equality against a frozen literal broke on botocore 1.43.80,
+        which added toolAddition and toolRemoval: the suite went red on
+        upgrade, and the engine rejected blocks Converse accepts.
+        """
         import botocore.session
 
         shape = (
@@ -1151,9 +1156,50 @@ class TestBedrockMessageShape:
             .get_service_model("bedrock-runtime")
             .shape_for("ContentBlock")
         )
-        assert AiBedrockCompletions.CONVERSE_CONTENT_BLOCK_KEYS == frozenset(
+        assert AiBedrockCompletions._converse_content_block_keys() == frozenset(
             shape.members.keys()
         )
+
+    def test_fallback_is_a_subset_of_the_service_model(self):
+        """The built-in list must name only real members, never invent one."""
+        import botocore.session
+
+        shape = (
+            botocore.session.get_session()
+            .get_service_model("bedrock-runtime")
+            .shape_for("ContentBlock")
+        )
+        assert AiBedrockCompletions.CONVERSE_CONTENT_BLOCK_KEYS_FALLBACK <= frozenset(
+            shape.members.keys()
+        )
+
+    def test_block_type_added_by_a_newer_sdk_passes_through(self):
+        """A member absent from the fallback must still be accepted."""
+        added = "someFutureBlockType"
+        assert added not in AiBedrockCompletions.CONVERSE_CONTENT_BLOCK_KEYS_FALLBACK
+        with patch.object(
+            AiBedrockCompletions,
+            "_FROZENSET_CONVERSE_BLOCK_KEYS",
+            AiBedrockCompletions.CONVERSE_CONTENT_BLOCK_KEYS_FALLBACK | {added},
+        ):
+            client = _build_bedrock_client()
+            client.client.converse.return_value = _converse_response([{"text": "ok"}])
+            block = {"role": "user", "content": [{added: {"x": 1}}]}
+            client.send_conversation("sys", [block])
+            sent = client.client.converse.call_args.kwargs["messages"]
+            assert sent[0] is block
+
+    def test_unreadable_service_model_falls_back(self):
+        """A botocore whose model cannot be read must not break sending."""
+        with (
+            patch.object(AiBedrockCompletions, "_FROZENSET_CONVERSE_BLOCK_KEYS", None),
+            patch("botocore.session.get_session", side_effect=RuntimeError("no model")),
+        ):
+            assert (
+                AiBedrockCompletions._converse_content_block_keys()
+                == AiBedrockCompletions.CONVERSE_CONTENT_BLOCK_KEYS_FALLBACK
+            )
+        AiBedrockCompletions._FROZENSET_CONVERSE_BLOCK_KEYS = None
 
 
 class TestDocumentedShapeAcrossProviders:
