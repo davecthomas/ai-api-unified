@@ -33,7 +33,7 @@ import json
 import logging
 import time
 from collections.abc import Iterator
-from typing import Any, Type
+from typing import Any, ClassVar, Type
 
 from google import genai
 from google.genai import errors as gerr
@@ -1201,6 +1201,41 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             raw_content=list_raw_parts,
             usage=self._usage_from_gemini(response),
         )
+
+    _FROZENSET_CONFIG_KEYS: ClassVar[frozenset[str] | None] = None
+
+    def _known_provider_option_keys(self) -> frozenset[str] | None:
+        """
+        Reports the GenerateContentConfig fields this SDK accepts.
+
+        Provider options are splatted into that pydantic model, which forbids
+        extra fields, so an unrecognized key fails in-process. The model sets
+        populate_by_name, so both the field name and its camelCase alias are
+        accepted.
+
+        Returns:
+            Field names and aliases, or None when the model exposes no field
+            metadata (a mocked SDK in tests).
+        """
+        if GoogleGeminiCompletions._FROZENSET_CONFIG_KEYS is not None:
+            # Early return with the resolved set; the model is process-stable.
+            return GoogleGeminiCompletions._FROZENSET_CONFIG_KEYS
+        dict_fields: Any = getattr(
+            genai.types.GenerateContentConfig, "model_fields", None
+        )
+        if not isinstance(dict_fields, dict) or not dict_fields:
+            # Early return: a mocked or restructured SDK cannot be filtered.
+            return None
+        set_keys: set[str] = set()
+        # Loop over fields so each name and its alias both stay callable.
+        for str_name, field_info in dict_fields.items():
+            set_keys.add(str_name)
+            str_alias: Any = getattr(field_info, "alias", None)
+            if isinstance(str_alias, str) and str_alias:
+                set_keys.add(str_alias)
+        GoogleGeminiCompletions._FROZENSET_CONFIG_KEYS = frozenset(set_keys)
+        # Normal return with the accepted config keys.
+        return GoogleGeminiCompletions._FROZENSET_CONFIG_KEYS
 
     def _normalize_messages(
         self,

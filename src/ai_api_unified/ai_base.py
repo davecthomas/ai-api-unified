@@ -4,6 +4,7 @@ from __future__ import (
 
 import base64
 import json
+import inspect
 import logging
 import math
 import mimetypes
@@ -3246,8 +3247,10 @@ class AIBaseCompletions(AIBase):
                 per call.
 
         Returns:
-            Tuple of (kwargs merged verbatim into the provider request,
-            optional per-call retry policy override).
+            Tuple of (the subset of caller options this engine's SDK accepts,
+            merged into the provider request, and the optional per-call retry
+            policy override). Keys the SDK does not accept are dropped and
+            logged; see _filter_known_provider_options for that rule.
         """
         if not provider_options:
             # Early return because there is nothing to split.
@@ -3256,8 +3259,164 @@ class AIBaseCompletions(AIBase):
         str_retry_policy: str | None = dict_merge_options.pop(
             self.PROVIDER_OPTION_RETRY_POLICY, None
         )
-        # Normal return with merge options and the reserved retry override.
-        return dict_merge_options, str_retry_policy
+        # Normal return with the filtered merge options and the retry override.
+        return self._filter_known_provider_options(dict_merge_options), str_retry_policy
+
+    def _filter_known_provider_options(
+        self, merge_options: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Drops provider_options keys this engine's SDK does not accept.
+
+        The public docstring promises engines ignore keys they do not
+        understand, which is what makes provider_options usable in a
+        cross-provider fallback: a caller tuned for one engine keeps its
+        options when it fails over. Forwarding an unknown key instead reaches
+        the SDK and fails inside the caller's process, so the escape hatch
+        breaks exactly the callers it exists for.
+
+        Args:
+            merge_options: Caller options with reserved keys already removed.
+
+        Returns:
+            The subset the engine's SDK accepts. Dropped keys are logged at
+            warning level so a silently ignored option is still discoverable.
+        """
+        set_known: frozenset[str] | None = self._known_provider_option_keys()
+        if set_known is None:
+            # Early return: introspection is unavailable (a mocked SDK, or a
+            # version whose metadata moved), so forward unchanged rather than
+            # guess and drop an option the caller needs.
+            return merge_options
+        dict_known: dict[str, Any] = {
+            str_key: value
+            for str_key, value in merge_options.items()
+            if str_key in set_known
+        }
+        list_dropped: list[str] = sorted(set(merge_options) - set(dict_known))
+        if list_dropped:
+            _LOGGER.warning(
+                "Ignoring provider_options key(s) %s: not accepted by the %s "
+                "engine. See the engine's SDK for the options it supports.",
+                ", ".join(repr(str_key) for str_key in list_dropped),
+                type(self).__name__,
+            )
+        # Normal return with only the keys this engine understands.
+        return dict_known
+
+    def _sdk_option_method(self) -> tuple[Any, str] | None:
+        """
+        Names the SDK method whose keyword arguments are the accepted options.
+
+        An engine whose provider options become keyword arguments implements
+        only this: import the SDK class and hand back its UNBOUND method plus
+        a label for logging. The base owns the signature walk and the cache,
+        so a new engine cannot reimplement either incorrectly.
+
+        Returning the unbound class attribute is load-bearing. A bound method
+        off self.client is a Mock under test, whose signature is
+        (*args, **kwargs); that reads as "accepts anything" and would silently
+        disable filtering.
+
+        Returns:
+            Tuple of (unbound SDK method, label), or None when this engine
+            resolves its keys some other way or cannot resolve them.
+        """
+        # Normal return: the base engine has no SDK method to introspect.
+        return None
+
+    def _known_provider_option_keys(self) -> frozenset[str] | None:
+        """
+        Reports the provider_options keys this engine's SDK accepts.
+
+        Derived from the SDK rather than hardcoded, so a version that adds an
+        option does not have it dropped here. Engines whose options are
+        keyword arguments implement _sdk_option_method and inherit this;
+        engines whose options are validated some other way (a pydantic config
+        model, a service model) override this directly.
+
+        Returns:
+            Accepted key names, or None when they cannot be determined, in
+            which case every key is forwarded unchanged.
+        """
+        type_self: type = type(self)
+        frozenset_cached: frozenset[str] | None = type_self.__dict__.get(
+            "_FROZENSET_SDK_OPTION_KEYS"
+        )
+        if frozenset_cached is not None:
+            # Early return with the resolved set; the signature is stable.
+            return frozenset_cached
+        tuple_source: tuple[Any, str] | None = self._sdk_option_method()
+        if tuple_source is None:
+            # Early return: nothing to introspect, so forward every key.
+            return None
+        unbound, str_label = tuple_source
+        frozenset_keys: frozenset[str] | None = self._keys_from_callable_signature(
+            unbound, sdk_label=str_label
+        )
+        if frozenset_keys is None:
+            # Early return: the helper already logged why.
+            return None
+        type_self._FROZENSET_SDK_OPTION_KEYS = frozenset_keys
+        # Normal return with the accepted keyword arguments.
+        return frozenset_keys
+
+    @staticmethod
+    def _keys_from_callable_signature(
+        unbound: Any, *, sdk_label: str
+    ) -> frozenset[str] | None:
+        """
+        Reports the keyword arguments an SDK method accepts.
+
+        Shared by every engine whose provider options become keyword
+        arguments. Pass the UNBOUND class attribute, never a bound method off
+        self.client: a mocked client's signature is (*args, **kwargs), which
+        reads as "accepts anything" and silently disables filtering.
+
+        Args:
+            unbound: The SDK's unbound method, for example Completions.create.
+            sdk_label: Name used when logging that introspection failed.
+
+        Returns:
+            Accepted parameter names; None when the signature cannot be read
+            or declares **kwargs, meaning the caller's keys must be forwarded
+            unchanged rather than dropped on a guess.
+        """
+        try:
+            signature = inspect.signature(unbound)
+        except (TypeError, ValueError) as exception:
+            _LOGGER.warning(
+                "Could not read the %s signature (%s); forwarding "
+                "provider_options unfiltered, so an unknown key will surface "
+                "as the SDK's own error.",
+                sdk_label,
+                exception,
+            )
+            # Early return: forwarding beats dropping on a guess.
+            return None
+        set_keys: set[str] = set()
+        # Loop over parameters so only real keyword arguments are kept.
+        for str_name, parameter in signature.parameters.items():
+            if str_name == "self":
+                continue
+            if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+                # Early return: the SDK forwards anything, so drop nothing.
+                return None
+            if parameter.kind in (
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                set_keys.add(str_name)
+        if not set_keys:
+            _LOGGER.warning(
+                "The %s signature exposed no keyword arguments; forwarding "
+                "provider_options unfiltered.",
+                sdk_label,
+            )
+            # Early return: an empty signature means introspection failed.
+            return None
+        # Normal return with the accepted keyword arguments.
+        return frozenset(set_keys)
 
     async def asend_prompt(
         self,

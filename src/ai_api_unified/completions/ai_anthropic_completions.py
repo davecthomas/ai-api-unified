@@ -947,6 +947,33 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
         )
 
+    def _sdk_option_method(self) -> tuple[Any, str] | None:
+        """
+        Names anthropic messages.create, whose keyword arguments are the accepted options.
+
+        That method declares no **kwargs, so an unrecognized provider_options
+        key raises TypeError inside the caller's process before any request
+        is sent.
+
+        Returns:
+            Tuple of (unbound method, label), or None when the SDK layout
+            moved and keys must be forwarded unchanged.
+        """
+        try:
+            from anthropic.resources.messages import Messages
+        except Exception as exception:
+            _LOGGER.warning(
+                "Could not import %s (%s); forwarding provider_options "
+                "unfiltered, so an unknown key will surface as the SDK's own "
+                "error.",
+                "anthropic messages.create",
+                exception,
+            )
+            # Early return: forwarding beats dropping on a guess.
+            return None
+        # Normal return with the unbound SDK method and its log label.
+        return Messages.create, "anthropic messages.create"
+
     def _send_conversation_provider(
         self,
         *,

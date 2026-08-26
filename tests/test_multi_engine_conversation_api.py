@@ -1202,6 +1202,244 @@ class TestBedrockMessageShape:
         AiBedrockCompletions._FROZENSET_CONVERSE_BLOCK_KEYS = None
 
 
+def _engine_builders() -> list[tuple[str, Any]]:
+    """Every completions engine, built against a mocked SDK."""
+    from ai_api_unified.completions.ai_anthropic_completions import (
+        AiAnthropicCompletions,
+    )
+
+    def _anthropic():
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            client = AiAnthropicCompletions(model="claude-opus-4-8")
+        client.client = Mock()
+        return client
+
+    return [
+        ("google-gemini", lambda: _build_gemini_client(Mock())),
+        ("bedrock", _build_bedrock_client),
+        ("openai", _build_openai_client),
+        ("openai-responses", _build_responses_client),
+        ("anthropic", _anthropic),
+    ]
+
+
+def _gemini_sdk_option_names() -> frozenset[str]:
+    """Read straight from the pydantic model the engine splats into."""
+    fields = genai_module.types.GenerateContentConfig.model_fields
+    names: set[str] = set()
+    for name, info in fields.items():
+        names.add(name)
+        alias = getattr(info, "alias", None)
+        if isinstance(alias, str) and alias:
+            names.add(alias)
+    return frozenset(names)
+
+
+def _signature_option_names(unbound: Any) -> frozenset[str]:
+    import inspect
+
+    return frozenset(
+        name
+        for name, parameter in inspect.signature(unbound).parameters.items()
+        if name != "self"
+        and parameter.kind
+        in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    )
+
+
+def _openai_sdk_option_names() -> frozenset[str]:
+    from openai.resources.chat.completions import Completions
+
+    return _signature_option_names(Completions.create)
+
+
+def _responses_sdk_option_names() -> frozenset[str]:
+    from openai.resources.responses import Responses
+
+    return _signature_option_names(Responses.create)
+
+
+def _anthropic_sdk_option_names() -> frozenset[str]:
+    from anthropic.resources.messages import Messages
+
+    return _signature_option_names(Messages.create)
+
+
+def _bedrock_sdk_option_names() -> frozenset[str]:
+    """Read straight from the botocore service model."""
+    import botocore.session
+
+    return frozenset(
+        botocore.session.get_session()
+        .get_service_model("bedrock-runtime")
+        .operation_model("Converse")
+        .input_shape.members.keys()
+    )
+
+
+class TestProviderOptionsUnknownKeys:
+    """The docstring promises engines ignore keys they do not understand.
+
+    Before this, every engine forwarded them: Gemini into a pydantic model
+    that forbids extras, Anthropic/OpenAI/Responses as kwargs to a create()
+    with no **kwargs, Bedrock into botocore's parameter validator. All five
+    failed inside the caller's process, which breaks the cross-provider
+    fallback provider_options exists to serve.
+    """
+
+    UNKNOWN_KEY: str = "definitely_not_a_real_provider_option"
+
+    @pytest.mark.parametrize("engine, build", _engine_builders())
+    def test_unknown_key_is_dropped(self, engine, build, caplog):
+        client = build()
+        with caplog.at_level("WARNING"):
+            merge_options, _ = client._split_provider_options(
+                {self.UNKNOWN_KEY: {"a": 1}}
+            )
+        assert merge_options == {}, engine
+        assert self.UNKNOWN_KEY in caplog.text
+
+    @pytest.mark.parametrize("engine, build", _engine_builders())
+    def test_reserved_retry_policy_still_splits(self, engine, build):
+        """Filtering must not swallow the reserved key."""
+        client = build()
+        merge_options, retry_override = client._split_provider_options(
+            {"retry_policy": "none", self.UNKNOWN_KEY: 1}
+        )
+        assert retry_override == "none", engine
+        assert merge_options == {}, engine
+
+    def test_gemini_keeps_its_own_option(self):
+        """#53's counterpart: Gemini's real key must survive the filter."""
+        client = _build_gemini_client(Mock())
+        merge_options, _ = client._split_provider_options(
+            {"thinking_config": {"thinking_budget": 0}}
+        )
+        assert merge_options == {"thinking_config": {"thinking_budget": 0}}
+
+    def test_gemini_drops_the_anthropic_shape_from_the_issue(self):
+        """The exact payload in #53 must not reach GenerateContentConfig."""
+        client = _build_gemini_client(Mock())
+        merge_options, _ = client._split_provider_options(
+            {"thinking": {"type": "disabled"}}
+        )
+        assert merge_options == {}
+
+    def test_gemini_accepts_a_camel_case_alias(self):
+        """GenerateContentConfig sets populate_by_name, so aliases work."""
+        client = _build_gemini_client(Mock())
+        merge_options, _ = client._split_provider_options({"systemInstruction": "x"})
+        assert merge_options == {"systemInstruction": "x"}
+
+    @pytest.mark.parametrize(
+        "engine, build, sdk_owned_keys",
+        [
+            (name, build, keys)
+            for (name, build), keys in zip(
+                _engine_builders(),
+                [
+                    _gemini_sdk_option_names,
+                    _bedrock_sdk_option_names,
+                    _openai_sdk_option_names,
+                    _responses_sdk_option_names,
+                    _anthropic_sdk_option_names,
+                ],
+            )
+        ],
+    )
+    def test_known_keys_come_from_the_sdk(self, engine, build, sdk_owned_keys):
+        """The set must equal what the SDK declares, not a list we wrote.
+
+        Asserting a length would pass for a hardcoded frozenset, which is the
+        2.25.2 regression this is meant to prevent. Each expected set is read
+        from the SDK's own metadata at assert time.
+        """
+        client = build()
+        known = client._known_provider_option_keys()
+        assert known == sdk_owned_keys(), engine
+        assert self.UNKNOWN_KEY not in known, engine
+
+    def test_subclass_does_not_inherit_the_parent_cache(self):
+        """Responses subclasses the openai engine and has a different SDK.
+
+        The resolved set is cached per class via __dict__, not getattr. A
+        getattr lookup would hand the child its parent's allowlist and
+        silently drop a legitimate option such as "truncation".
+        """
+        from ai_api_unified.completions.ai_openai_responses_completions import (
+            AiOpenAIResponsesCompletions,
+        )
+
+        assert issubclass(AiOpenAIResponsesCompletions, AiOpenAICompletions)
+        parent_keys = _build_openai_client()._known_provider_option_keys()
+        child_keys = _build_responses_client()._known_provider_option_keys()
+        assert parent_keys != child_keys
+        assert "truncation" in child_keys
+        assert "truncation" not in parent_keys
+
+    def test_unintrospectable_sdk_forwards_unchanged(self):
+        """Dropping a caller's option on a guess is worse than forwarding it."""
+        client = _build_openai_client()
+        with patch.object(
+            type(client), "_known_provider_option_keys", return_value=None
+        ):
+            merge_options, _ = client._split_provider_options({self.UNKNOWN_KEY: 1})
+        assert merge_options == {self.UNKNOWN_KEY: 1}
+
+    @pytest.mark.asyncio
+    async def test_issue_payload_never_reaches_the_config_on_structured_output(
+        self,
+    ):
+        """#53's reproduction is asend_structured_output, so lock that path."""
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(
+            return_value=_gemini_response(
+                [_gemini_text_part(json.dumps({"nodes": []}))]
+            )
+        )
+        client = _build_gemini_client(mock_client)
+        await client.asend_structured_output(
+            messages=[{"role": "user", "content": "Anything."}],
+            response_schema=GRAPH_SCHEMA,
+            system_prompt="Fill the schema.",
+            provider_options={"thinking": {"type": "disabled"}},
+        )
+        config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
+        # Construction succeeding is the proof: GenerateContentConfig forbids
+        # extra fields, so "thinking" reaching it would have raised. Dump the
+        # model to assert absence rather than relying on a hasattr check.
+        assert "thinking" not in config.model_dump(exclude_none=True)
+
+    def test_issue_payload_never_reaches_the_config_on_sync_structured_output(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part(json.dumps({"nodes": []}))]
+        )
+        client.send_structured_output(
+            messages=[{"role": "user", "content": "Anything."}],
+            response_schema=GRAPH_SCHEMA,
+            provider_options={"thinking": {"type": "disabled"}},
+        )
+        config = mock_client.models.generate_content.call_args.kwargs["config"]
+        assert "thinking" not in config.model_dump(exclude_none=True)
+
+    def test_reaches_the_request_on_the_conversation_surface(self):
+        """End to end: the unknown key must not reach the SDK call."""
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("ok")]
+        )
+        client.send_conversation(
+            "sys",
+            [{"role": "user", "content": "hi"}],
+            provider_options={"thinking": {"type": "disabled"}},
+        )
+        config = mock_client.models.generate_content.call_args.kwargs["config"]
+        assert "thinking" not in config.model_dump(exclude_none=True)
+
+
 class TestDocumentedShapeAcrossProviders:
     """These five engines accept the {role, content} shape ai_base documents.
 

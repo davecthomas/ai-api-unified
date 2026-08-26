@@ -559,6 +559,33 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         # Normal return with scalar conversation metadata.
         return dict_metadata
 
+    def _sdk_option_method(self) -> tuple[Any, str] | None:
+        """
+        Names openai chat.completions.create, whose keyword arguments are the accepted options.
+
+        That method declares no **kwargs, so an unrecognized provider_options
+        key raises TypeError inside the caller's process before any request
+        is sent.
+
+        Returns:
+            Tuple of (unbound method, label), or None when the SDK layout
+            moved and keys must be forwarded unchanged.
+        """
+        try:
+            from openai.resources.chat.completions import Completions
+        except Exception as exception:
+            _LOGGER.warning(
+                "Could not import %s (%s); forwarding provider_options "
+                "unfiltered, so an unknown key will surface as the SDK's own "
+                "error.",
+                "openai chat.completions.create",
+                exception,
+            )
+            # Early return: forwarding beats dropping on a guess.
+            return None
+        # Normal return with the unbound SDK method and its log label.
+        return Completions.create, "openai chat.completions.create"
+
     def _send_conversation_provider(
         self,
         *,

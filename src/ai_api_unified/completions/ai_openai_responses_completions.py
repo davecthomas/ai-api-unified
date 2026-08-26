@@ -593,6 +593,33 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         # Normal return with the Responses-shaped conversation request.
         return dict_request_kwargs
 
+    def _sdk_option_method(self) -> tuple[Any, str] | None:
+        """
+        Names openai responses.create, whose keyword arguments are the accepted options.
+
+        That method declares no **kwargs, so an unrecognized provider_options
+        key raises TypeError inside the caller's process before any request
+        is sent.
+
+        Returns:
+            Tuple of (unbound method, label), or None when the SDK layout
+            moved and keys must be forwarded unchanged.
+        """
+        try:
+            from openai.resources.responses import Responses
+        except Exception as exception:
+            _LOGGER.warning(
+                "Could not import %s (%s); forwarding provider_options "
+                "unfiltered, so an unknown key will surface as the SDK's own "
+                "error.",
+                "openai responses.create",
+                exception,
+            )
+            # Early return: forwarding beats dropping on a guess.
+            return None
+        # Normal return with the unbound SDK method and its log label.
+        return Responses.create, "openai responses.create"
+
     def _send_conversation_provider(
         self,
         *,

@@ -1184,6 +1184,47 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
     # within a process, and shape lookup walks a large JSON model.
     _FROZENSET_CONVERSE_BLOCK_KEYS: ClassVar[frozenset[str] | None] = None
 
+    _FROZENSET_CONVERSE_PARAMS: ClassVar[frozenset[str] | None] = None
+
+    def _known_provider_option_keys(self) -> frozenset[str] | None:
+        """
+        Reports the top-level Converse request parameters botocore accepts.
+
+        Provider options are merged into the Converse request kwargs, and
+        botocore validates parameter names client-side, so an unrecognized key
+        raises ParamValidationError before the request is sent. Read from the
+        installed service model so a botocore that adds a parameter does not
+        have it dropped here.
+
+        Returns:
+            Converse input member names, or None when the model cannot be
+            read.
+        """
+        if AiBedrockCompletions._FROZENSET_CONVERSE_PARAMS is not None:
+            # Early return with the resolved set; the model is process-stable.
+            return AiBedrockCompletions._FROZENSET_CONVERSE_PARAMS
+        try:
+            import botocore.session
+
+            frozenset_params: frozenset[str] = frozenset(
+                botocore.session.get_session()
+                .get_service_model("bedrock-runtime")
+                .operation_model("Converse")
+                .input_shape.members.keys()
+            )
+        except Exception as exception:
+            # Early return: a botocore whose model cannot be read must not
+            # cost the caller their options.
+            _LOGGER.debug(
+                "Could not read the Converse input shape (%s); "
+                "forwarding provider_options unfiltered.",
+                exception,
+            )
+            return None
+        AiBedrockCompletions._FROZENSET_CONVERSE_PARAMS = frozenset_params
+        # Normal return with the accepted Converse parameters.
+        return frozenset_params
+
     def _normalize_messages(
         self,
         messages: list[dict[str, Any]] | None,
