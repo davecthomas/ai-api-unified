@@ -4,6 +4,30 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.25.1
+
+- The google-gemini engine now accepts the `{role, content}` messages shape
+  that `AIBaseCompletions` documents and calls provider-neutral. It previously
+  forwarded the caller's list straight to google-genai, which requires
+  `{role, parts: [...]}`, so the call died on a pydantic `ValidationError`
+  inside the caller's process before reaching the network. Cross-provider
+  fallback could not work: the same caller code could drive Claude but not
+  Gemini.
+- The translation lives in a new `_normalize_messages` hook on
+  `AIBaseCompletions`, which returns the caller's list unchanged. Every
+  conversation and structured-output surface routes through it —
+  `send_conversation`, `asend_conversation`, `send_structured_output`, and
+  `asend_structured_output` — so an engine whose wire shape differs overrides
+  one method and all four surfaces follow. Engines whose shape is already
+  `{role, content}` keep the default and are unaffected.
+- Gemini's override maps `content` to `parts` and renames the `assistant` role
+  to `model`. Entries already carrying `parts` pass through untouched, so a
+  history mixing caller-written messages with `extend_messages_with_turn` and
+  `build_tool_result_message` output stays valid. A message whose content is
+  neither a string nor Gemini-shaped raises a `ValueError` naming both helpers
+  rather than guessing at another engine's `raw_content` blocks.
+- `asend_prompt` and `send_prompt` take a string and were never affected.
+
 ## 2.25.0
 
 - `list_model_names` on the google-gemini completions engine now checks the

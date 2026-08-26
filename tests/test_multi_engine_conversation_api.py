@@ -13,6 +13,7 @@ attribute with Mock objects mimicking that SDK's object graph.
 import json
 import os
 import time
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -511,6 +512,130 @@ class TestGeminiConversation:
         assert client.capabilities.supports_tool_use is True
         assert client.capabilities.supports_structured_output is True
         assert client.capabilities.supports_async is True
+
+
+class TestInterfaceMessageShape:
+    """The {role, content} shape ai_base documents reaches every surface."""
+
+    DOCUMENTED: list[dict[str, Any]] = [{"role": "user", "content": "Ready?"}]
+
+    def test_documented_shape_reaches_gemini_as_parts(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("Yes")]
+        )
+        client.send_conversation("sys", list(self.DOCUMENTED))
+        contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+        assert contents == [{"role": "user", "parts": [{"text": "Ready?"}]}]
+
+    def test_assistant_role_becomes_model(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("ok")]
+        )
+        client.send_conversation(
+            "sys",
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+        )
+        contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+        assert [c["role"] for c in contents] == ["user", "model"]
+        assert contents[1]["parts"] == [{"text": "hello"}]
+
+    def test_gemini_shaped_entries_pass_through(self):
+        """A replayed turn and a tool result must survive untranslated."""
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("ok")]
+        )
+        replayed = {"role": "model", "parts": [{"text": "prior turn"}]}
+        messages = [{"role": "user", "content": "hi"}, dict(replayed)]
+        client.send_conversation("sys", messages)
+        contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+        assert contents[0] == {"role": "user", "parts": [{"text": "hi"}]}
+        assert contents[1] == replayed
+
+    def test_mixed_history_from_extend_messages_with_turn(self):
+        """The two-shape history the interface produces is accepted."""
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_function_call_part("get_weather", {"city": "NYC"})]
+        )
+        messages: list[dict[str, Any]] = [{"role": "user", "content": "Weather?"}]
+        turn = client.send_conversation("sys", messages, tools=[WEATHER_TOOL])
+        client.extend_messages_with_turn(messages, turn)
+        messages.append(
+            client.build_tool_result_message(
+                tool_call_id="get_weather", result={"temp_f": 55}, is_error=False
+            )
+        )
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("55F")]
+        )
+        client.send_conversation("sys", messages, tools=[WEATHER_TOOL])
+        contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+        assert contents[0] == {"role": "user", "parts": [{"text": "Weather?"}]}
+        assert all("parts" in entry for entry in contents)
+
+    def test_structured_output_accepts_documented_shape(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part(json.dumps({"nodes": []}))]
+        )
+        result = client.send_structured_output(
+            messages=list(self.DOCUMENTED), response_schema=GRAPH_SCHEMA
+        )
+        assert result.data == {"nodes": []}
+        contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+        assert contents[0] == {"role": "user", "parts": [{"text": "Ready?"}]}
+
+    @pytest.mark.asyncio
+    async def test_async_conversation_accepts_documented_shape(self):
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(
+            return_value=_gemini_response([_gemini_text_part("Yes")])
+        )
+        client = _build_gemini_client(mock_client)
+        await client.asend_conversation("sys", list(self.DOCUMENTED))
+        contents = mock_client.aio.models.generate_content.call_args.kwargs["contents"]
+        assert contents == [{"role": "user", "parts": [{"text": "Ready?"}]}]
+
+    @pytest.mark.asyncio
+    async def test_async_structured_output_accepts_documented_shape(self):
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(
+            return_value=_gemini_response(
+                [_gemini_text_part(json.dumps({"nodes": []}))]
+            )
+        )
+        client = _build_gemini_client(mock_client)
+        result = await client.asend_structured_output(
+            messages=list(self.DOCUMENTED), response_schema=GRAPH_SCHEMA
+        )
+        assert result.data == {"nodes": []}
+        contents = mock_client.aio.models.generate_content.call_args.kwargs["contents"]
+        assert contents[0] == {"role": "user", "parts": [{"text": "Ready?"}]}
+
+    def test_untranslatable_content_names_the_helpers(self):
+        """Another engine's raw_content blocks cannot be guessed at."""
+        client = _build_gemini_client(Mock())
+        with pytest.raises(ValueError, match="extend_messages_with_turn"):
+            client.send_conversation(
+                "sys", [{"role": "assistant", "content": [{"type": "text"}]}]
+            )
+
+    def test_base_default_leaves_messages_untouched(self):
+        """Engines whose wire shape is already {role, content} are unaffected."""
+        client = _build_openai_client()
+        assert client._normalize_messages(self.DOCUMENTED) is self.DOCUMENTED
+        assert client._normalize_messages(None) is None
 
 
 def _gemini_catalogue_model(name: str, actions: list[str] | None) -> Mock:
