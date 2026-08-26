@@ -4,6 +4,21 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.25.0
+
+- `list_model_names` on the google-gemini completions engine now verifies the
+  static model catalogue against the provider's live `models.list` before
+  answering. The catalogue differs per auth path (Gemini API vs Vertex),
+  project, and region, so the hardcoded `GEMINI_MODEL_SPECS` list could name
+  models the current credentials cannot call. Observed live: the Gemini API
+  no longer lists the 2.0-family spec entries, and a Vertex project answered
+  404 for a spec entry the static list presented as callable. The property
+  now returns the spec entries the live catalogue serves for
+  `generateContent`, in spec order; entries publishing no `supported_actions`
+  are kept. When the listing call fails (offline, restricted credentials,
+  mocked SDK) or shares no names with the specs, the property returns the
+  full static list unchanged.
+
 ## 2.24.0
 
 - Prompt-cache **writes** are now priced and billed. Priming a cache costs more

@@ -88,6 +88,7 @@ MAX_JITTER: float = 1.0
 RETRY_STATUS_CODES: set[int] = {429, 500, 502, 503, 504}
 STRUCTURED_DEFAULT_TEMPERATURE: float = 0.1
 STRUCTURED_DEFAULT_TOP_P: float = 0.8
+GENERATE_CONTENT_ACTION: str = "generateContent"
 
 # Model specifications based on https://ai.google.dev/gemini-api/docs/models#model-variations
 # Pricing source: Vertex AI Generative AI pricing tables (online, <=200K input tokens tier).
@@ -223,8 +224,65 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
 
     @property
     def list_model_names(self) -> list[str]:
-        """Return list of supported completion model names."""
-        return list(GEMINI_MODEL_SPECS.keys())
+        """
+        Returns completion model names, verified against the live catalogue.
+
+        The provider's catalogue differs per auth path (Gemini API vs
+        Vertex), project, and region, so the static GEMINI_MODEL_SPECS list
+        can name models the current credentials cannot invoke. When the live
+        query succeeds, only spec entries the catalogue serves for
+        generateContent are returned, in spec order. When it fails (offline,
+        mocked SDK, restricted credentials) or shares no names with the
+        specs, the static spec list is returned unchanged.
+        """
+        set_live_names: set[str] | None = self._list_generate_content_model_names()
+        if set_live_names is None:
+            # Early return with the static list because the live query failed.
+            return list(GEMINI_MODEL_SPECS.keys())
+        list_names: list[str] = [
+            str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_live_names
+        ]
+        if not list_names:
+            # Early return with the static list; an empty intersection means
+            # the catalogue's naming scheme did not match, not zero models.
+            return list(GEMINI_MODEL_SPECS.keys())
+        # Normal return with the live-verified spec entries.
+        return list_names
+
+    def _list_generate_content_model_names(self) -> set[str] | None:
+        """
+        Queries the provider catalogue for generateContent-capable models.
+
+        Returns:
+            Bare model names (resource prefix stripped) whose
+            supported_actions include generateContent — entries publishing no
+            supported_actions are kept rather than guessed absent. None when
+            the listing call fails, so callers can fall back to the static
+            spec list.
+        """
+        try:
+            set_names: set[str] = set()
+            # The for loop pages through the catalogue automatically.
+            for model_metadata in self.client.models.list():
+                str_name: str = str(getattr(model_metadata, "name", "") or "")
+                if not str_name:
+                    continue
+                list_actions: list[str] = list(
+                    getattr(model_metadata, "supported_actions", None) or []
+                )
+                if list_actions and GENERATE_CONTENT_ACTION not in list_actions:
+                    continue
+                set_names.add(str_name.rsplit("/", 1)[-1])
+        except Exception as list_error:
+            _LOGGER.warning(
+                "Live Gemini model listing failed; falling back to the "
+                "static spec list: %s",
+                list_error,
+            )
+            # Early return with None so the caller uses the static list.
+            return None
+        # Normal return with the catalogue's generateContent-capable names.
+        return set_names
 
     @property
     def capabilities(self) -> AICompletionsCapabilitiesGoogle:

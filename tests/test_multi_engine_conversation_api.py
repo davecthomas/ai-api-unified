@@ -1,7 +1,8 @@
 # test_multi_engine_conversation_api.py
 """
-Mocked tests for the conversation, structured-output, async, and retry
-features on the openai, openai-responses, google-gemini, and bedrock engines
+Mocked tests for the conversation, structured-output, async, retry, and
+model-listing features on the openai, openai-responses, google-gemini, and
+bedrock engines
 (claude engine coverage lives in test_completions_conversation_api.py).
 
 Transport faking follows each engine's established repo pattern: construct
@@ -507,6 +508,65 @@ class TestGeminiConversation:
         assert client.capabilities.supports_tool_use is True
         assert client.capabilities.supports_structured_output is True
         assert client.capabilities.supports_async is True
+
+
+def _gemini_catalogue_model(name: str, actions: list[str] | None) -> Mock:
+    model_metadata = Mock(spec=["name", "supported_actions"])
+    model_metadata.name = name
+    model_metadata.supported_actions = actions
+    return model_metadata
+
+
+class TestGeminiModelListing:
+    def test_live_listing_intersects_specs_in_spec_order(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+            _gemini_catalogue_model(
+                "publishers/google/models/gemini-2.5-pro", ["generateContent"]
+            ),
+            _gemini_catalogue_model("models/gemini-3.5-flash", ["generateContent"]),
+            _gemini_catalogue_model("models/gemini-embedding-001", ["embedContent"]),
+            _gemini_catalogue_model("models/gemini-9.9-unknown", ["generateContent"]),
+        ]
+        list_names = client.list_model_names
+        # Spec order preserved; embedContent-only and non-spec names dropped;
+        # spec entries absent from the catalogue (the 2.0 family) dropped.
+        assert list_names == ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"]
+
+    def test_catalogue_entry_without_actions_is_kept(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", None),
+        ]
+        assert client.list_model_names == ["gemini-2.5-flash"]
+
+    def test_listing_failure_falls_back_to_static_specs(self, caplog):
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GEMINI_MODEL_SPECS,
+        )
+
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.side_effect = RuntimeError("no network")
+        with caplog.at_level("WARNING"):
+            list_names = client.list_model_names
+        assert list_names == list(GEMINI_MODEL_SPECS.keys())
+        assert "falling back" in caplog.text
+
+    def test_empty_intersection_falls_back_to_static_specs(self):
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GEMINI_MODEL_SPECS,
+        )
+
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/some-unrelated-model", ["generateContent"]),
+        ]
+        assert client.list_model_names == list(GEMINI_MODEL_SPECS.keys())
 
 
 # ── Bedrock engine ──────────────────────────────────────────────────────────
