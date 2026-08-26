@@ -23,9 +23,10 @@ version lives in `pyproject.toml` (see the README release section).
 - Gemini's override maps `content` to `parts` and renames the `assistant` role
   to `model`. Entries already carrying `parts` pass through untouched, so a
   history mixing caller-written messages with `extend_messages_with_turn` and
-  `build_tool_result_message` output stays valid. A message whose content is
-  neither a string nor Gemini-shaped raises a `ValueError` naming both helpers
-  rather than guessing at another engine's `raw_content` blocks.
+  `build_tool_result_message` output stays valid. Everything else raises a
+  `ValueError` naming both helpers: an entry with neither string `content` nor
+  `parts` belongs to another engine, and forwarding it would reach google-genai
+  and raise the same in-process `ValidationError` this fix exists to prevent.
 - `asend_prompt` and `send_prompt` take a string and were never affected.
 
 ## 2.25.0

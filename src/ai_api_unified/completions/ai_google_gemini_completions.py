@@ -1233,11 +1233,17 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         list_normalized: list[dict[str, Any]] = []
         # Loop over messages so each interface-shaped entry maps to parts.
         for dict_message in messages:
-            if "parts" in dict_message or "content" not in dict_message:
+            if "parts" in dict_message:
+                # Already Gemini-shaped: extend_messages_with_turn and
+                # build_tool_result_message output passes through untouched.
                 list_normalized.append(dict_message)
                 continue
-            content: Any = dict_message["content"]
+            content: Any = dict_message.get("content")
             if not isinstance(content, str):
+                # An entry with neither string content nor parts is another
+                # engine's shape. Forwarding it reaches google-genai and
+                # raises the same in-process ValidationError this method
+                # exists to prevent, so name the helpers instead of guessing.
                 raise ValueError(
                     "google-gemini messages must carry string content or "
                     "Gemini-shaped parts; got content of type "

@@ -2862,6 +2862,13 @@ class AIBaseCompletions(AIBase):
         surface through one hook keeps the documented contract true on all of
         them rather than on whichever ones a given engine happened to cover.
 
+        This deliberately does not live in _validate_conversation_request.
+        That method is called only from send_conversation and
+        asend_conversation and returns the tool list, so translating there
+        would leave send_structured_output and asend_structured_output on the
+        broken path and would need a signature change to carry messages back
+        out. Do not move it there.
+
         Args:
             messages: Caller-managed history, or None where the surface
                 accepts a bare prompt instead.

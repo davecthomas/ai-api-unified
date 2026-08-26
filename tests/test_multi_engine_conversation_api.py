@@ -554,11 +554,30 @@ class TestInterfaceMessageShape:
             [_gemini_text_part("ok")]
         )
         replayed = {"role": "model", "parts": [{"text": "prior turn"}]}
-        messages = [{"role": "user", "content": "hi"}, dict(replayed)]
+        tool_result = client.build_tool_result_message(
+            tool_call_id="get_weather", result={"temp_f": 55}, is_error=False
+        )
+        messages = [
+            {"role": "user", "content": "hi"},
+            dict(replayed),
+            tool_result,
+        ]
         client.send_conversation("sys", messages)
         contents = mock_client.models.generate_content.call_args.kwargs["contents"]
         assert contents[0] == {"role": "user", "parts": [{"text": "hi"}]}
         assert contents[1] == replayed
+        # The helper's own object reaches the SDK, not a re-wrapped copy.
+        assert contents[2] is tool_result
+
+    def test_foreign_engine_helper_item_does_not_pass_through(self):
+        """An entry with neither content nor parts is another engine's shape."""
+        client = _build_gemini_client(Mock())
+        # openai-responses helper output: no "content", no "parts".
+        with pytest.raises(ValueError, match="build_tool_result_message"):
+            client.send_conversation(
+                "sys",
+                [{"type": "function_call_output", "call_id": "c1", "output": "55"}],
+            )
 
     def test_mixed_history_from_extend_messages_with_turn(self):
         """The two-shape history the interface produces is accepted."""
@@ -581,7 +600,10 @@ class TestInterfaceMessageShape:
         client.send_conversation("sys", messages, tools=[WEATHER_TOOL])
         contents = mock_client.models.generate_content.call_args.kwargs["contents"]
         assert contents[0] == {"role": "user", "parts": [{"text": "Weather?"}]}
-        assert all("parts" in entry for entry in contents)
+        # Both helper outputs arrive untouched, not re-wrapped as text parts.
+        assert contents[1] is messages[1]
+        assert contents[2] is messages[2]
+        assert len(contents) == 3
 
     def test_structured_output_accepts_documented_shape(self):
         mock_client = Mock()
