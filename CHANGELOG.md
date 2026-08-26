@@ -47,14 +47,21 @@ version lives in `pyproject.toml` (see the README release section).
   matters most for the static list, which is what callers are served when the
   live catalogue cannot be reached — a dead entry there would be advertised
   as callable on the one path that cannot check it.
-- Constructing a client on a retired model now raises
-  `AiProviderConfigurationError` naming the replacement, where before it
-  warned and then quietly fell back to the default model. A pinned
-  `COMPLETIONS_MODEL_NAME=gemini-2.0-flash` therefore fails at construction
-  with a clear message rather than billing a different model than the one
-  requested. No deprecated completions model remains catalogued, so the
-  client-level deprecation test now covers the retired branch and the
-  deprecated branch stays covered at the registry level.
+- Constructing a client on a retired model now fails instead of warning and
+  quietly falling back to the default model, so a pinned
+  `COMPLETIONS_MODEL_NAME=gemini-2.0-flash` stops billing a different model
+  than the one requested. Constructing the class directly raises
+  `AiProviderConfigurationError` naming the replacement
+  (`Model 'gemini-2.0-flash' (google) is retired; withdrawn on 2026-06-01;
+  use 'gemini-2.5-flash' instead.`). Going through
+  `AIFactory.get_ai_completions_client`, that message is currently replaced
+  with `Unsupported COMPLETIONS engine`, which is a pre-existing masking bug
+  in `_translate_config_exception` that also hid the 1.5 retirements; it is
+  tracked separately and not changed here, since it affects every engine and
+  capability. The call still fails fast either way.
+- No deprecated completions model remains catalogued, so the client-level
+  lifecycle test now covers the retired branch, and the deprecated branch
+  stays covered at the registry level in `test_model_pricing.py`.
 - `AIGoogleBase.list_models` gains optional `required_action`,
   `bool_strip_resource_prefix`, and `bool_propagate_errors` parameters, so the
   completions engine reuses that pager instead of carrying a second copy.
