@@ -321,10 +321,17 @@ class TestGoogleGeminiModules:
                     mock_models = Mock()
                     mock_client.models = mock_models
                     mock_models.get.return_value = None
+                    # A real catalogue, so list_model_names exercises the live
+                    # path here rather than passing through its error fallback.
+                    catalogue_entry = Mock(spec=["name", "supported_actions"])
+                    catalogue_entry.name = "models/gemini-2.5-flash"
+                    catalogue_entry.supported_actions = ["generateContent"]
+                    mock_models.list.return_value = [catalogue_entry]
                     mock_genai.Client.return_value = mock_client
                     mock_genai.types = Mock()
 
                     from ai_api_unified.completions.ai_google_gemini_completions import (
+                        GEMINI_MODEL_SPECS,
                         GoogleGeminiCompletions,
                     )
 
@@ -333,6 +340,9 @@ class TestGoogleGeminiModules:
                     assert client.model_name == "gemini-2.5-flash"
                     assert isinstance(client.list_model_names, list)
                     assert "gemini-2.5-flash" in client.list_model_names
+                    # Live path: a spec entry the catalogue omits is dropped.
+                    assert "gemini-3.6-flash" in GEMINI_MODEL_SPECS
+                    assert "gemini-3.6-flash" not in client.list_model_names
                     assert client.max_context_tokens > 0
                     assert client.price_per_1k_tokens > 0
 
@@ -345,13 +355,19 @@ class TestGoogleGeminiModules:
                     assert hasattr(client, "send_prompt")
                     assert hasattr(client, "strict_schema_prompt")
 
-    def test_gemini_completions_deprecated_model_warns_and_proceeds(self):
-        """A deprecated model warns at construction but still builds a client.
+    def test_gemini_completions_retired_model_raises(self):
+        """A retired model fails fast at construction instead of building.
 
-        This is the client-level half of the lifecycle policy: deprecated
-        warns and continues, retired raises. It lives here because Google is
-        the only provider with a deprecated completions model catalogued.
+        This is the client-level half of the lifecycle policy: retired
+        raises, deprecated warns and continues. It covers the retired half
+        because no deprecated completions model remains catalogued — the
+        Gemini 2.0 family, which used to be the only one, is retired as of
+        2026-08. The deprecated half stays covered at the registry level in
+        test_model_pricing.py.
         """
+        from ai_api_unified.ai_provider_exceptions import (
+            AiProviderConfigurationError,
+        )
         from ai_api_unified.pricing import pricing_registry
         from ai_api_unified.pricing.pricing_registry import PROVIDER_GOOGLE
 
@@ -381,11 +397,12 @@ class TestGoogleGeminiModules:
                         GoogleGeminiCompletions,
                     )
 
-                    with pytest.warns(DeprecationWarning, match="gemini-2.5-flash"):
-                        client = GoogleGeminiCompletions(model="gemini-2.0-flash")
-
-                    # Warned rather than raised, and the client is usable.
-                    assert client.model_name == "gemini-2.0-flash"
+                    # Raised rather than silently swapping in a live model,
+                    # and the error names the replacement.
+                    with pytest.raises(
+                        AiProviderConfigurationError, match="gemini-2.5-flash"
+                    ):
+                        GoogleGeminiCompletions(model="gemini-2.0-flash")
 
     def test_gemini_embeddings_basic_functionality(self):
         """Test basic Google Gemini embeddings functionality with mocking."""

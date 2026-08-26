@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from collections.abc import Iterator
 from typing import Any, Type
 
@@ -88,14 +89,23 @@ MAX_JITTER: float = 1.0
 RETRY_STATUS_CODES: set[int] = {429, 500, 502, 503, 504}
 STRUCTURED_DEFAULT_TEMPERATURE: float = 0.1
 STRUCTURED_DEFAULT_TOP_P: float = 0.8
+GENERATE_CONTENT_ACTION: str = "generateContent"
+# Catalogue queries block a metadata call that has an instant static
+# fallback, so one retry absorbs a rate-limit blip without the multi-second
+# sleep the completions budget would spend.
+LIST_MODELS_MAX_RETRIES: int = 1
+# How long a resolved model list stays good. The failure window is short so a
+# recovered provider is picked up quickly, and non-zero so a provider that
+# cannot answer at all costs one round trip per window rather than one per
+# call.
+LIST_MODELS_CACHE_TTL_SECONDS: float = 900.0
+LIST_MODELS_FAILURE_TTL_SECONDS: float = 60.0
 
 # Model specifications based on https://ai.google.dev/gemini-api/docs/models#model-variations
 # Pricing source: Vertex AI Generative AI pricing tables (online, <=200K input tokens tier).
 #  - Gemini 2.5 Pro: $1.25 / 1M input tokens  → 0.00125 / 1k
 #  - Gemini 2.5 Flash: $0.30 / 1M input tokens → 0.00030 / 1k
 #  - Gemini 2.5 Flash-Lite: $0.10 / 1M input tokens → 0.00010 / 1k
-#  - Gemini 2.0 Flash: $0.15 / 1M input tokens → 0.00015 / 1k
-#  - Gemini 2.0 Flash-Lite: $0.075 / 1M input tokens → 0.000075 / 1k
 # Context window and status only. Pricing now lives in the pricing registry
 # (single source of truth); lifecycle (deprecated/retired) is enforced there.
 GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
@@ -117,17 +127,14 @@ GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
         "max_context_tokens": 1_048_576,
         "status": "Stable",
     },
-    # Deprecated (still functional; the registry warns and names a replacement).
-    "gemini-2.0-flash-lite": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
-    "gemini-2.0-flash": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
-    "gemini-2.0-flash-001": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
-    "gemini-2.0-flash-lite-001": {
-        "max_context_tokens": 1_048_576,
-        "status": "Deprecated",
-    },
-    # gemini-1.5-pro-002 and gemini-1.5-flash-002 were removed: both are retired
-    # by Google (requests return 404). The pricing registry keeps RETIRED
-    # lifecycle entries so a request for them fails fast with a clear error.
+    # The 2.0 family and gemini-1.5-*-002 were removed: all are retired by
+    # Google. models.list stopped naming the 2.0 models and generateContent
+    # answers 404 for each (probed 2026-08-26), matching the 1.5 pair. This
+    # list is also the fallback served when the live catalogue cannot be
+    # reached, so a dead entry here would be advertised as callable on
+    # exactly the degraded path that cannot check it. The pricing registry
+    # keeps RETIRED lifecycle entries so a request for them fails fast with a
+    # clear error naming the replacement.
 }
 
 
@@ -223,8 +230,141 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
 
     @property
     def list_model_names(self) -> list[str]:
-        """Return list of supported completion model names."""
-        return list(GEMINI_MODEL_SPECS.keys())
+        """
+        Returns completion model names, checked against the live catalogue.
+
+        The provider's catalogue differs per auth path (Gemini API vs
+        Vertex), project, and region, so the static GEMINI_MODEL_SPECS list
+        can name models the current credentials cannot invoke. A successful
+        query returns the spec entries the catalogue lists, in spec order,
+        plus the configured model, so model_name always appears here.
+
+        How much the query verifies depends on the auth path. The Gemini API
+        publishes supported_actions, so entries that cannot generateContent
+        are dropped. Vertex publishes none — the SDK's Vertex converter does
+        not map the field — and its publisher catalogue is not scoped to
+        GOOGLE_LOCATION, so there this is a name-presence check: a model
+        listed globally but not served in the configured region still passes
+        and can still answer 404 on generateContent.
+
+        Unlike the other engines, whose lists are static literals, reading
+        this property can make a blocking network call and can sleep on a
+        transient error (bounded by LIST_MODELS_MAX_RETRIES). Both outcomes
+        are cached per client instance and keyed on the configured model, so
+        the cost is one round trip per TTL window rather than one per read.
+        Call it off the event loop, as the HTTP service does. When the query
+        fails (offline, restricted credentials, mocked SDK) the static spec
+        list is returned and that outcome is cached for the shorter failure
+        window. A query that answers but names none of the spec entries also
+        falls back to the static list, and is cached for the full window,
+        because a naming mismatch is stable rather than transient.
+        """
+        tuple_cache: tuple[str, float, list[str] | None] | None = getattr(
+            self, "_list_model_names_cache", None
+        )
+        if tuple_cache is not None:
+            str_cached_model, float_expires_at, list_cached = tuple_cache
+            if (
+                str_cached_model == self.completions_model
+                and time.monotonic() < float_expires_at
+            ):
+                # Early return with the unexpired cached outcome; None means
+                # the live query could not answer, so the static list stands.
+                return list(GEMINI_MODEL_SPECS if list_cached is None else list_cached)
+        list_resolved, float_ttl_seconds = self._resolve_live_model_names()
+        self._list_model_names_cache = (
+            self.completions_model,
+            time.monotonic() + float_ttl_seconds,
+            list_resolved,
+        )
+        # Normal return with the live-checked entries, or the static list when
+        # the catalogue could not answer.
+        return list(GEMINI_MODEL_SPECS if list_resolved is None else list_resolved)
+
+    def _resolve_live_model_names(self) -> tuple[list[str] | None, float]:
+        """
+        Resolves the live-checked model list for one cache fill.
+
+        Returns:
+            Tuple of the resolved list and the seconds it stays good. The
+            list is None when the catalogue could not answer, so the caller
+            serves the static spec list. A failed call is transient and gets
+            the short window; a catalogue that answered but named none of the
+            spec entries is a stable mismatch, so it gets the full window
+            rather than re-querying every minute for the life of the process.
+        """
+        set_live_names: set[str] | None = self._list_catalogue_model_names()
+        if set_live_names is None:
+            # Early return because the live query failed and already logged.
+            return None, LIST_MODELS_FAILURE_TTL_SECONDS
+        list_verified: list[str] = [
+            str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_live_names
+        ]
+        if not list_verified:
+            _LOGGER.warning(
+                "The live Gemini catalogue named none of the %d known models; "
+                "falling back to the static spec list.",
+                len(GEMINI_MODEL_SPECS),
+            )
+            # Early return: sharing no names reads as a catalogue whose naming
+            # scheme did not match, not as zero callable models.
+            return None, LIST_MODELS_CACHE_TTL_SECONDS
+        # The configured model is always listed. The engine sends requests
+        # against it, so omitting it would contradict this engine's own
+        # model_name. The append covers a model outside the spec dict, which
+        # __init__ rewrites today; leaning on that distant guard would leave
+        # this promise true only by accident.
+        set_listable: set[str] = set(set_live_names) | {self.completions_model}
+        list_names: list[str] = [
+            str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_listable
+        ]
+        if self.completions_model not in list_names:
+            list_names.append(self.completions_model)
+        # Normal return with the live-checked spec entries.
+        return list_names, LIST_MODELS_CACHE_TTL_SECONDS
+
+    def _list_catalogue_model_names(self) -> set[str] | None:
+        """
+        Queries the provider catalogue for models it serves for generation.
+
+        Transient listing failures retry on LIST_MODELS_MAX_RETRIES, since a
+        single rate-limit blip would otherwise downgrade the caller to the
+        static list without any signal in the return value.
+
+        Returns:
+            Bare model names (resource prefix stripped) the catalogue serves,
+            filtered by generateContent where the auth path publishes
+            supported_actions. None when the listing call fails, so the
+            caller can fall back to the static spec list.
+        """
+        int_max_retries: int | None = self._effective_max_retries()
+        if int_max_retries is None:
+            int_max_retries = LIST_MODELS_MAX_RETRIES
+
+        def _query_catalogue() -> list[str]:
+            # Normal return with the catalogue names this engine can serve.
+            return self.list_models(
+                self.client,
+                required_action=GENERATE_CONTENT_ACTION,
+                bool_strip_resource_prefix=True,
+                bool_propagate_errors=True,
+            )
+
+        try:
+            list_names: list[str] = self._retry_with_exponential_backoff(
+                _query_catalogue,
+                max_retries=int_max_retries,
+            )
+        except Exception as list_error:
+            _LOGGER.warning(
+                "Live Gemini model listing failed; falling back to the "
+                "static spec list: %s",
+                list_error,
+            )
+            # Early return with None so the caller uses the static list.
+            return None
+        # Normal return with the catalogue names.
+        return set(list_names)
 
     @property
     def capabilities(self) -> AICompletionsCapabilitiesGoogle:

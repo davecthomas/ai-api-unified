@@ -4,6 +4,72 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.25.0
+
+- `list_model_names` on the google-gemini completions engine now checks the
+  static model catalogue against the provider's live `models.list` before
+  answering. The catalogue differs per auth path (Gemini API vs Vertex),
+  project, and region, so the hardcoded `GEMINI_MODEL_SPECS` list could name
+  models the current credentials cannot call. Observed live: the Gemini API
+  no longer lists the 2.0-family spec entries, and a Vertex project answered
+  404 for a spec entry the static list presented as callable.
+- How much that check verifies depends on the auth path, and the docstring
+  now says so. The Gemini API publishes `supported_actions`, so entries that
+  cannot `generateContent` are dropped. Vertex publishes none — the SDK's
+  Vertex converter does not map the field — and its publisher catalogue is
+  not scoped to `GOOGLE_LOCATION`, so there this is a name-presence check and
+  a globally-listed model can still answer 404 in the configured region.
+- The configured model is always listed, so `model_name` never goes missing
+  from its own engine's list: the engine sends every request against
+  `model_name`, so a list that omitted it would contradict the engine's own
+  configuration.
+- **Reading `list_model_names` on this engine can now make a blocking network
+  call**, where every other engine returns a static literal. Callers should
+  read it off the event loop, as the HTTP service already does. Both outcomes
+  are cached per client instance and keyed on the configured model, so the
+  cost is one round trip per TTL window (15 minutes on success, 1 minute
+  after a failure) rather than one per read. A listing that succeeds but
+  names none of the spec entries is a stable mismatch rather than a transient
+  fault, so it takes the full window instead of re-querying every minute. A
+  transient failure retries once, which absorbs a rate-limit blip without the
+  multi-second sleep the completions retry budget would spend on a call that
+  has an instant static fallback.
+- When the listing call fails (offline, restricted credentials, mocked SDK),
+  the property returns the full static list unchanged and logs the reason.
+  That outcome is cached only for the short failure window, so a recovered
+  provider is picked up quickly while a provider that cannot answer at all
+  stops costing a round trip per read. A listing that succeeds but names none
+  of the spec entries also serves the static list, under the full window as
+  described above.
+- **The Gemini 2.0 family is retired**: `gemini-2.0-flash`,
+  `gemini-2.0-flash-001`, `gemini-2.0-flash-lite`, and
+  `gemini-2.0-flash-lite-001` are removed from `GEMINI_MODEL_SPECS` and move
+  from DEPRECATED to RETIRED in the pricing registry. Probed 2026-08-26:
+  `models.list` no longer names any of them and `generateContent` answers 404
+  for each, so their scheduled 2026-06-01 sunset has passed in fact. This
+  matters most for the static list, which is what callers are served when the
+  live catalogue cannot be reached — a dead entry there would be advertised
+  as callable on the one path that cannot check it.
+- Constructing a client on a retired model now fails instead of warning and
+  quietly falling back to the default model, so a pinned
+  `COMPLETIONS_MODEL_NAME=gemini-2.0-flash` stops billing a different model
+  than the one requested. Constructing the class directly raises
+  `AiProviderConfigurationError` naming the replacement
+  (`Model 'gemini-2.0-flash' (google) is retired; withdrawn on 2026-06-01;
+  use 'gemini-2.5-flash' instead.`). Going through
+  `AIFactory.get_ai_completions_client`, that message is currently replaced
+  with `Unsupported COMPLETIONS engine`, which is a pre-existing masking bug
+  in `_translate_config_exception` that also hid the 1.5 retirements; it is
+  tracked separately and not changed here, since it affects every engine and
+  capability. The call still fails fast either way.
+- No deprecated completions model remains catalogued, so the client-level
+  lifecycle test now covers the retired branch, and the deprecated branch
+  stays covered at the registry level in `test_model_pricing.py`.
+- `AIGoogleBase.list_models` gains optional `required_action`,
+  `bool_strip_resource_prefix`, and `bool_propagate_errors` parameters, so the
+  completions engine reuses that pager instead of carrying a second copy.
+  Default behavior is unchanged for existing callers.
+
 ## 2.24.0
 
 - Prompt-cache **writes** are now priced and billed. Priming a cache costs more

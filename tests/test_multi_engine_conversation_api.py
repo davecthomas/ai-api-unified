@@ -1,7 +1,8 @@
 # test_multi_engine_conversation_api.py
 """
-Mocked tests for the conversation, structured-output, async, and retry
-features on the openai, openai-responses, google-gemini, and bedrock engines
+Mocked tests for the conversation, structured-output, async, retry, and
+model-listing features on the openai, openai-responses, google-gemini, and
+bedrock engines
 (claude engine coverage lives in test_completions_conversation_api.py).
 
 Transport faking follows each engine's established repo pattern: construct
@@ -11,6 +12,7 @@ attribute with Mock objects mimicking that SDK's object graph.
 
 import json
 import os
+import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -379,6 +381,8 @@ class TestResponsesConversation:
 genai_module = pytest.importorskip("google.genai")
 
 from ai_api_unified.completions.ai_google_gemini_completions import (  # noqa: E402
+    LIST_MODELS_CACHE_TTL_SECONDS,
+    LIST_MODELS_FAILURE_TTL_SECONDS,
     GoogleGeminiCompletions,
 )
 
@@ -507,6 +511,166 @@ class TestGeminiConversation:
         assert client.capabilities.supports_tool_use is True
         assert client.capabilities.supports_structured_output is True
         assert client.capabilities.supports_async is True
+
+
+def _gemini_catalogue_model(name: str, actions: list[str] | None) -> Mock:
+    model_metadata = Mock(spec=["name", "supported_actions"])
+    model_metadata.name = name
+    model_metadata.supported_actions = actions
+    return model_metadata
+
+
+class TestGeminiModelListing:
+    def test_live_listing_intersects_specs_in_spec_order(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+            _gemini_catalogue_model(
+                "publishers/google/models/gemini-2.5-pro", ["generateContent"]
+            ),
+            _gemini_catalogue_model("models/gemini-3.5-flash", ["generateContent"]),
+            _gemini_catalogue_model("models/gemini-embedding-001", ["embedContent"]),
+            _gemini_catalogue_model("models/gemini-9.9-unknown", ["generateContent"]),
+        ]
+        list_names = client.list_model_names
+        # Spec order preserved; embedContent-only and non-spec names dropped;
+        # spec entries absent from the catalogue (the 2.0 family) dropped.
+        assert list_names == ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"]
+
+    def test_catalogue_entry_without_actions_is_kept(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", None),
+        ]
+        assert client.list_model_names == ["gemini-2.5-flash"]
+
+    def test_listing_failure_falls_back_to_static_specs(self, caplog):
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GEMINI_MODEL_SPECS,
+        )
+
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.side_effect = RuntimeError("no network")
+        with caplog.at_level("WARNING"):
+            list_names = client.list_model_names
+        assert list_names == list(GEMINI_MODEL_SPECS.keys())
+        assert "falling back" in caplog.text
+
+    def test_empty_intersection_falls_back_to_static_specs(self, caplog):
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GEMINI_MODEL_SPECS,
+        )
+
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/some-unrelated-model", ["generateContent"]),
+        ]
+        with caplog.at_level("WARNING"):
+            list_names = client.list_model_names
+        assert list_names == list(GEMINI_MODEL_SPECS.keys())
+        # Failing open silently would present uncallable models as available.
+        assert "named none of the" in caplog.text
+        # A catalogue that answers but shares no names is a stable naming
+        # mismatch, not a transient fault, so it holds the full window rather
+        # than re-querying every minute for the life of the process.
+        _, float_expires_at, _ = client._list_model_names_cache
+        float_window = float_expires_at - time.monotonic()
+        assert float_window > LIST_MODELS_FAILURE_TTL_SECONDS
+        assert float_window == pytest.approx(LIST_MODELS_CACHE_TTL_SECONDS, abs=5.0)
+
+    def test_successful_listing_is_cached_per_client(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        first = client.list_model_names
+        second = client.list_model_names
+        assert first == second == ["gemini-2.5-flash"]
+        assert mock_client.models.list.call_count == 1
+
+    def test_failed_listing_is_cached_only_for_the_failure_window(self):
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GEMINI_MODEL_SPECS,
+        )
+
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.side_effect = RuntimeError("no network")
+        assert client.list_model_names == list(GEMINI_MODEL_SPECS.keys())
+        # A provider that cannot answer costs one round trip per window, not
+        # one per read.
+        assert client.list_model_names == list(GEMINI_MODEL_SPECS.keys())
+        assert mock_client.models.list.call_count == 1
+
+        # Once the short failure window expires, a recovered provider is used.
+        str_model, _, list_cached = client._list_model_names_cache
+        client._list_model_names_cache = (str_model, 0.0, list_cached)
+        mock_client.models.list.side_effect = None
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        assert client.list_model_names == ["gemini-2.5-flash"]
+
+    def test_expired_success_cache_is_refreshed(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        assert client.list_model_names == ["gemini-2.5-flash"]
+        str_model, _, list_cached = client._list_model_names_cache
+        client._list_model_names_cache = (str_model, 0.0, list_cached)
+        # Google publishes models over time, so a cached list cannot be final.
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+            _gemini_catalogue_model("models/gemini-2.5-pro", ["generateContent"]),
+        ]
+        assert client.list_model_names == ["gemini-2.5-pro", "gemini-2.5-flash"]
+
+    def test_cache_is_keyed_on_the_configured_model(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        assert client.list_model_names == ["gemini-2.5-flash"]
+        # Repointing the client must not serve the previous model's answer.
+        client.completions_model = "gemini-not-in-specs"  # outside the spec dict
+        assert client.list_model_names == ["gemini-2.5-flash", "gemini-not-in-specs"]
+
+    def test_configured_model_is_always_listed(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        # A model outside the spec dict, which __init__ rewrites in practice.
+        # The property must not depend on that distant guard.
+        client.completions_model = "gemini-not-in-specs"
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        list_names = client.list_model_names
+        assert list_names == ["gemini-2.5-flash", "gemini-not-in-specs"]
+        # The engine never omits the model it is configured to call.
+        assert client.model_name in list_names
+
+    def test_listing_goes_through_the_retry_wrapper(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        with patch.object(
+            client,
+            "_retry_with_exponential_backoff",
+            side_effect=lambda operation, **kwargs: operation(),
+        ) as mock_retry:
+            assert client.list_model_names == ["gemini-2.5-flash"]
+        # A transient 429 must not silently downgrade to the static list.
+        assert mock_retry.call_count == 1
 
 
 # ── Bedrock engine ──────────────────────────────────────────────────────────

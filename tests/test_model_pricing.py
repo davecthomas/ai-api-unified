@@ -352,24 +352,30 @@ class TestLifecycle:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            enforce_model_lifecycle("google", "gemini-2.0-flash")
+            enforce_model_lifecycle("google", "imagen-4.0-generate-001")
         dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
         assert len(dep) == 1
-        assert "scheduled for withdrawal on 2026-06-01" in str(dep[0].message)
+        assert "scheduled for withdrawal on 2026-08-17" in str(dep[0].message)
+
+        # The Gemini 2.0 family is retired, so its sunset now reads as history.
+        with pytest.raises(AiProviderConfigurationError) as excinfo:
+            enforce_model_lifecycle("google", "gemini-2.0-flash")
+        assert "withdrawn on 2026-06-01" in str(excinfo.value)
 
     def test_deprecated_model_warns_once(self) -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            enforce_model_lifecycle("google", "gemini-2.0-flash")
-            enforce_model_lifecycle("google", "gemini-2.0-flash")
+            enforce_model_lifecycle("google", "imagen-4.0-generate-001")
+            enforce_model_lifecycle("google", "imagen-4.0-generate-001")
         dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
         assert len(dep) == 1  # deduped per process
-        assert "gemini-2.5-flash" in str(dep[0].message)  # names replacement
+        # names replacement
+        assert "current-generation Gemini image model" in str(dep[0].message)
 
     def test_strict_mode_escalates_deprecated_to_error(self) -> None:
         with patch.dict(os.environ, {"AI_STRICT_DEPRECATIONS": "1"}):
             with pytest.raises(AiProviderConfigurationError, match="deprecated"):
-                enforce_model_lifecycle("google", "gemini-2.0-flash")
+                enforce_model_lifecycle("google", "imagen-4.0-generate-001")
 
 
 class TestClientCostApi:
@@ -403,5 +409,6 @@ class TestClientCostApi:
     def test_info_carries_lifecycle(self) -> None:
         info = get_model_info("google", "gemini-2.0-flash")
         assert info is not None
-        assert info.status is ModelLifecycleStatus.DEPRECATED
+        # Retired 2026-08: delisted by models.list and 404 on generateContent.
+        assert info.status is ModelLifecycleStatus.RETIRED
         assert info.recommended_replacement == "gemini-2.5-flash"
