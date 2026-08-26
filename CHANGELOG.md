@@ -13,10 +13,14 @@ version lives in `pyproject.toml` (see the README release section).
   is the same defect as the Gemini one, on a second engine.
 - `_normalize_messages` on the bedrock engine wraps string content as
   `[{"text": ...}]`. Converse already names the assistant role `assistant`, so
-  only the content wrapping differs. Entries whose content is already a list
-  pass through untouched, keeping a history built from
+  only the content wrapping differs. Content that is already a list of Converse
+  blocks passes through untouched, keeping a history built from
   `extend_messages_with_turn` and `build_tool_result_message` valid, and
-  anything else raises a `ValueError` naming both helpers.
+  anything else raises a `ValueError` naming both helpers. The block test is
+  that every key is a Converse `ContentBlock` member, not that some key is: an
+  Anthropic block is `{"type": "text", "text": ...}`, which carries `text` but
+  is rejected by botocore on the unknown `type` key, so a looser test would
+  forward another engine's history into the failure this fix removes.
 - All five completions engines are now covered by
   `TestDocumentedShapeAcrossProviders`, which sends the documented shape
   through each engine and validates what reaches the SDK against that

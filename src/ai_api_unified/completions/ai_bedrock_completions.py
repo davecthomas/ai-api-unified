@@ -1158,6 +1158,26 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         # Normal return with the caller-facing conversation turn.
         return observed_result.return_value
 
+    # Converse ContentBlock members, per the bedrock-runtime service model. A
+    # list whose entries name none of these is another engine's block format
+    # (Anthropic and OpenAI tag blocks with "type"), which botocore rejects.
+    CONVERSE_CONTENT_BLOCK_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "audio",
+            "cachePoint",
+            "citationsContent",
+            "document",
+            "guardContent",
+            "image",
+            "reasoningContent",
+            "searchResult",
+            "text",
+            "toolResult",
+            "toolUse",
+            "video",
+        }
+    )
+
     def _normalize_messages(
         self,
         messages: list[dict[str, Any]] | None,
@@ -1193,7 +1213,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         # Loop over messages so each interface-shaped entry maps to blocks.
         for dict_message in messages:
             content: Any = dict_message.get("content")
-            if isinstance(content, list):
+            if isinstance(content, list) and self._is_converse_block_list(content):
                 # Already Converse-shaped: helper output passes through.
                 list_normalized.append(dict_message)
                 continue
@@ -1204,7 +1224,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 # to prevent, so name the helpers instead of guessing.
                 raise ValueError(
                     "bedrock messages must carry string content or Converse "
-                    "content blocks; got content of type "
+                    "content blocks ("
+                    + ", ".join(sorted(self.CONVERSE_CONTENT_BLOCK_KEYS))
+                    + "); got "
                     f"{type(content).__name__}. Replay assistant turns via "
                     "extend_messages_with_turn and tool results via "
                     "build_tool_result_message."
@@ -1217,6 +1239,39 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             )
         # Normal return with Converse-shaped messages.
         return list_normalized
+
+    @classmethod
+    def _is_converse_block_list(cls, content: list[Any]) -> bool:
+        """
+        Reports whether every entry is a Converse ContentBlock.
+
+        Anthropic and OpenAI also carry list content, tagged with "type"
+        rather than a Converse block name, so a bare isinstance(list) check
+        would forward their history into the ParamValidationError this engine
+        is avoiding.
+
+        The test is that every key is a Converse member, not that some key is.
+        An Anthropic text block is {"type": "text", "text": ...}, which does
+        carry "text"; botocore rejects it on the unknown "type" key, so an
+        intersection test would still let it through.
+
+        Args:
+            content: The content list from one caller-supplied message.
+
+        Returns:
+            True when the list is non-empty and every entry is a non-empty
+            dict whose keys are all Converse ContentBlock members.
+        """
+        if not content:
+            # Early return: an empty list names no block and Converse rejects it.
+            return False
+        # Normal return: every entry must be wholly Converse-shaped.
+        return all(
+            isinstance(block, dict)
+            and bool(block)
+            and block.keys() <= cls.CONVERSE_CONTENT_BLOCK_KEYS
+            for block in content
+        )
 
     def _build_tool_result_message_provider(
         self,
