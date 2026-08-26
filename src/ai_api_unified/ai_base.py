@@ -3256,8 +3256,65 @@ class AIBaseCompletions(AIBase):
         str_retry_policy: str | None = dict_merge_options.pop(
             self.PROVIDER_OPTION_RETRY_POLICY, None
         )
-        # Normal return with merge options and the reserved retry override.
-        return dict_merge_options, str_retry_policy
+        # Normal return with the filtered merge options and the retry override.
+        return self._filter_known_provider_options(dict_merge_options), str_retry_policy
+
+    def _filter_known_provider_options(
+        self, merge_options: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Drops provider_options keys this engine's SDK does not accept.
+
+        The public docstring promises engines ignore keys they do not
+        understand, which is what makes provider_options usable in a
+        cross-provider fallback: a caller tuned for one engine keeps its
+        options when it fails over. Forwarding an unknown key instead reaches
+        the SDK and fails inside the caller's process, so the escape hatch
+        breaks exactly the callers it exists for.
+
+        Args:
+            merge_options: Caller options with reserved keys already removed.
+
+        Returns:
+            The subset the engine's SDK accepts. Dropped keys are logged at
+            warning level so a silently ignored option is still discoverable.
+        """
+        set_known: frozenset[str] | None = self._known_provider_option_keys()
+        if set_known is None:
+            # Early return: introspection is unavailable (a mocked SDK, or a
+            # version whose metadata moved), so forward unchanged rather than
+            # guess and drop an option the caller needs.
+            return merge_options
+        dict_known: dict[str, Any] = {
+            str_key: value
+            for str_key, value in merge_options.items()
+            if str_key in set_known
+        }
+        list_dropped: list[str] = sorted(set(merge_options) - set(dict_known))
+        if list_dropped:
+            _LOGGER.warning(
+                "Ignoring provider_options key(s) %s: not accepted by the %s "
+                "engine. See the engine's SDK for the options it supports.",
+                ", ".join(repr(str_key) for str_key in list_dropped),
+                type(self).__name__,
+            )
+        # Normal return with only the keys this engine understands.
+        return dict_known
+
+    def _known_provider_option_keys(self) -> frozenset[str] | None:
+        """
+        Reports the provider_options keys this engine's SDK accepts.
+
+        Derived from the SDK rather than hardcoded, so a version that adds an
+        option does not have it dropped here. The base returns None, meaning
+        "unknown", which forwards every key and preserves the behavior of an
+        engine that has not implemented this.
+
+        Returns:
+            Accepted key names, or None when the engine cannot determine them.
+        """
+        # Normal return: the base engine cannot introspect an unknown SDK.
+        return None
 
     async def asend_prompt(
         self,

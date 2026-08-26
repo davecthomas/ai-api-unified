@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
+import inspect
 from typing import Any, ClassVar, Type
 
 from pydantic import ValidationError
@@ -592,6 +593,56 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         dict_request_kwargs.update(dict_merge_options)
         # Normal return with the Responses-shaped conversation request.
         return dict_request_kwargs
+
+    _FROZENSET_OPTION_KEYS: ClassVar[frozenset[str] | None] = None
+
+    def _known_provider_option_keys(self) -> frozenset[str] | None:
+        """
+        Reports the keyword arguments responses.create accepts.
+
+        Provider options are merged into the kwargs handed to that method,
+        which declares no **kwargs, so an unrecognized key raises TypeError
+        inside the caller's process before any request is sent.
+
+        Returns:
+            Accepted parameter names, or None when the signature cannot be
+            read (a mocked SDK in tests).
+        """
+        if AiOpenAIResponsesCompletions._FROZENSET_OPTION_KEYS is not None:
+            # Early return with the resolved set; the signature is stable.
+            return AiOpenAIResponsesCompletions._FROZENSET_OPTION_KEYS
+        try:
+            # Introspect the SDK class rather than self.client: the bound
+            # attribute is a Mock under test and its signature is (*a, **kw),
+            # which would silently disable filtering.
+            from openai.resources.responses import Responses
+
+            unbound: Any = Responses.create
+
+            signature = inspect.signature(unbound)
+        except Exception:
+            # Early return: an SDK whose layout moved cannot be filtered, and
+            # dropping a caller's option on a guess is worse than forwarding.
+            return None
+        set_keys: set[str] = set()
+        # Loop over parameters so only real keyword arguments are kept.
+        for str_name, parameter in signature.parameters.items():
+            if str_name == "self":
+                continue
+            if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+                # Early return: the SDK forwards anything, so drop nothing.
+                return None
+            if parameter.kind in (
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            ):
+                set_keys.add(str_name)
+        if not set_keys:
+            # Early return: an empty signature means introspection failed.
+            return None
+        AiOpenAIResponsesCompletions._FROZENSET_OPTION_KEYS = frozenset(set_keys)
+        # Normal return with the accepted keyword arguments.
+        return AiOpenAIResponsesCompletions._FROZENSET_OPTION_KEYS
 
     def _send_conversation_provider(
         self,

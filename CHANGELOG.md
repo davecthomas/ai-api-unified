@@ -4,6 +4,32 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.26.0
+
+- Every completions engine now honors the `provider_options` contract in
+  `AIBaseCompletions`: "engines ignore keys they do not understand." None of
+  them did. Each forwarded the caller's keys to its SDK, which failed inside
+  the caller's process before any request was sent — Gemini into
+  `GenerateContentConfig`, which forbids extra fields; anthropic, openai, and
+  openai-responses as keyword arguments to a `create()` that declares no
+  `**kwargs`; bedrock into botocore's client-side parameter validator. That
+  broke the cross-provider fallback `provider_options` exists to serve: a
+  caller tuned for one engine could not keep its options when failing over.
+- `_split_provider_options` now filters merge keys through a new
+  `_known_provider_option_keys` hook before returning them. Dropped keys are
+  logged at warning level, so an ignored option stays discoverable.
+- Each engine derives its accepted keys from its SDK rather than a hardcoded
+  list: Gemini from `GenerateContentConfig`'s pydantic fields and their
+  camelCase aliases, anthropic and the two openai engines from the `create()`
+  signature, bedrock from the `bedrock-runtime` Converse input shape. An SDK
+  that adds an option keeps working without an edit here, the lesson of the
+  2.25.2 block-list regression.
+- An engine whose SDK cannot be introspected forwards every key unchanged.
+  Dropping a caller's option on a guess is worse than passing it through.
+- The reserved `retry_policy` key still splits out ahead of the filter.
+- Minor rather than patch: an option a caller passes today is now dropped and
+  logged instead of raising, which is a behavior change on a public argument.
+
 ## 2.25.3
 
 - The bedrock engine now reads the Converse `ContentBlock` members from the

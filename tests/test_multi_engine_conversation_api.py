@@ -1202,6 +1202,114 @@ class TestBedrockMessageShape:
         AiBedrockCompletions._FROZENSET_CONVERSE_BLOCK_KEYS = None
 
 
+def _engine_builders() -> list[tuple[str, Any]]:
+    """Every completions engine, built against a mocked SDK."""
+    from ai_api_unified.completions.ai_anthropic_completions import (
+        AiAnthropicCompletions,
+    )
+
+    def _anthropic():
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            client = AiAnthropicCompletions(model="claude-opus-4-8")
+        client.client = Mock()
+        return client
+
+    return [
+        ("google-gemini", lambda: _build_gemini_client(Mock())),
+        ("bedrock", _build_bedrock_client),
+        ("openai", _build_openai_client),
+        ("openai-responses", _build_responses_client),
+        ("anthropic", _anthropic),
+    ]
+
+
+class TestProviderOptionsUnknownKeys:
+    """The docstring promises engines ignore keys they do not understand.
+
+    Before this, every engine forwarded them: Gemini into a pydantic model
+    that forbids extras, Anthropic/OpenAI/Responses as kwargs to a create()
+    with no **kwargs, Bedrock into botocore's parameter validator. All five
+    failed inside the caller's process, which breaks the cross-provider
+    fallback provider_options exists to serve.
+    """
+
+    UNKNOWN_KEY: str = "definitely_not_a_real_provider_option"
+
+    @pytest.mark.parametrize("engine, build", _engine_builders())
+    def test_unknown_key_is_dropped(self, engine, build, caplog):
+        client = build()
+        with caplog.at_level("WARNING"):
+            merge_options, _ = client._split_provider_options(
+                {self.UNKNOWN_KEY: {"a": 1}}
+            )
+        assert merge_options == {}, engine
+        assert self.UNKNOWN_KEY in caplog.text
+
+    @pytest.mark.parametrize("engine, build", _engine_builders())
+    def test_reserved_retry_policy_still_splits(self, engine, build):
+        """Filtering must not swallow the reserved key."""
+        client = build()
+        merge_options, retry_override = client._split_provider_options(
+            {"retry_policy": "none", self.UNKNOWN_KEY: 1}
+        )
+        assert retry_override == "none", engine
+        assert merge_options == {}, engine
+
+    def test_gemini_keeps_its_own_option(self):
+        """#53's counterpart: Gemini's real key must survive the filter."""
+        client = _build_gemini_client(Mock())
+        merge_options, _ = client._split_provider_options(
+            {"thinking_config": {"thinking_budget": 0}}
+        )
+        assert merge_options == {"thinking_config": {"thinking_budget": 0}}
+
+    def test_gemini_drops_the_anthropic_shape_from_the_issue(self):
+        """The exact payload in #53 must not reach GenerateContentConfig."""
+        client = _build_gemini_client(Mock())
+        merge_options, _ = client._split_provider_options(
+            {"thinking": {"type": "disabled"}}
+        )
+        assert merge_options == {}
+
+    def test_gemini_accepts_a_camel_case_alias(self):
+        """GenerateContentConfig sets populate_by_name, so aliases work."""
+        client = _build_gemini_client(Mock())
+        merge_options, _ = client._split_provider_options({"systemInstruction": "x"})
+        assert merge_options == {"systemInstruction": "x"}
+
+    @pytest.mark.parametrize("engine, build", _engine_builders())
+    def test_known_keys_come_from_the_sdk(self, engine, build):
+        """Derived from the SDK, so a version that adds an option is kept."""
+        client = build()
+        known = client._known_provider_option_keys()
+        assert known, engine
+        assert len(known) > 5, engine
+
+    def test_unintrospectable_sdk_forwards_unchanged(self):
+        """Dropping a caller's option on a guess is worse than forwarding it."""
+        client = _build_openai_client()
+        with patch.object(
+            type(client), "_known_provider_option_keys", return_value=None
+        ):
+            merge_options, _ = client._split_provider_options({self.UNKNOWN_KEY: 1})
+        assert merge_options == {self.UNKNOWN_KEY: 1}
+
+    def test_reaches_the_request_on_the_conversation_surface(self):
+        """End to end: the unknown key must not reach the SDK call."""
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("ok")]
+        )
+        client.send_conversation(
+            "sys",
+            [{"role": "user", "content": "hi"}],
+            provider_options={"thinking": {"type": "disabled"}},
+        )
+        config = mock_client.models.generate_content.call_args.kwargs["config"]
+        assert not hasattr(config, "thinking") or config.thinking is None
+
+
 class TestDocumentedShapeAcrossProviders:
     """These five engines accept the {role, content} shape ai_base documents.
 
