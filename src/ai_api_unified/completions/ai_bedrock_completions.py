@@ -1158,6 +1158,121 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         # Normal return with the caller-facing conversation turn.
         return observed_result.return_value
 
+    # Converse ContentBlock members, per the bedrock-runtime service model. A
+    # list whose entries name none of these is another engine's block format
+    # (Anthropic and OpenAI tag blocks with "type"), which botocore rejects.
+    CONVERSE_CONTENT_BLOCK_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "audio",
+            "cachePoint",
+            "citationsContent",
+            "document",
+            "guardContent",
+            "image",
+            "reasoningContent",
+            "searchResult",
+            "text",
+            "toolResult",
+            "toolUse",
+            "video",
+        }
+    )
+
+    def _normalize_messages(
+        self,
+        messages: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]] | None:
+        """
+        Translates interface-shaped messages into Converse content blocks.
+
+        AIBaseCompletions documents messages as {role, content} dictionaries
+        with string content; the Converse API requires content to be a list of
+        blocks, and botocore rejects a bare string client-side before the
+        request leaves the process. Entries whose content is already a list
+        pass through unchanged, so a history carrying
+        _extend_messages_with_turn_provider and
+        _build_tool_result_message_provider output stays valid. Converse names
+        the assistant role "assistant", matching the documented shape, so only
+        the content wrapping differs.
+
+        Args:
+            messages: Caller-managed history in interface or Converse shape.
+
+        Returns:
+            New list of Converse-shaped messages, or None when the caller
+            passed None.
+
+        Raises:
+            ValueError: When a message carries content this engine cannot
+                translate, such as another engine's raw_content blocks.
+        """
+        if messages is None:
+            # Early return: the structured surfaces accept a bare prompt.
+            return None
+        list_normalized: list[dict[str, Any]] = []
+        # Loop over messages so each interface-shaped entry maps to blocks.
+        for dict_message in messages:
+            content: Any = dict_message.get("content")
+            if isinstance(content, list) and self._is_converse_block_list(content):
+                # Already Converse-shaped: helper output passes through.
+                list_normalized.append(dict_message)
+                continue
+            if not isinstance(content, str):
+                # Neither string content nor Converse blocks is another
+                # engine's shape. Forwarding it reaches botocore and raises
+                # the same in-process ParamValidationError this method exists
+                # to prevent, so name the helpers instead of guessing.
+                raise ValueError(
+                    "bedrock messages must carry string content or Converse "
+                    "content blocks ("
+                    + ", ".join(sorted(self.CONVERSE_CONTENT_BLOCK_KEYS))
+                    + "); got "
+                    f"{type(content).__name__}. Replay assistant turns via "
+                    "extend_messages_with_turn and tool results via "
+                    "build_tool_result_message."
+                )
+            list_normalized.append(
+                {
+                    "role": str(dict_message.get("role", "user")),
+                    "content": [{"text": content}],
+                }
+            )
+        # Normal return with Converse-shaped messages.
+        return list_normalized
+
+    @classmethod
+    def _is_converse_block_list(cls, content: list[Any]) -> bool:
+        """
+        Reports whether every entry is a Converse ContentBlock.
+
+        Anthropic and OpenAI also carry list content, tagged with "type"
+        rather than a Converse block name, so a bare isinstance(list) check
+        would forward their history into the ParamValidationError this engine
+        is avoiding.
+
+        The test is that every key is a Converse member, not that some key is.
+        An Anthropic text block is {"type": "text", "text": ...}, which does
+        carry "text"; botocore rejects it on the unknown "type" key, so an
+        intersection test would still let it through.
+
+        Args:
+            content: The content list from one caller-supplied message.
+
+        Returns:
+            True when the list is non-empty and every entry is a non-empty
+            dict whose keys are all Converse ContentBlock members.
+        """
+        if not content:
+            # Early return: an empty list names no block and Converse rejects it.
+            return False
+        # Normal return: every entry must be wholly Converse-shaped.
+        return all(
+            isinstance(block, dict)
+            and bool(block)
+            and block.keys() <= cls.CONVERSE_CONTENT_BLOCK_KEYS
+            for block in content
+        )
+
     def _build_tool_result_message_provider(
         self,
         *,

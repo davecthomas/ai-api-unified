@@ -2847,6 +2847,39 @@ class AIBaseCompletions(AIBase):
         # Normal return with the schema derived from the pydantic response model.
         return response_model.model_json_schema()
 
+    def _normalize_messages(
+        self,
+        messages: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]] | None:
+        """
+        Translates interface-shaped messages into this provider's wire shape.
+
+        send_conversation documents messages as {role, content} dictionaries
+        and calls that shape provider-neutral. Engines whose wire format is
+        already {role, content} need no translation, so the base returns the
+        caller's list untouched; an engine with a different shape overrides
+        this and translates. Routing every conversation and structured-output
+        surface through one hook keeps the documented contract true on all of
+        them rather than on whichever ones a given engine happened to cover.
+
+        This deliberately does not live in _validate_conversation_request.
+        That method is called only from send_conversation and
+        asend_conversation and returns the tool list, so translating there
+        would leave send_structured_output and asend_structured_output on the
+        broken path and would need a signature change to carry messages back
+        out. Do not move it there.
+
+        Args:
+            messages: Caller-managed history, or None where the surface
+                accepts a bare prompt instead.
+
+        Returns:
+            Messages in the provider's wire shape. The base returns the
+            argument unchanged.
+        """
+        # Normal return: the documented shape is already this engine's shape.
+        return messages
+
     def _validate_conversation_request(
         self,
         *,
@@ -2957,7 +2990,7 @@ class AIBaseCompletions(AIBase):
                 response_schema=dict_effective_schema,
                 system_prompt=system_prompt,
                 prompt=prompt,
-                messages=messages,
+                messages=self._normalize_messages(messages),
                 max_response_tokens=max_response_tokens,
                 request_timeout_seconds=request_timeout_seconds,
                 provider_options=provider_options,
@@ -3074,10 +3107,11 @@ class AIBaseCompletions(AIBase):
             tools=tools,
             tool_choice=tool_choice,
         )
+        list_messages: list[dict[str, Any]] = self._normalize_messages(messages) or []
         # Normal return with the provider-implemented conversation turn.
         return self._send_conversation_provider(
             system_prompt=system_prompt,
-            messages=messages,
+            messages=list_messages,
             tools=list_tools,
             tool_choice=tool_choice,
             max_response_tokens=max_response_tokens,
@@ -3311,7 +3345,7 @@ class AIBaseCompletions(AIBase):
                 response_schema=dict_effective_schema,
                 system_prompt=system_prompt,
                 prompt=prompt,
-                messages=messages,
+                messages=self._normalize_messages(messages),
                 max_response_tokens=max_response_tokens,
                 request_timeout_seconds=request_timeout_seconds,
                 provider_options=provider_options,
@@ -3363,10 +3397,11 @@ class AIBaseCompletions(AIBase):
             tools=tools,
             tool_choice=tool_choice,
         )
+        list_messages: list[dict[str, Any]] = self._normalize_messages(messages) or []
         # Normal return with the provider-implemented async conversation turn.
         return await self._asend_conversation_provider(
             system_prompt=system_prompt,
-            messages=messages,
+            messages=list_messages,
             tools=list_tools,
             tool_choice=tool_choice,
             max_response_tokens=max_response_tokens,

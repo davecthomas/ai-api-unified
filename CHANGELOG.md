@@ -4,6 +4,58 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.25.2
+
+- The bedrock engine now accepts the same documented `{role, content}` messages
+  shape 2.25.1 fixed on google-gemini. It forwarded the caller's list straight
+  to the Converse API, which requires `content` as a list of blocks, so botocore
+  rejected a bare string client-side before the request left the process. This
+  is the same defect as the Gemini one, on a second engine.
+- `_normalize_messages` on the bedrock engine wraps string content as
+  `[{"text": ...}]`. Converse already names the assistant role `assistant`, so
+  only the content wrapping differs. Content that is already a list of Converse
+  blocks passes through untouched, keeping a history built from
+  `extend_messages_with_turn` and `build_tool_result_message` valid, and
+  anything else raises a `ValueError` naming both helpers. The block test is
+  that every key is a Converse `ContentBlock` member, not that some key is: an
+  Anthropic block is `{"type": "text", "text": ...}`, which carries `text` but
+  is rejected by botocore on the unknown `type` key, so a looser test would
+  forward another engine's history into the failure this fix removes.
+- All five completions engines are now covered by
+  `TestDocumentedShapeAcrossProviders`, which sends the documented shape
+  through each engine and validates what reaches the SDK against that
+  provider's own client-side validator where one ships — the google-genai
+  pydantic request model and the botocore Converse parameter validator. An
+  engine whose wire shape diverges from the documented contract fails there
+  rather than in a caller's process.
+- Audited and unchanged: anthropic, openai, and openai-responses all accept
+  string content natively, so they keep the identity default.
+
+## 2.25.1
+
+- The google-gemini engine now accepts the `{role, content}` messages shape
+  that `AIBaseCompletions` documents and calls provider-neutral. It previously
+  forwarded the caller's list straight to google-genai, which requires
+  `{role, parts: [...]}`, so the call died on a pydantic `ValidationError`
+  inside the caller's process before reaching the network. Cross-provider
+  fallback could not work: the same caller code could drive Claude but not
+  Gemini.
+- The translation lives in a new `_normalize_messages` hook on
+  `AIBaseCompletions`, which returns the caller's list unchanged. Every
+  conversation and structured-output surface routes through it —
+  `send_conversation`, `asend_conversation`, `send_structured_output`, and
+  `asend_structured_output` — so an engine whose wire shape differs overrides
+  one method and all four surfaces follow. Engines whose shape is already
+  `{role, content}` keep the default and are unaffected.
+- Gemini's override maps `content` to `parts` and renames the `assistant` role
+  to `model`. Entries already carrying `parts` pass through untouched, so a
+  history mixing caller-written messages with `extend_messages_with_turn` and
+  `build_tool_result_message` output stays valid. Everything else raises a
+  `ValueError` naming both helpers: an entry with neither string `content` nor
+  `parts` belongs to another engine, and forwarding it would reach google-genai
+  and raise the same in-process `ValidationError` this fix exists to prevent.
+- `asend_prompt` and `send_prompt` take a string and were never affected.
+
 ## 2.25.0
 
 - `list_model_names` on the google-gemini completions engine now checks the

@@ -1202,6 +1202,65 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             usage=self._usage_from_gemini(response),
         )
 
+    def _normalize_messages(
+        self,
+        messages: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]] | None:
+        """
+        Translates interface-shaped messages into Gemini content dictionaries.
+
+        AIBaseCompletions documents messages as {role, content} dictionaries;
+        google-genai requires {role, parts: [...]} and names the assistant
+        role "model". Entries already carrying "parts" pass through unchanged,
+        so a history mixing caller-written messages with
+        extend_messages_with_turn and build_tool_result_message output stays
+        valid.
+
+        Args:
+            messages: Caller-managed history in interface or Gemini shape.
+
+        Returns:
+            New list of Gemini-shaped content dictionaries, or None when the
+            caller passed None.
+
+        Raises:
+            ValueError: When a message carries non-string content this engine
+                cannot translate, such as another engine's raw_content blocks.
+        """
+        if messages is None:
+            # Early return: the structured surfaces accept a bare prompt.
+            return None
+        list_normalized: list[dict[str, Any]] = []
+        # Loop over messages so each interface-shaped entry maps to parts.
+        for dict_message in messages:
+            if "parts" in dict_message:
+                # Already Gemini-shaped: extend_messages_with_turn and
+                # build_tool_result_message output passes through untouched.
+                list_normalized.append(dict_message)
+                continue
+            content: Any = dict_message.get("content")
+            if not isinstance(content, str):
+                # An entry with neither string content nor parts is another
+                # engine's shape. Forwarding it reaches google-genai and
+                # raises the same in-process ValidationError this method
+                # exists to prevent, so name the helpers instead of guessing.
+                raise ValueError(
+                    "google-gemini messages must carry string content or "
+                    "Gemini-shaped parts; got content of type "
+                    f"{type(content).__name__}. Replay assistant turns via "
+                    "extend_messages_with_turn and tool results via "
+                    "build_tool_result_message."
+                )
+            str_role: str = str(dict_message.get("role", "user"))
+            list_normalized.append(
+                {
+                    "role": "model" if str_role == "assistant" else str_role,
+                    "parts": [{"text": content}],
+                }
+            )
+        # Normal return with Gemini-shaped contents.
+        return list_normalized
+
     def _build_gemini_conversation_config_kwargs(
         self,
         *,
