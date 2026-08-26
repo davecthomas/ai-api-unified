@@ -106,8 +106,6 @@ LIST_MODELS_FAILURE_TTL_SECONDS: float = 60.0
 #  - Gemini 2.5 Pro: $1.25 / 1M input tokens  → 0.00125 / 1k
 #  - Gemini 2.5 Flash: $0.30 / 1M input tokens → 0.00030 / 1k
 #  - Gemini 2.5 Flash-Lite: $0.10 / 1M input tokens → 0.00010 / 1k
-#  - Gemini 2.0 Flash: $0.15 / 1M input tokens → 0.00015 / 1k
-#  - Gemini 2.0 Flash-Lite: $0.075 / 1M input tokens → 0.000075 / 1k
 # Context window and status only. Pricing now lives in the pricing registry
 # (single source of truth); lifecycle (deprecated/retired) is enforced there.
 GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
@@ -255,9 +253,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         are cached per client instance and keyed on the configured model, so
         the cost is one round trip per TTL window rather than one per read.
         Call it off the event loop, as the HTTP service does. When the query
-        fails (offline, restricted credentials, mocked SDK) or names none of
-        the spec entries, the static spec list is returned and that outcome
-        is cached for the shorter failure window.
+        fails (offline, restricted credentials, mocked SDK) the static spec
+        list is returned and that outcome is cached for the shorter failure
+        window. A query that answers but names none of the spec entries also
+        falls back to the static list, and is cached for the full window,
+        because a naming mismatch is stable rather than transient.
         """
         tuple_cache: tuple[str, float, list[str] | None] | None = getattr(
             self, "_list_model_names_cache", None

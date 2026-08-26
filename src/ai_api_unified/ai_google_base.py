@@ -224,7 +224,7 @@ class AIGoogleBase:
         Args:
             client: Configured google-genai client to query.
             name_filter: Optional substring every returned name must contain.
-            required_action: Optional supported_actions entry an model must
+            required_action: Optional supported_actions entry a model must
                 publish (for example "generateContent"). Entries publishing
                 no supported_actions are kept: the SDK's Vertex converter
                 never populates the field, so absence means "unreported"

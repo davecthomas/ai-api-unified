@@ -20,8 +20,9 @@ version lives in `pyproject.toml` (see the README release section).
   not scoped to `GOOGLE_LOCATION`, so there this is a name-presence check and
   a globally-listed model can still answer 404 in the configured region.
 - The configured model is always listed, so `model_name` never goes missing
-  from its own engine's list: the constructor accepted it, and Google serves
-  deprecated models it has stopped listing.
+  from its own engine's list: the engine sends every request against
+  `model_name`, so a list that omitted it would contradict the engine's own
+  configuration.
 - **Reading `list_model_names` on this engine can now make a blocking network
   call**, where every other engine returns a static literal. Callers should
   read it off the event loop, as the HTTP service already does. Both outcomes
@@ -33,11 +34,13 @@ version lives in `pyproject.toml` (see the README release section).
   transient failure retries once, which absorbs a rate-limit blip without the
   multi-second sleep the completions retry budget would spend on a call that
   has an instant static fallback.
-- When the listing call fails (offline, restricted credentials, mocked SDK)
-  or names none of the spec entries, the property returns the full static
-  list unchanged and logs the reason. That outcome is cached only for the
-  short failure window, so a recovered provider is picked up quickly while a
-  provider that cannot answer at all stops costing a round trip per read.
+- When the listing call fails (offline, restricted credentials, mocked SDK),
+  the property returns the full static list unchanged and logs the reason.
+  That outcome is cached only for the short failure window, so a recovered
+  provider is picked up quickly while a provider that cannot answer at all
+  stops costing a round trip per read. A listing that succeeds but names none
+  of the spec entries also serves the static list, under the full window as
+  described above.
 - **The Gemini 2.0 family is retired**: `gemini-2.0-flash`,
   `gemini-2.0-flash-001`, `gemini-2.0-flash-lite`, and
   `gemini-2.0-flash-lite-001` are removed from `GEMINI_MODEL_SPECS` and move

@@ -12,6 +12,7 @@ attribute with Mock objects mimicking that SDK's object graph.
 
 import json
 import os
+import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -380,6 +381,8 @@ class TestResponsesConversation:
 genai_module = pytest.importorskip("google.genai")
 
 from ai_api_unified.completions.ai_google_gemini_completions import (  # noqa: E402
+    LIST_MODELS_CACHE_TTL_SECONDS,
+    LIST_MODELS_FAILURE_TTL_SECONDS,
     GoogleGeminiCompletions,
 )
 
@@ -571,6 +574,13 @@ class TestGeminiModelListing:
         assert list_names == list(GEMINI_MODEL_SPECS.keys())
         # Failing open silently would present uncallable models as available.
         assert "named none of the" in caplog.text
+        # A catalogue that answers but shares no names is a stable naming
+        # mismatch, not a transient fault, so it holds the full window rather
+        # than re-querying every minute for the life of the process.
+        _, float_expires_at, _ = client._list_model_names_cache
+        float_window = float_expires_at - time.monotonic()
+        assert float_window > LIST_MODELS_FAILURE_TTL_SECONDS
+        assert float_window == pytest.approx(LIST_MODELS_CACHE_TTL_SECONDS, abs=5.0)
 
     def test_successful_listing_is_cached_per_client(self):
         mock_client = Mock()
@@ -630,20 +640,20 @@ class TestGeminiModelListing:
         ]
         assert client.list_model_names == ["gemini-2.5-flash"]
         # Repointing the client must not serve the previous model's answer.
-        client.completions_model = "gemini-2.0-flash"  # outside the spec dict
-        assert client.list_model_names == ["gemini-2.5-flash", "gemini-2.0-flash"]
+        client.completions_model = "gemini-not-in-specs"  # outside the spec dict
+        assert client.list_model_names == ["gemini-2.5-flash", "gemini-not-in-specs"]
 
     def test_configured_model_is_always_listed(self):
         mock_client = Mock()
         client = _build_gemini_client(mock_client)
         # A model outside the spec dict, which __init__ rewrites in practice.
         # The property must not depend on that distant guard.
-        client.completions_model = "gemini-2.0-flash"
+        client.completions_model = "gemini-not-in-specs"
         mock_client.models.list.return_value = [
             _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
         ]
         list_names = client.list_model_names
-        assert list_names == ["gemini-2.5-flash", "gemini-2.0-flash"]
+        assert list_names == ["gemini-2.5-flash", "gemini-not-in-specs"]
         # The engine never omits the model it is configured to call.
         assert client.model_name in list_names
 
