@@ -1062,6 +1062,55 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             usage=self._usage_from_gemini(response),
         )
 
+    @staticmethod
+    def _normalize_gemini_messages(
+        messages: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Translates interface-shaped messages into Gemini content dictionaries.
+
+        AIBaseCompletions documents messages as {role, content} dictionaries;
+        the google-genai SDK requires {role, parts: [...]} and names the
+        assistant role "model". Entries already carrying "parts" (tool results
+        from build_tool_result_message, model turns appended by
+        extend_messages_with_turn) pass through unchanged.
+
+        Args:
+            messages: Caller-managed history in interface or Gemini shape.
+
+        Returns:
+            New list of Gemini-shaped content dictionaries.
+
+        Raises:
+            ValueError: When a message carries non-string content this engine
+                cannot translate (for example another engine's raw_content
+                blocks).
+        """
+        list_normalized: list[dict[str, Any]] = []
+        # Loop over messages so each interface-shaped entry maps to parts.
+        for dict_message in messages or []:
+            if "parts" in dict_message or "content" not in dict_message:
+                list_normalized.append(dict_message)
+                continue
+            content: Any = dict_message["content"]
+            if not isinstance(content, str):
+                raise ValueError(
+                    "google-gemini messages must carry string content or "
+                    "Gemini-shaped parts; got content of type "
+                    f"{type(content).__name__}. Replay assistant turns via "
+                    "extend_messages_with_turn and tool results via "
+                    "build_tool_result_message."
+                )
+            str_role: str = str(dict_message.get("role", "user"))
+            list_normalized.append(
+                {
+                    "role": "model" if str_role == "assistant" else str_role,
+                    "parts": [{"text": content}],
+                }
+            )
+        # Normal return with Gemini-shaped contents.
+        return list_normalized
+
     def _build_gemini_conversation_config_kwargs(
         self,
         *,
@@ -1168,6 +1217,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         """
         Sends one conversation turn via generate_content with function tools.
         """
+        list_contents: list[dict[str, Any]] = self._normalize_gemini_messages(messages)
         dict_merge_options, str_retry_override = self._split_provider_options(
             provider_options
         )
@@ -1194,7 +1244,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         def _generate_turn() -> AiApiObservedCompletionsResultModel[AITurnResult]:
             response = self.client.models.generate_content(
                 model=self.completions_model,
-                contents=messages,
+                contents=list_contents,
                 config=genai.types.GenerateContentConfig(**dict_config_kwargs),
             )
             # Normal return with the observed conversation turn.
@@ -1243,6 +1293,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         synchronous); transport failures surface as typed request errors for
         caller-owned backoff.
         """
+        list_contents: list[dict[str, Any]] = self._normalize_gemini_messages(messages)
         dict_merge_options, _ = self._split_provider_options(provider_options)
         dict_config_kwargs: dict[str, Any] = (
             self._build_gemini_conversation_config_kwargs(
@@ -1268,7 +1319,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             try:
                 response = await self.client.aio.models.generate_content(
                     model=self.completions_model,
-                    contents=messages,
+                    contents=list_contents,
                     config=genai.types.GenerateContentConfig(**dict_config_kwargs),
                 )
             except Exception as exception:
@@ -1352,7 +1403,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             None,
             AICompletionsPromptParamsBase.DEFAULT_STRICT_SCHEMA_SYSTEM_PROMPT,
         )
-        list_contents: list[dict[str, Any]] = list(messages or [])
+        list_contents: list[dict[str, Any]] = self._normalize_gemini_messages(messages)
         if prompt is not None and prompt.strip():
             str_redacted_prompt: str = self.pii_middleware.process_input(prompt)
             list_contents.append(

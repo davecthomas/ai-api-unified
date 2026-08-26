@@ -4,6 +4,20 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.24.1
+
+- The google-gemini completions engine now accepts the `{role, content}`
+  message shape that `AIBaseCompletions.send_conversation` and
+  `send_structured_output` document. Previously it forwarded caller messages
+  verbatim to the SDK's `contents=`, which requires `{role, parts: [{text}]}`,
+  so interface-shaped history raised a pydantic `ValidationError` before any
+  request was sent. Messages are now translated per call (`assistant` maps to
+  Gemini's `model` role); entries already carrying `parts` — tool results from
+  `build_tool_result_message` and model turns appended by
+  `extend_messages_with_turn` — pass through unchanged. Non-string content
+  that is not Gemini-shaped (for example another engine's raw_content blocks)
+  raises a clear `ValueError` instead of a pydantic stack.
+
 ## 2.24.0
 
 - Prompt-cache **writes** are now priced and billed. Priming a cache costs more

@@ -493,6 +493,100 @@ class TestGeminiConversation:
         text = await client.asend_prompt("hi", max_response_tokens=128)
         assert text == "async ok"
 
+    def test_interface_message_shape_translated(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("Sunny.")]
+        )
+        messages = [
+            {"role": "user", "content": "Weather in NYC?"},
+            {"role": "assistant", "content": "Checking now."},
+            {"role": "user", "content": "Thanks."},
+        ]
+        turn = client.send_conversation("sys", messages)
+        assert turn.finish_reason is AIFinishReason.COMPLETE
+        contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+        assert contents == [
+            {"role": "user", "parts": [{"text": "Weather in NYC?"}]},
+            {"role": "model", "parts": [{"text": "Checking now."}]},
+            {"role": "user", "parts": [{"text": "Thanks."}]},
+        ]
+        # The caller's own history stays in interface shape.
+        assert messages[0] == {"role": "user", "content": "Weather in NYC?"}
+
+    def test_gemini_shaped_messages_pass_through_unchanged(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part("Done.")]
+        )
+        function_response = {
+            "role": "user",
+            "parts": [
+                {
+                    "function_response": {
+                        "name": "get_weather",
+                        "response": {"temp_f": 55},
+                    }
+                }
+            ],
+        }
+        messages = [
+            {"role": "user", "parts": [{"text": "Weather in NYC?"}]},
+            {"role": "model", "parts": [{"text": "Calling the tool."}]},
+            function_response,
+        ]
+        client.send_conversation("sys", messages)
+        contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+        assert contents == messages
+        assert contents[2] is function_response
+
+    def test_non_string_content_raises_value_error(self):
+        client = _build_gemini_client(Mock())
+        with pytest.raises(ValueError, match="string content"):
+            client.send_conversation(
+                "sys",
+                [{"role": "assistant", "content": [{"type": "text", "text": "x"}]}],
+            )
+
+    def test_structured_output_interface_messages_translated(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        payload = {"nodes": []}
+        mock_client.models.generate_content.return_value = _gemini_response(
+            [_gemini_text_part(json.dumps(payload))]
+        )
+        result = client.send_structured_output(
+            response_schema=GRAPH_SCHEMA,
+            messages=[
+                {"role": "user", "content": "Compile the doc."},
+                {"role": "assistant", "content": "Which doc?"},
+            ],
+            prompt="This one.",
+        )
+        assert result.data == payload
+        contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+        assert contents == [
+            {"role": "user", "parts": [{"text": "Compile the doc."}]},
+            {"role": "model", "parts": [{"text": "Which doc?"}]},
+            {"role": "user", "parts": [{"text": "This one."}]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_async_conversation_interface_messages_translated(self):
+        mock_client = Mock()
+        mock_client.aio.models.generate_content = AsyncMock(
+            return_value=_gemini_response([_gemini_text_part("async ok")])
+        )
+        client = _build_gemini_client(mock_client)
+        turn = await client.asend_conversation(
+            "sys", [{"role": "user", "content": "hi"}]
+        )
+        assert turn.text == "async ok"
+        contents = mock_client.aio.models.generate_content.call_args.kwargs["contents"]
+        assert contents == [{"role": "user", "parts": [{"text": "hi"}]}]
+
     def test_retry_policy_none_single_attempt(self):
         mock_client = Mock()
         client = _build_gemini_client(mock_client, retry_policy="none")
