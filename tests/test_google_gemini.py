@@ -321,6 +321,12 @@ class TestGoogleGeminiModules:
                     mock_models = Mock()
                     mock_client.models = mock_models
                     mock_models.get.return_value = None
+                    # A real catalogue, so list_model_names exercises the live
+                    # path here rather than passing through its error fallback.
+                    catalogue_entry = Mock(spec=["name", "supported_actions"])
+                    catalogue_entry.name = "models/gemini-2.5-flash"
+                    catalogue_entry.supported_actions = ["generateContent"]
+                    mock_models.list.return_value = [catalogue_entry]
                     mock_genai.Client.return_value = mock_client
                     mock_genai.types = Mock()
 
@@ -333,6 +339,8 @@ class TestGoogleGeminiModules:
                     assert client.model_name == "gemini-2.5-flash"
                     assert isinstance(client.list_model_names, list)
                     assert "gemini-2.5-flash" in client.list_model_names
+                    # Live path, so the stale 2.0 family is filtered out.
+                    assert "gemini-2.0-flash" not in client.list_model_names
                     assert client.max_context_tokens > 0
                     assert client.price_per_1k_tokens > 0
 

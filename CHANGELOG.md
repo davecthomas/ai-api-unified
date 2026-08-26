@@ -6,18 +6,34 @@ version lives in `pyproject.toml` (see the README release section).
 
 ## 2.25.0
 
-- `list_model_names` on the google-gemini completions engine now verifies the
+- `list_model_names` on the google-gemini completions engine now checks the
   static model catalogue against the provider's live `models.list` before
   answering. The catalogue differs per auth path (Gemini API vs Vertex),
   project, and region, so the hardcoded `GEMINI_MODEL_SPECS` list could name
   models the current credentials cannot call. Observed live: the Gemini API
   no longer lists the 2.0-family spec entries, and a Vertex project answered
-  404 for a spec entry the static list presented as callable. The property
-  now returns the spec entries the live catalogue serves for
-  `generateContent`, in spec order; entries publishing no `supported_actions`
-  are kept. When the listing call fails (offline, restricted credentials,
-  mocked SDK) or shares no names with the specs, the property returns the
-  full static list unchanged.
+  404 for a spec entry the static list presented as callable.
+- How much that check verifies depends on the auth path, and the docstring
+  now says so. The Gemini API publishes `supported_actions`, so entries that
+  cannot `generateContent` are dropped. Vertex publishes none — the SDK's
+  Vertex converter does not map the field — and its publisher catalogue is
+  not scoped to `GOOGLE_LOCATION`, so there this is a name-presence check and
+  a globally-listed model can still answer 404 in the configured region.
+- The configured model is always listed, so `model_name` never goes missing
+  from its own engine's list: the constructor accepted it, and Google serves
+  deprecated models it has stopped listing.
+- A successful answer is cached per client instance, so a pooled client pays
+  one catalogue pull rather than one per call. Transient listing failures
+  retry on a short budget, since a single rate-limit blip would otherwise
+  downgrade the answer to the static list with no signal in the return value.
+- When the listing call fails (offline, restricted credentials, mocked SDK)
+  or names none of the spec entries, the property returns the full static
+  list unchanged and logs the reason; nothing is cached, so a later access
+  retries.
+- `AIGoogleBase.list_models` gains optional `required_action`,
+  `bool_strip_resource_prefix`, and `bool_propagate_errors` parameters, so the
+  completions engine reuses that pager instead of carrying a second copy.
+  Default behavior is unchanged for existing callers.
 
 ## 2.24.0
 

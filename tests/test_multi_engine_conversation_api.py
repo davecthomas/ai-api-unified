@@ -556,7 +556,7 @@ class TestGeminiModelListing:
         assert list_names == list(GEMINI_MODEL_SPECS.keys())
         assert "falling back" in caplog.text
 
-    def test_empty_intersection_falls_back_to_static_specs(self):
+    def test_empty_intersection_falls_back_to_static_specs(self, caplog):
         from ai_api_unified.completions.ai_google_gemini_completions import (
             GEMINI_MODEL_SPECS,
         )
@@ -566,7 +566,62 @@ class TestGeminiModelListing:
         mock_client.models.list.return_value = [
             _gemini_catalogue_model("models/some-unrelated-model", ["generateContent"]),
         ]
-        assert client.list_model_names == list(GEMINI_MODEL_SPECS.keys())
+        with caplog.at_level("WARNING"):
+            list_names = client.list_model_names
+        assert list_names == list(GEMINI_MODEL_SPECS.keys())
+        # Failing open silently would present uncallable models as available.
+        assert "named none of the" in caplog.text
+
+    def test_successful_listing_is_cached_per_client(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        first = client.list_model_names
+        second = client.list_model_names
+        assert first == second == ["gemini-2.5-flash"]
+        assert mock_client.models.list.call_count == 1
+
+    def test_failed_listing_is_not_cached(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.side_effect = RuntimeError("no network")
+        client.list_model_names
+        # The provider may recover, so a failure must not pin the fallback.
+        mock_client.models.list.side_effect = None
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        assert client.list_model_names == ["gemini-2.5-flash"]
+
+    def test_configured_model_is_always_listed(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        # Google still serves deprecated models it has stopped listing.
+        client.completions_model = "gemini-2.0-flash"
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        list_names = client.list_model_names
+        assert list_names == ["gemini-2.5-flash", "gemini-2.0-flash"]
+        # The engine never omits the model it is configured to call.
+        assert client.model_name in list_names
+
+    def test_listing_goes_through_the_retry_wrapper(self):
+        mock_client = Mock()
+        client = _build_gemini_client(mock_client)
+        mock_client.models.list.return_value = [
+            _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),
+        ]
+        with patch.object(
+            client,
+            "_retry_with_exponential_backoff",
+            side_effect=lambda operation, **kwargs: operation(),
+        ) as mock_retry:
+            assert client.list_model_names == ["gemini-2.5-flash"]
+        # A transient 429 must not silently downgrade to the static list.
+        assert mock_retry.call_count == 1
 
 
 # ── Bedrock engine ──────────────────────────────────────────────────────────

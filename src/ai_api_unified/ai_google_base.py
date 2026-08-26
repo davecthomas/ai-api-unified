@@ -214,8 +214,30 @@ class AIGoogleBase:
         client: genai.Client,
         *,
         name_filter: str | None = None,
+        required_action: str | None = None,
+        bool_strip_resource_prefix: bool = False,
+        bool_propagate_errors: bool = False,
     ) -> list[str]:
-        """Return available Gemini model identifiers filtered by substring."""
+        """
+        Return available Gemini model identifiers filtered by substring.
+
+        Args:
+            client: Configured google-genai client to query.
+            name_filter: Optional substring every returned name must contain.
+            required_action: Optional supported_actions entry an model must
+                publish (for example "generateContent"). Entries publishing
+                no supported_actions are kept: the SDK's Vertex converter
+                never populates the field, so absence means "unreported"
+                rather than "unsupported".
+            bool_strip_resource_prefix: Return bare names ("gemini-2.5-flash")
+                instead of full resource names ("models/gemini-2.5-flash").
+            bool_propagate_errors: Raise the listing failure instead of
+                logging it and returning an empty list, so a caller that
+                distinguishes "listing failed" from "listing was empty" can.
+
+        Returns:
+            Model identifiers matching every supplied filter.
+        """
 
         list_model_names: list[str] = []
         try:
@@ -227,8 +249,18 @@ class AIGoogleBase:
                     continue
                 if name_filter and name_filter not in model_name:
                     continue
+                if required_action is not None:
+                    list_actions: list[str] = list(
+                        getattr(model_metadata, "supported_actions", None) or []
+                    )
+                    if list_actions and required_action not in list_actions:
+                        continue
+                if bool_strip_resource_prefix:
+                    model_name = model_name.rsplit("/", 1)[-1]
                 list_model_names.append(model_name)
         except Exception as model_error:
+            if bool_propagate_errors:
+                raise
             _LOGGER.warning(
                 "Failed to list Google Gemini models: %s",
                 model_error,
