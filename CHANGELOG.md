@@ -27,14 +27,34 @@ version lives in `pyproject.toml` (see the README release section).
   read it off the event loop, as the HTTP service already does. Both outcomes
   are cached per client instance and keyed on the configured model, so the
   cost is one round trip per TTL window (15 minutes on success, 1 minute
-  after a failure) rather than one per read. Transient listing failures retry
-  on a short budget, since a single rate-limit blip would otherwise downgrade
-  the answer to the static list with no signal in the return value.
+  after a failure) rather than one per read. A listing that succeeds but
+  names none of the spec entries is a stable mismatch rather than a transient
+  fault, so it takes the full window instead of re-querying every minute. A
+  transient failure retries once, which absorbs a rate-limit blip without the
+  multi-second sleep the completions retry budget would spend on a call that
+  has an instant static fallback.
 - When the listing call fails (offline, restricted credentials, mocked SDK)
   or names none of the spec entries, the property returns the full static
   list unchanged and logs the reason. That outcome is cached only for the
   short failure window, so a recovered provider is picked up quickly while a
   provider that cannot answer at all stops costing a round trip per read.
+- **The Gemini 2.0 family is retired**: `gemini-2.0-flash`,
+  `gemini-2.0-flash-001`, `gemini-2.0-flash-lite`, and
+  `gemini-2.0-flash-lite-001` are removed from `GEMINI_MODEL_SPECS` and move
+  from DEPRECATED to RETIRED in the pricing registry. Probed 2026-08-26:
+  `models.list` no longer names any of them and `generateContent` answers 404
+  for each, so their scheduled 2026-06-01 sunset has passed in fact. This
+  matters most for the static list, which is what callers are served when the
+  live catalogue cannot be reached — a dead entry there would be advertised
+  as callable on the one path that cannot check it.
+- Constructing a client on a retired model now raises
+  `AiProviderConfigurationError` naming the replacement, where before it
+  warned and then quietly fell back to the default model. A pinned
+  `COMPLETIONS_MODEL_NAME=gemini-2.0-flash` therefore fails at construction
+  with a clear message rather than billing a different model than the one
+  requested. No deprecated completions model remains catalogued, so the
+  client-level deprecation test now covers the retired branch and the
+  deprecated branch stays covered at the registry level.
 - `AIGoogleBase.list_models` gains optional `required_action`,
   `bool_strip_resource_prefix`, and `bool_propagate_errors` parameters, so the
   completions engine reuses that pager instead of carrying a second copy.

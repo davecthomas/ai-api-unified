@@ -630,13 +630,14 @@ class TestGeminiModelListing:
         ]
         assert client.list_model_names == ["gemini-2.5-flash"]
         # Repointing the client must not serve the previous model's answer.
-        client.completions_model = "gemini-2.0-flash"
+        client.completions_model = "gemini-2.0-flash"  # outside the spec dict
         assert client.list_model_names == ["gemini-2.5-flash", "gemini-2.0-flash"]
 
     def test_configured_model_is_always_listed(self):
         mock_client = Mock()
         client = _build_gemini_client(mock_client)
-        # Google still serves deprecated models it has stopped listing.
+        # A model outside the spec dict, which __init__ rewrites in practice.
+        # The property must not depend on that distant guard.
         client.completions_model = "gemini-2.0-flash"
         mock_client.models.list.return_value = [
             _gemini_catalogue_model("models/gemini-2.5-flash", ["generateContent"]),

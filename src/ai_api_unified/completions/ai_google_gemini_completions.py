@@ -90,9 +90,10 @@ RETRY_STATUS_CODES: set[int] = {429, 500, 502, 503, 504}
 STRUCTURED_DEFAULT_TEMPERATURE: float = 0.1
 STRUCTURED_DEFAULT_TOP_P: float = 0.8
 GENERATE_CONTENT_ACTION: str = "generateContent"
-# Catalogue queries block a metadata call, so they retry on a shorter budget
-# than the completions default.
-LIST_MODELS_MAX_RETRIES: int = 2
+# Catalogue queries block a metadata call that has an instant static
+# fallback, so one retry absorbs a rate-limit blip without the multi-second
+# sleep the completions budget would spend.
+LIST_MODELS_MAX_RETRIES: int = 1
 # How long a resolved model list stays good. The failure window is short so a
 # recovered provider is picked up quickly, and non-zero so a provider that
 # cannot answer at all costs one round trip per window rather than one per
@@ -128,17 +129,14 @@ GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
         "max_context_tokens": 1_048_576,
         "status": "Stable",
     },
-    # Deprecated (still functional; the registry warns and names a replacement).
-    "gemini-2.0-flash-lite": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
-    "gemini-2.0-flash": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
-    "gemini-2.0-flash-001": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
-    "gemini-2.0-flash-lite-001": {
-        "max_context_tokens": 1_048_576,
-        "status": "Deprecated",
-    },
-    # gemini-1.5-pro-002 and gemini-1.5-flash-002 were removed: both are retired
-    # by Google (requests return 404). The pricing registry keeps RETIRED
-    # lifecycle entries so a request for them fails fast with a clear error.
+    # The 2.0 family and gemini-1.5-*-002 were removed: all are retired by
+    # Google. models.list stopped naming the 2.0 models and generateContent
+    # answers 404 for each (probed 2026-08-26), matching the 1.5 pair. This
+    # list is also the fallback served when the live catalogue cannot be
+    # reached, so a dead entry here would be advertised as callable on
+    # exactly the degraded path that cannot check it. The pricing registry
+    # keeps RETIRED lifecycle entries so a request for them fails fast with a
+    # clear error naming the replacement.
 }
 
 
@@ -273,12 +271,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 # Early return with the unexpired cached outcome; None means
                 # the live query could not answer, so the static list stands.
                 return list(GEMINI_MODEL_SPECS if list_cached is None else list_cached)
-        list_resolved: list[str] | None = self._resolve_live_model_names()
-        float_ttl_seconds: float = (
-            LIST_MODELS_CACHE_TTL_SECONDS
-            if list_resolved is not None
-            else LIST_MODELS_FAILURE_TTL_SECONDS
-        )
+        list_resolved, float_ttl_seconds = self._resolve_live_model_names()
         self._list_model_names_cache = (
             self.completions_model,
             time.monotonic() + float_ttl_seconds,
@@ -288,19 +281,22 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         # the catalogue could not answer.
         return list(GEMINI_MODEL_SPECS if list_resolved is None else list_resolved)
 
-    def _resolve_live_model_names(self) -> list[str] | None:
+    def _resolve_live_model_names(self) -> tuple[list[str] | None, float]:
         """
         Resolves the live-checked model list for one cache fill.
 
         Returns:
-            Spec entries the catalogue lists, in spec order, plus the
-            configured model. None when the catalogue could not answer, so
-            the caller serves the static spec list.
+            Tuple of the resolved list and the seconds it stays good. The
+            list is None when the catalogue could not answer, so the caller
+            serves the static spec list. A failed call is transient and gets
+            the short window; a catalogue that answered but named none of the
+            spec entries is a stable mismatch, so it gets the full window
+            rather than re-querying every minute for the life of the process.
         """
         set_live_names: set[str] | None = self._list_catalogue_model_names()
         if set_live_names is None:
             # Early return because the live query failed and already logged.
-            return None
+            return None, LIST_MODELS_FAILURE_TTL_SECONDS
         list_verified: list[str] = [
             str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_live_names
         ]
@@ -312,14 +308,20 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             )
             # Early return: sharing no names reads as a catalogue whose naming
             # scheme did not match, not as zero callable models.
-            return None
-        # The configured model is always listed. The constructor accepted it,
-        # and Google serves deprecated models it has stopped listing, so
-        # dropping it here would leave model_name absent from its own
-        # engine's list while send_prompt still reaches it.
+            return None, LIST_MODELS_CACHE_TTL_SECONDS
+        # The configured model is always listed. The engine sends requests
+        # against it, so omitting it would contradict this engine's own
+        # model_name. The append covers a model outside the spec dict, which
+        # __init__ rewrites today; leaning on that distant guard would leave
+        # this promise true only by accident.
         set_listable: set[str] = set(set_live_names) | {self.completions_model}
+        list_names: list[str] = [
+            str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_listable
+        ]
+        if self.completions_model not in list_names:
+            list_names.append(self.completions_model)
         # Normal return with the live-checked spec entries.
-        return [str_name for str_name in GEMINI_MODEL_SPECS if str_name in set_listable]
+        return list_names, LIST_MODELS_CACHE_TTL_SECONDS
 
     def _list_catalogue_model_names(self) -> set[str] | None:
         """

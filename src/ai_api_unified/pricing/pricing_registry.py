@@ -478,7 +478,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_1h_r=_FREE_WRITES,
             ),
         ),
-        # ── Google completions (deprecated: shutdown date passed) ───────────
+        # ── Google completions (retired: delisted and hard 404, probed
+        # 2026-08-26; sunset date below now reads as the withdrawal) ────────
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.0-flash",
@@ -491,7 +492,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash",
         ),
@@ -507,7 +508,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash",
         ),
@@ -523,7 +524,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash-lite",
         ),
@@ -539,7 +540,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 6, 1),
             replacement="gemini-2.5-flash-lite",
         ),
