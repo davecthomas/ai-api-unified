@@ -4,6 +4,29 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.25.2
+
+- The bedrock engine now accepts the same documented `{role, content}` messages
+  shape 2.25.1 fixed on google-gemini. It forwarded the caller's list straight
+  to the Converse API, which requires `content` as a list of blocks, so botocore
+  rejected a bare string client-side before the request left the process. This
+  is the same defect as the Gemini one, on a second engine.
+- `_normalize_messages` on the bedrock engine wraps string content as
+  `[{"text": ...}]`. Converse already names the assistant role `assistant`, so
+  only the content wrapping differs. Entries whose content is already a list
+  pass through untouched, keeping a history built from
+  `extend_messages_with_turn` and `build_tool_result_message` valid, and
+  anything else raises a `ValueError` naming both helpers.
+- All five completions engines are now covered by
+  `TestDocumentedShapeAcrossProviders`, which sends the documented shape
+  through each engine and validates what reaches the SDK against that
+  provider's own client-side validator where one ships — the google-genai
+  pydantic request model and the botocore Converse parameter validator. An
+  engine whose wire shape diverges from the documented contract fails there
+  rather than in a caller's process.
+- Audited and unchanged: anthropic, openai, and openai-responses all accept
+  string content natively, so they keep the identity default.
+
 ## 2.25.1
 
 - The google-gemini engine now accepts the `{role, content}` messages shape

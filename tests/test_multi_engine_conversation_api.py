@@ -660,6 +660,175 @@ class TestInterfaceMessageShape:
         assert client._normalize_messages(None) is None
 
 
+DOCUMENTED_MESSAGES: list[dict[str, Any]] = [{"role": "user", "content": "Ready?"}]
+
+
+def _outbound_gemini() -> Any:
+    mock_client = Mock()
+    client = _build_gemini_client(mock_client)
+    mock_client.models.generate_content.return_value = _gemini_response(
+        [_gemini_text_part("Yes")]
+    )
+    client.send_conversation("sys", list(DOCUMENTED_MESSAGES))
+    return mock_client.models.generate_content.call_args.kwargs["contents"]
+
+
+def _outbound_bedrock() -> Any:
+    client = _build_bedrock_client()
+    client.client.converse.return_value = _converse_response([{"text": "Yes"}])
+    client.send_conversation("sys", list(DOCUMENTED_MESSAGES))
+    return client.client.converse.call_args.kwargs["messages"]
+
+
+def _outbound_openai_chat() -> Any:
+    client = _build_openai_client()
+    client.client.chat.completions.create.return_value = _chat_response(
+        _chat_message(content="Yes")
+    )
+    client.send_conversation("sys", list(DOCUMENTED_MESSAGES))
+    return client.client.chat.completions.create.call_args.kwargs["messages"]
+
+
+def _outbound_openai_responses() -> Any:
+    client = _build_responses_client()
+    client.client.responses.create.return_value = Mock(
+        output=[],
+        output_text="Yes",
+        status="completed",
+        usage=_responses_usage(),
+    )
+    client.send_conversation("sys", list(DOCUMENTED_MESSAGES))
+    return client.client.responses.create.call_args.kwargs["input"]
+
+
+def _outbound_anthropic() -> Any:
+    from ai_api_unified.completions.ai_anthropic_completions import (
+        AiAnthropicCompletions,
+    )
+
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+        client = AiAnthropicCompletions(model="claude-opus-4-8")
+    client.client = Mock()
+    client.client.messages.create.return_value = Mock(
+        content=[Mock(spec=["type", "text"], type="text", text="Yes")],
+        stop_reason="end_turn",
+        usage=Mock(input_tokens=10, output_tokens=5, cache_read_input_tokens=None),
+    )
+    client.send_conversation("sys", list(DOCUMENTED_MESSAGES))
+    return client.client.messages.create.call_args.kwargs["messages"]
+
+
+def _assert_gemini_valid(outbound: Any) -> None:
+    """google-genai validates in-process; the real model is the oracle."""
+    genai_module.types._GenerateContentParameters(model="m", contents=outbound)
+
+
+def _assert_bedrock_valid(outbound: Any) -> None:
+    """botocore validates Converse params client-side; use its own validator."""
+    import botocore.session
+    from botocore.validate import ParamValidator
+
+    operation = (
+        botocore.session.get_session()
+        .get_service_model("bedrock-runtime")
+        .operation_model("Converse")
+    )
+    report = ParamValidator().validate(
+        {"modelId": "m", "messages": outbound, "system": [{"text": "s"}]},
+        operation.input_shape,
+    )
+    assert not report.generate_report(), report.generate_report()
+
+
+def _assert_string_content_preserved(outbound: Any) -> None:
+    """These SDKs accept str content, so the identity default is correct.
+
+    The engine may add its own entries (openai carries the system prompt as a
+    message), so the property is that the caller's message survives verbatim,
+    not that it is the only entry.
+    """
+    assert DOCUMENTED_MESSAGES[0] in outbound
+    for entry in outbound:
+        assert isinstance(entry["content"], str), entry
+
+
+class TestBedrockMessageShape:
+    """Bedrock's half of the class: Converse needs content blocks, not a string."""
+
+    def test_documented_shape_becomes_content_blocks(self):
+        client = _build_bedrock_client()
+        client.client.converse.return_value = _converse_response([{"text": "Yes"}])
+        client.send_conversation("sys", [{"role": "user", "content": "Ready?"}])
+        sent = client.client.converse.call_args.kwargs["messages"]
+        assert sent == [{"role": "user", "content": [{"text": "Ready?"}]}]
+
+    def test_assistant_role_is_unchanged(self):
+        """Converse already names the assistant role "assistant"."""
+        client = _build_bedrock_client()
+        client.client.converse.return_value = _converse_response([{"text": "ok"}])
+        client.send_conversation(
+            "sys",
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+        )
+        sent = client.client.converse.call_args.kwargs["messages"]
+        assert [m["role"] for m in sent] == ["user", "assistant"]
+        assert sent[1]["content"] == [{"text": "hello"}]
+
+    def test_converse_shaped_helper_output_passes_through(self):
+        client = _build_bedrock_client()
+        client.client.converse.return_value = _converse_response([{"text": "ok"}])
+        tool_result = client.build_tool_result_message(
+            tool_call_id="tu_1", result={"temp_f": 55}, is_error=False
+        )
+        replayed = {"role": "assistant", "content": [{"text": "prior"}]}
+        messages = [{"role": "user", "content": "hi"}, replayed, tool_result]
+        client.send_conversation("sys", messages)
+        sent = client.client.converse.call_args.kwargs["messages"]
+        assert sent[0] == {"role": "user", "content": [{"text": "hi"}]}
+        # Helper output arrives untouched, not re-wrapped as a text block.
+        assert sent[1] is replayed
+        assert sent[2] is tool_result
+        assert len(sent) == 3
+
+    def test_foreign_engine_content_names_the_helpers(self):
+        """Gemini-shaped history must not be forwarded to botocore."""
+        client = _build_bedrock_client()
+        with pytest.raises(ValueError, match="build_tool_result_message"):
+            client.send_conversation(
+                "sys", [{"role": "model", "parts": [{"text": "hi"}]}]
+            )
+
+
+class TestDocumentedShapeAcrossProviders:
+    """Every engine accepts the {role, content} shape ai_base documents.
+
+    This is the class-level guard. A new engine, or an engine whose wire shape
+    drifts, fails here rather than in a caller's process. Where the SDK ships a
+    client-side validator, the outbound payload is checked against that
+    validator rather than against a shape this test asserts by hand.
+    """
+
+    @pytest.mark.parametrize(
+        "engine, outbound_fn, assert_fn",
+        [
+            ("google-gemini", _outbound_gemini, _assert_gemini_valid),
+            ("bedrock", _outbound_bedrock, _assert_bedrock_valid),
+            ("openai", _outbound_openai_chat, _assert_string_content_preserved),
+            (
+                "openai-responses",
+                _outbound_openai_responses,
+                _assert_string_content_preserved,
+            ),
+            ("anthropic", _outbound_anthropic, _assert_string_content_preserved),
+        ],
+    )
+    def test_documented_shape_is_accepted(self, engine, outbound_fn, assert_fn):
+        assert_fn(outbound_fn())
+
+
 def _gemini_catalogue_model(name: str, actions: list[str] | None) -> Mock:
     model_metadata = Mock(spec=["name", "supported_actions"])
     model_metadata.name = name
