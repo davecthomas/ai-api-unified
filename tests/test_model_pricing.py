@@ -5,6 +5,7 @@ Tests for the structured pricing descriptor, registry, and lifecycle policy.
 
 import os
 import warnings
+from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ import pytest
 
 from ai_api_unified.ai_provider_exceptions import AiProviderConfigurationError
 from ai_api_unified.pricing import (
+    AIModelInfo,
     AIModelPricing,
     AITokenRates,
     ModelLifecycleStatus,
@@ -25,6 +27,7 @@ from ai_api_unified.pricing.pricing_registry import (
     DICT_MODEL_INFO,
     PROVIDER_ANTHROPIC,
     PROVIDER_BEDROCK,
+    PROVIDER_GOOGLE,
 )
 
 
@@ -325,8 +328,30 @@ class TestRegistry:
 class TestLifecycle:
     """enforce_model_lifecycle policy per status."""
 
+    # Deprecation is a state the catalogue passes through, so pinning these
+    # tests to whichever real model is deprecated this month makes them fail
+    # when that model is retired. This entry is owned by the test.
+    DEPRECATED_FIXTURE: str = "test-only-deprecated-model"
+
     def setup_method(self) -> None:
         pricing_registry._SET_WARNED_MODELS.clear()
+        pricing_registry.DICT_MODEL_INFO[(PROVIDER_GOOGLE, self.DEPRECATED_FIXTURE)] = (
+            AIModelInfo(
+                provider=PROVIDER_GOOGLE,
+                model=self.DEPRECATED_FIXTURE,
+                status=ModelLifecycleStatus.DEPRECATED,
+                sunset_date=date(2099, 1, 1),
+                recommended_replacement="gemini-2.5-flash",
+            )
+        )
+
+    def teardown_method(self) -> None:
+        pricing_registry.DICT_MODEL_INFO.pop(
+            (PROVIDER_GOOGLE, self.DEPRECATED_FIXTURE), None
+        )
+        pricing_registry._SET_WARNED_MODELS.discard(
+            (PROVIDER_GOOGLE, self.DEPRECATED_FIXTURE)
+        )
 
     def test_active_model_passes_silently(self) -> None:
         with warnings.catch_warnings(record=True) as caught:
@@ -352,10 +377,10 @@ class TestLifecycle:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            enforce_model_lifecycle("google", "imagen-4.0-generate-001")
+            enforce_model_lifecycle("google", self.DEPRECATED_FIXTURE)
         dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
         assert len(dep) == 1
-        assert "scheduled for withdrawal on 2026-08-17" in str(dep[0].message)
+        assert "scheduled for withdrawal on 2099-01-01" in str(dep[0].message)
 
         # The Gemini 2.0 family is retired, so its sunset now reads as history.
         with pytest.raises(AiProviderConfigurationError) as excinfo:
@@ -365,17 +390,16 @@ class TestLifecycle:
     def test_deprecated_model_warns_once(self) -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            enforce_model_lifecycle("google", "imagen-4.0-generate-001")
-            enforce_model_lifecycle("google", "imagen-4.0-generate-001")
+            enforce_model_lifecycle("google", self.DEPRECATED_FIXTURE)
+            enforce_model_lifecycle("google", self.DEPRECATED_FIXTURE)
         dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
         assert len(dep) == 1  # deduped per process
-        # names replacement
-        assert "current-generation Gemini image model" in str(dep[0].message)
+        assert "gemini-2.5-flash" in str(dep[0].message)  # names replacement
 
     def test_strict_mode_escalates_deprecated_to_error(self) -> None:
         with patch.dict(os.environ, {"AI_STRICT_DEPRECATIONS": "1"}):
             with pytest.raises(AiProviderConfigurationError, match="deprecated"):
-                enforce_model_lifecycle("google", "imagen-4.0-generate-001")
+                enforce_model_lifecycle("google", self.DEPRECATED_FIXTURE)
 
 
 class TestClientCostApi:
