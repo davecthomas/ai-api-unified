@@ -24,8 +24,15 @@ version lives in `pyproject.toml` (see the README release section).
   signature, bedrock from the `bedrock-runtime` Converse input shape. An SDK
   that adds an option keeps working without an edit here, the lesson of the
   2.25.2 block-list regression.
-- An engine whose SDK cannot be introspected forwards every key unchanged.
-  Dropping a caller's option on a guess is worse than passing it through.
+- An engine whose SDK cannot be introspected forwards every key unchanged,
+  and logs why. Dropping a caller's option on a guess is worse than passing it
+  through and letting the SDK speak.
+- The signature walk and its per-class cache live once on `AIBaseCompletions`.
+  An engine whose options are keyword arguments implements only
+  `_sdk_option_method`, handing back the unbound SDK method and a log label.
+  The cache is keyed on the owning class through `__dict__`, so
+  `AiOpenAIResponsesCompletions`, which subclasses `AiOpenAICompletions`,
+  resolves its own options rather than inheriting the parent's.
 - The reserved `retry_policy` key still splits out ahead of the filter.
 - Minor rather than patch: an option a caller passes today is now dropped and
   logged instead of raising, which is a behavior change on a public argument.
