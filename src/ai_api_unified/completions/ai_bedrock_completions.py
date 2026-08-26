@@ -1158,10 +1158,12 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         # Normal return with the caller-facing conversation turn.
         return observed_result.return_value
 
-    # Converse ContentBlock members, per the bedrock-runtime service model. A
-    # list whose entries name none of these is another engine's block format
-    # (Anthropic and OpenAI tag blocks with "type"), which botocore rejects.
-    CONVERSE_CONTENT_BLOCK_KEYS: ClassVar[frozenset[str]] = frozenset(
+    # Converse ContentBlock members as of botocore 1.43.40, used only when the
+    # installed service model cannot be read. AWS adds members over time
+    # (1.43.80 added toolAddition and toolRemoval), so a frozen list would
+    # reject blocks Converse accepts; _converse_content_block_keys reads the
+    # installed model instead and falls back to this.
+    CONVERSE_CONTENT_BLOCK_KEYS_FALLBACK: ClassVar[frozenset[str]] = frozenset(
         {
             "audio",
             "cachePoint",
@@ -1177,6 +1179,10 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             "video",
         }
     )
+
+    # Cache for the resolved member set; the service model does not change
+    # within a process, and shape lookup walks a large JSON model.
+    _FROZENSET_CONVERSE_BLOCK_KEYS: ClassVar[frozenset[str] | None] = None
 
     def _normalize_messages(
         self,
@@ -1225,7 +1231,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 raise ValueError(
                     "bedrock messages must carry string content or Converse "
                     "content blocks ("
-                    + ", ".join(sorted(self.CONVERSE_CONTENT_BLOCK_KEYS))
+                    + ", ".join(sorted(self._converse_content_block_keys()))
                     + "); got "
                     f"{type(content).__name__}. Replay assistant turns via "
                     "extend_messages_with_turn and tool results via "
@@ -1239,6 +1245,44 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             )
         # Normal return with Converse-shaped messages.
         return list_normalized
+
+    @classmethod
+    def _converse_content_block_keys(cls) -> frozenset[str]:
+        """
+        Returns the Converse ContentBlock members the installed SDK accepts.
+
+        Read from the bedrock-runtime service model rather than hardcoded, so
+        a botocore upgrade that adds a block type does not make this engine
+        reject content Converse accepts. Resolved once per process.
+
+        Returns:
+            Member names of the ContentBlock shape, or
+            CONVERSE_CONTENT_BLOCK_KEYS_FALLBACK when the model cannot be read.
+        """
+        if cls._FROZENSET_CONVERSE_BLOCK_KEYS is not None:
+            # Early return with the resolved set; the model is process-stable.
+            return cls._FROZENSET_CONVERSE_BLOCK_KEYS
+        try:
+            import botocore.session
+
+            frozenset_keys: frozenset[str] = frozenset(
+                botocore.session.get_session()
+                .get_service_model("bedrock-runtime")
+                .shape_for("ContentBlock")
+                .members.keys()
+            )
+        except Exception as exception:
+            # A botocore whose model or API differs must not break sending;
+            # the fallback still covers every block this library emits.
+            _LOGGER.debug(
+                "Could not read the Converse ContentBlock shape (%s); "
+                "using the built-in member list.",
+                exception,
+            )
+            frozenset_keys = cls.CONVERSE_CONTENT_BLOCK_KEYS_FALLBACK
+        AiBedrockCompletions._FROZENSET_CONVERSE_BLOCK_KEYS = frozenset_keys
+        # Normal return with the resolved member set.
+        return frozenset_keys
 
     @classmethod
     def _is_converse_block_list(cls, content: list[Any]) -> bool:
@@ -1269,7 +1313,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         return all(
             isinstance(block, dict)
             and bool(block)
-            and block.keys() <= cls.CONVERSE_CONTENT_BLOCK_KEYS
+            and block.keys() <= cls._converse_content_block_keys()
             for block in content
         )
 

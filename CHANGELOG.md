@@ -4,6 +4,23 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.25.3
+
+- The bedrock engine now reads the Converse `ContentBlock` members from the
+  installed `bedrock-runtime` service model instead of a hardcoded list.
+  2.25.2 froze the 12 members present in botocore 1.43.40; botocore 1.43.80
+  added `toolAddition` and `toolRemoval`, so on a current boto3 the engine
+  raised `ValueError` for content blocks Converse accepts — the same
+  in-process rejection 2.25.2 set out to remove. The member set resolves once
+  per process and falls back to the built-in list when the model cannot be
+  read.
+- `tests/test_multi_engine_conversation_api.py` asserted the hardcoded list
+  equalled the service model, so the mocked suite went red on any boto3
+  upgrade rather than only when the library was wrong. It now checks that the
+  resolved set matches the installed model, that the fallback names only real
+  members, that a member a newer SDK adds passes through, and that an
+  unreadable model falls back rather than breaking the send path.
+
 ## 2.25.2
 
 - The bedrock engine now accepts the same documented `{role, content}` messages
