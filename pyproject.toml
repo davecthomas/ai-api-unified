@@ -36,7 +36,7 @@
 [project]
 name = "ai_api_unified"
 
-version = "2.26.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
+version = "2.26.1" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
 description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
@@ -106,8 +106,16 @@ voice = [
 ]
 google_gemini = [
   "google-cloud-speech>=2.25.0,<3.0.0",
-  "protobuf>=3.20.2,<5.0.0dev",
-  "googleapis-common-protos>=1.63.0,<2.0.0",
+  # protobuf and googleapis-common-protos are deliberately NOT listed. Both are
+  # required here, but only transitively: google-api-core, google-cloud-speech,
+  # google-cloud-texttospeech and proto-plus depend on protobuf, and
+  # google-api-core and grpcio-status depend on googleapis-common-protos. This
+  # library imports neither. Any range we state can only conflict with what
+  # those libraries already enforce -- a "protobuf<5.0.0dev" ceiling here made
+  # the extra uninstallable for every client on protobuf 5 or later through
+  # 2.26.0, and our "googleapis-common-protos>=1.63.0" floor sat below the
+  # >=1.69.2 google-api-core actually requires. Let the Google libraries own
+  # both ranges.
   "google-genai (>=2.10.0,<3.0.0)",
   "google-cloud-texttospeech (>=2.29.0)",
 ]

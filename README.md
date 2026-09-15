@@ -1,4 +1,4 @@
-# ai-api-unified 2.26.0
+# ai-api-unified 2.26.1
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
 
@@ -87,6 +87,15 @@ never triggers pydub's warnings. The `azure_tts` and `elevenlabs` extras
 include the audio dependencies; Google and OpenAI voice pair their provider
 extra with `voice`. Using a voice feature without the audio dependencies
 raises `AiProviderDependencyUnavailableError` naming the extra to install.
+
+The `google_gemini` extra states no protobuf range of its own as of 2.26.1.
+Releases through 2.26.0 capped it below 5.0, which made the extra uninstallable
+in any application already on protobuf 5 or later. protobuf is still required
+here, but only transitively: `google-api-core`, `google-cloud-speech`,
+`google-cloud-texttospeech` and `proto-plus` all depend on it, and they enforce
+their own ranges. This library never imports protobuf, so any range it declared
+could only conflict with theirs. Installs are verified against protobuf 4.25.8,
+5.29.5, 6.33.6 and 7.36.1.
 
 ### Install in a Local Clone
 
