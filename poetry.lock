@@ -5065,7 +5065,7 @@ azure-tts = ["audioop-lts", "azure-cognitiveservices-speech", "pydub"]
 bedrock = ["boto3"]
 dev = ["black", "pytest", "pytest-asyncio", "ruff"]
 elevenlabs = ["audioop-lts", "elevenlabs", "pydub"]
-google-gemini = ["google-cloud-speech", "google-cloud-texttospeech", "google-genai", "googleapis-common-protos"]
+google-gemini = ["google-cloud-speech", "google-cloud-texttospeech", "google-genai"]
 middleware-pii-redaction = ["presidio-analyzer", "presidio-anonymizer", "spacy", "usaddress"]
 middleware-pii-redaction-large = ["presidio-analyzer", "presidio-anonymizer", "spacy", "usaddress"]
 middleware-pii-redaction-small = ["presidio-analyzer", "presidio-anonymizer", "spacy", "usaddress"]
@@ -5078,4 +5078,4 @@ voyage = ["voyageai"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "b508132b679f79214f9c6f19986e8bca78036ce192f9f7eac58a360d623c3455"
+content-hash = "23b6f795516a50cc59b29f4ca413ff112d9b8d68251f30956fdbd6126d4e3cae"
