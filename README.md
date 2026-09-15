@@ -88,11 +88,14 @@ include the audio dependencies; Google and OpenAI voice pair their provider
 extra with `voice`. Using a voice feature without the audio dependencies
 raises `AiProviderDependencyUnavailableError` naming the extra to install.
 
-The `google_gemini` extra accepts protobuf 4.25.8 through 6.x as of 2.26.1.
-Earlier releases capped it below 5.0, which blocked installs in applications
-already on protobuf 5 or 6. This library never imports protobuf itself; the
-range mirrors what `google-api-core` supports, so the extra no longer holds a
-client's protobuf version back.
+The `google_gemini` extra states no protobuf range of its own as of 2.26.1.
+Releases through 2.26.0 capped it below 5.0, which made the extra uninstallable
+in any application already on protobuf 5 or later. protobuf is still required
+here, but only transitively: `google-api-core`, `google-cloud-speech`,
+`google-cloud-texttospeech` and `proto-plus` all depend on it, and they enforce
+their own ranges. This library never imports protobuf, so any range it declared
+could only conflict with theirs. Installs are verified against protobuf 4.25.8,
+5.29.5, 6.33.6 and 7.36.1.
 
 ### Install in a Local Clone
 

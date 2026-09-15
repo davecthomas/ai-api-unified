@@ -106,10 +106,12 @@ voice = [
 ]
 google_gemini = [
   "google-cloud-speech>=2.25.0,<3.0.0",
-  # Not imported by this library; listed only to state the range we support.
-  # The ceiling tracks google-api-core's own (>=4.25.8,<7.0.0) — a tighter one
-  # here would cap every client of the extra. See PR that shipped 2.26.1.
-  "protobuf>=4.25.8,<7.0.0",
+  # protobuf is deliberately NOT listed. It is required here, but only
+  # transitively (google-api-core, google-cloud-speech, google-cloud-texttospeech,
+  # proto-plus all depend on it) and this library never imports it. Any range we
+  # state can only conflict with what those libraries already enforce: a
+  # "<5.0.0dev" ceiling here blocked every client already on protobuf 5 or 6
+  # through 2.26.0. Let the Google libraries own the range.
   "googleapis-common-protos>=1.63.0,<2.0.0",
   "google-genai (>=2.10.0,<3.0.0)",
   "google-cloud-texttospeech (>=2.29.0)",
