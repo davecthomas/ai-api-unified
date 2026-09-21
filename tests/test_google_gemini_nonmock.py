@@ -27,6 +27,12 @@ from ai_api_unified.embeddings.ai_google_gemini_embeddings import (
 )
 from ai_api_unified.util.utils import similarity_score
 
+# Every test in this module reaches a live provider API and bills real calls.
+# The module-level marker is what keeps them out of `-m "not nonmock"` runs;
+# before it, they were excluded only by an absent API key, so they ran inside
+# the mocked suite on any machine holding credentials.
+pytestmark = pytest.mark.nonmock
+
 GOOGLE_GEMINI_HOSTNAME: str = "generativelanguage.googleapis.com"
 TEST_GEMINI_COMPLETIONS_MODEL: str = "gemini-2.5-flash"
 TEST_GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"

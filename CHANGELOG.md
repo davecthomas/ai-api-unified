@@ -4,6 +4,81 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.27.0
+
+### Removed
+
+- `ai_api_unified.middleware.impl.middleware_extensibility_poc` is gone, along
+  with its test. It was a 372-line feasibility spike for hard-wired SSN
+  last-4 detection, dead since the PII redaction middleware shipped: nothing
+  under `src/` imported it, no `__init__` exported it, and only its own test
+  loaded it. Its own docstring said it was "not wired into the production
+  middleware flow" while it shipped in every wheel. Production SSN redaction
+  is unaffected and lives in the `middleware-pii-redaction` extra.
+
+  This is a minor rather than a major bump: the module sat under
+  `middleware/impl/`, outside the public surface the README documents, which
+  is the stable base interfaces and the factories. Anyone importing it
+  directly was reaching past that boundary into a module labelled a
+  proof of concept.
+
+### Changed
+
+
+- Packaging metadata now states maturity and provenance: a
+  `Development Status :: 5 - Production/Stable` classifier, audience and topic
+  classifiers, and a `[project.urls]` table pointing at the repository, issues,
+  and changelog. The PyPI page previously carried no status and no links.
+- Added a GitHub Actions CI workflow. It runs the full mocked suite and the
+  version-sync test on Python 3.11, 3.12 and 3.13, plus ruff and black. The
+  repository had no automated checks before this.
+- Added `CONTRIBUTING.md` and `SECURITY.md`.
+- 18 tests in `test_google_gemini_nonmock.py` and `test_model_switch_nonmock.py`
+  now carry the `nonmock` marker. They call live provider APIs, but nothing
+  excluded them from `-m "not nonmock"` runs except an absent API key, so on
+  a machine holding credentials they ran inside the mocked suite and billed
+  real calls on every run. The 38 tests in `test_pii_redactor_nonmock.py` stay
+  unmarked deliberately: Presidio runs locally, they reach no provider, and
+  they belong in the mocked suite.
+- `tests/conftest.py` no longer forces one developer's personal AWS SSO
+  profile onto every run. It hardcoded that profile name and set
+  `AWS_PROFILE` to it whenever the variable was unset, so the mocked suite
+  raised `ProfileNotFound` on any machine without it, a fresh clone
+  included. The profile is now used only when botocore can see it, with
+  placeholder credentials as the fallback, and an explicitly chosen
+  `AWS_PROFILE` still wins.
+- Configured `per-file-ignores` for `E402` under `tests/`, where
+  `pytest.importorskip` for an optional extra must precede the imports it
+  guards. Those seven errors were the only thing standing between the existing
+  lint command and a green CI job.
+- Renamed `docs/middleware-extensibility-pattern-pii-poc.md` to drop `-poc`,
+  marked it as delivered design history, and reworded the Titan
+  `generate_embeddings_batch` docstring, which described the library itself as
+  a POC. The PII redaction middleware it plans ships today as the
+  `middleware-pii-redaction` extra.
+
+Beyond the removal above, no functional change: no behavior of any engine,
+factory, or middleware changed in this release.
+
+## 2.26.1
+
+- The `google_gemini` extra no longer states a protobuf range. It pinned
+  `protobuf>=3.20.2,<5.0.0dev`, which made the extra uninstallable in any
+  application already on protobuf 5 or later: pip reported
+  `ResolutionImpossible`. protobuf is required here only transitively, by
+  `google-api-core`, `google-cloud-speech`, `google-cloud-texttospeech` and
+  `proto-plus`, each of which enforces its own range. This library imports
+  protobuf nowhere, so any range it declared could only conflict with theirs.
+- The `googleapis-common-protos` entry is gone for the same reason. It was
+  never imported here, `google-api-core` and `grpcio-status` both require it,
+  and the stated floor of `>=1.63.0` sat below the `>=1.69.2` that
+  `google-api-core` actually requires.
+- Installs are verified against protobuf 4.25.8, 5.29.5, 6.33.6 and 7.36.1.
+- The lock moved across the protobuf and gRPC chain: protobuf 4.25.8 to 6.33.6
+  and `grpcio-status` 1.62.3 to 1.84.0, which had been held 19 minor versions
+  behind `grpcio` by the old ceiling, since 1.63 and later require protobuf
+  5.26 or newer.
+
 ## 2.26.0
 
 - Every completions engine now honors the `provider_options` contract in

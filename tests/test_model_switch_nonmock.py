@@ -15,6 +15,12 @@ from ai_api_unified.ai_base import (
 
 from ai_api_unified.util.utils import similarity_score
 
+# Every test in this module reaches a live provider API and bills real calls.
+# The module-level marker is what keeps them out of `-m "not nonmock"` runs;
+# before it, they were excluded only by an absent API key, so they ran inside
+# the mocked suite on any machine holding credentials.
+pytestmark = pytest.mark.nonmock
+
 GOOGLE_GEMINI_HOSTNAME: str = "generativelanguage.googleapis.com"
 
 

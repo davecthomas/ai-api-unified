@@ -1,5 +1,9 @@
 # AI API Middleware Extensibility Pattern for Unsupported Detection
 
+> Status: delivered. This is the design and rollout record for the PII
+> redaction middleware, which ships today as the `middleware-pii-redaction`
+> extra. It is kept for design rationale, not as a statement of project status.
+
 ## Summary
 
 This document describes a general middleware extensibility pattern for cases where
@@ -498,15 +502,15 @@ Phase A branch unchanged.
 | F | `69-mep-f-dob` | `69-mep-e-cc-last4` |
 | G | `69-mep-g-hardening-docs` | `69-mep-f-dob` |
 
-#### PR A: Presidio Feasibility POC (Hard-Wired SSN Last-4)
+#### PR A: Presidio feasibility spike (hard-wired SSN last-4)
 Scope:
-- Add a standalone POC module (`middleware_extensibility_poc.py`) under middleware impl.
+- Add a standalone spike module (`middleware_extensibility_poc.py`) under middleware impl.
 - Implement hard-wired Presidio SSN last-4 detection with strict nearby SSN context checks.
 - Keep this path isolated from production middleware wiring.
 
 Files likely touched:
 - `middleware/impl/middleware_extensibility_poc.py`
-- optional POC-focused test module
+- optional spike-focused test module
 
 Behavior:
 - No production behavior change.
@@ -521,7 +525,7 @@ Tests:
 - Verify only context-qualified spans are redacted.
 
 Exit criteria:
-- POC can detect/redact SSN last-4 with acceptable precision in sample corpus.
+- The spike can detect/redact SSN last-4 with acceptable precision in sample corpus.
 - No impact to existing middleware runtime path.
 
 #### PR B: Typed Config and No-Op Extension Contract
@@ -699,7 +703,7 @@ Exit criteria:
 - Feature considered production-ready.
 
 ### Suggested Review Strategy
-- Keep each PR under one primary concern (POC, config, plumbing, SSN, CC, DOB, hardening).
+- Keep each PR under one primary concern (spike, config, plumbing, SSN, CC, DOB, hardening).
 - Require side-by-side before/after examples in PR descriptions.
 - For recognizer PRs, include a false-positive table in the PR description:
   - sample text

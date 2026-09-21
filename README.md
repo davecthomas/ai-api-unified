@@ -1,6 +1,17 @@
-# ai-api-unified 2.26.1
+# ai-api-unified 2.27.0
+
+[![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
+[![Python](https://img.shields.io/pypi/pyversions/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
+
+**Production status.** This library is in production use, serving live traffic
+across several systems. It is published on PyPI on a regular release cadence,
+follows [semantic versioning](https://semver.org/), and every release is gated
+on the full mocked regression suite. Breaking changes land only in a major
+version, and each release is recorded in [CHANGELOG.md](CHANGELOG.md).
 
 Author: Dave Thomas  
 Install name: `ai-api-unified`  

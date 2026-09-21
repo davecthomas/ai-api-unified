@@ -266,8 +266,20 @@ class AiTitanEmbeddings(AIBaseEmbeddings):
         self, texts: list[str], *, input_type: str | None = None
     ) -> list[dict[str, Any]]:
         """
-        This isn't really a batch call; We'd need to use S2 to make that work and this POC isn't
-        designed for that."""
+        Embeds each text and returns the results together.
+
+        Titan exposes no server-side batch embedding endpoint, so this fans the
+        inputs out through `generate_embeddings_in_parallel` and issues one
+        request per text, aggregating the token counts into a single observed
+        result. A true server-side batch would need Bedrock batch inference.
+
+        Args:
+            texts: Non-empty list of input texts to embed.
+            input_type: Optional provider hint, accepted for interface parity.
+
+        Returns:
+            One embedding payload dict per input text, in input order.
+        """
         if not texts or not all(
             isinstance(text, str) and text.strip() for text in texts
         ):
