@@ -36,7 +36,7 @@
 [project]
 name = "ai_api_unified"
 
-version = "2.26.1" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
+version = "2.27.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
 description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
@@ -56,7 +56,12 @@ keywords = [
   "api",
 ]
 classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
@@ -79,6 +84,12 @@ dependencies = [
   # [project.optional-dependencies] below (for example
   # using poetry add 'ai-api-unified[google_gemini]').
 ]
+
+[project.urls]
+Homepage = "https://github.com/davecthomas/ai-api-unified"
+Repository = "https://github.com/davecthomas/ai-api-unified"
+Changelog = "https://github.com/davecthomas/ai-api-unified/blob/main/CHANGELOG.md"
+Issues = "https://github.com/davecthomas/ai-api-unified/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.4.0,<9.0.0", "pytest-asyncio>=0.24.0,<1.0.0", "ruff>=0.4.4,<1.0.0", "black>=24.4.2,<25.0.0"]
@@ -162,6 +173,12 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 norecursedirs = [".git", ".tox", ".venv", "build", "dist"]
 pythonpath = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+# These modules call pytest.importorskip() for an optional provider extra
+# before importing the module under test, so those imports legitimately follow
+# executable code. The alternative is a skip that fails at import instead.
+"tests/*" = ["E402"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

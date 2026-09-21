@@ -32,4 +32,4 @@ Two non-overlapping middleware roles are defined:
 - Recognizer extensions are additive and do not require changes to existing middleware contracts.
 
 ## Evidence
-`docs/observability_middleware_design.md` (§ Middleware Roles); `docs/middleware-extensibility-pattern-pii-poc.md` (§ Scope and Design Goal); commit `7748caf`.
+`docs/observability_middleware_design.md` (§ Middleware Roles); `docs/middleware-extensibility-pattern-pii.md` (§ Scope and Design Goal); commit `7748caf`.

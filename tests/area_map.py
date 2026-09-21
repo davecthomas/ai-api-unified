@@ -120,7 +120,6 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
         "engine_bedrock",
     ),
     "test_middleware_config.py": ("middleware",),
-    "test_middleware_extensibility_poc.py": ("middleware",),
     "test_observability_docs_release_phase_h.py": ("middleware",),
     "test_observability_log_cleanup_phase_g.py": ("middleware",),
     "test_observability_middleware_phase_a.py": ("middleware",),

@@ -19,4 +19,4 @@ The middleware layer is split into two non-overlapping roles:
 
 **Rationale:** Keeps text-transform correctness guarantees separate from observability fail-open semantics, preventing either from compromising the other.
 
-**Evidence:** `docs/observability_middleware_design.md` (§ Middleware Roles); `docs/middleware-extensibility-pattern-pii-poc.md` (§ Scope and Design Goal); commit `7748caf`.
+**Evidence:** `docs/observability_middleware_design.md` (§ Middleware Roles); `docs/middleware-extensibility-pattern-pii.md` (§ Scope and Design Goal); commit `7748caf`.
