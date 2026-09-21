@@ -33,6 +33,13 @@ version lives in `pyproject.toml` (see the README release section).
   version-sync test on Python 3.11, 3.12 and 3.13, plus ruff and black. The
   repository had no automated checks before this.
 - Added `CONTRIBUTING.md` and `SECURITY.md`.
+- 18 tests in `test_google_gemini_nonmock.py` and `test_model_switch_nonmock.py`
+  now carry the `nonmock` marker. They call live provider APIs, but nothing
+  excluded them from `-m "not nonmock"` runs except an absent API key, so on
+  a machine holding credentials they ran inside the mocked suite and billed
+  real calls on every run. The 38 tests in `test_pii_redactor_nonmock.py` stay
+  unmarked deliberately: Presidio runs locally, they reach no provider, and
+  they belong in the mocked suite.
 - `tests/conftest.py` no longer forces one developer's personal AWS SSO
   profile onto every run. It hardcoded that profile name and set
   `AWS_PROFILE` to it whenever the variable was unset, so the mocked suite
