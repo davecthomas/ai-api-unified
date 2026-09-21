@@ -36,6 +36,18 @@ DICT_DUMMY_AWS_CREDENTIALS: dict[str, str] = {
     "AWS_SESSION_TOKEN": "testing",
     "AWS_DEFAULT_REGION": "us-east-1",
 }
+# Placeholders only, for engines that gate on a key being present before the
+# patched SDK client is built. Never used to authenticate.
+DICT_PLACEHOLDER_PROVIDER_KEYS: dict[str, str] = {
+    "GOOGLE_GEMINI_API_KEY": "testing-not-a-real-key",
+}
+# Applied per test file, never process-wide. Some tests in *_nonmock.py carry
+# no `nonmock` marker and reach the live API; they skip only because no key is
+# configured, so exporting a placeholder globally would switch them on and send
+# real requests with an invalid key. Only files listed here get the placeholder.
+FROZENSET_FILES_NEEDING_PLACEHOLDER_KEYS: frozenset[str] = frozenset(
+    {"test_google_gemini.py"}
+)
 
 
 def _aws_profile_is_configured(profile_name: str) -> bool:
@@ -234,3 +246,30 @@ def embedmodel(request: pytest.FixtureRequest) -> str:
 @pytest.fixture(scope="session")
 def llmmodel(request: pytest.FixtureRequest) -> str:
     return request.config.getoption("llmmodel")
+
+
+@pytest.fixture(autouse=True)
+def placeholder_provider_keys(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Supplies placeholder provider keys to the mocked test files that need them.
+
+    `ai_google_base` reads GOOGLE_GEMINI_API_KEY through its own EnvSettings,
+    which a test patching EnvSettings in the completions module does not cover.
+    Seven fully mocked tests therefore failed on any machine without a real key,
+    CI and a fresh clone included, despite patching the SDK and sending nothing.
+
+    Scoped per file on purpose. monkeypatch reverts after each test, and a real
+    key already in the environment always wins.
+    """
+    if os.path.basename(str(request.node.fspath)) not in (
+        FROZENSET_FILES_NEEDING_PLACEHOLDER_KEYS
+    ):
+        # Normal return: this file reaches the network or needs no key.
+        return None
+    for str_var_name, str_placeholder in DICT_PLACEHOLDER_PROVIDER_KEYS.items():
+        if not os.environ.get(str_var_name):
+            monkeypatch.setenv(str_var_name, str_placeholder)
+    # Normal return after seeding placeholders for this test.
+    return None
