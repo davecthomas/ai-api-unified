@@ -33,6 +33,13 @@ version lives in `pyproject.toml` (see the README release section).
   version-sync test on Python 3.11, 3.12 and 3.13, plus ruff and black. The
   repository had no automated checks before this.
 - Added `CONTRIBUTING.md` and `SECURITY.md`.
+- `tests/conftest.py` no longer forces one developer's personal AWS SSO
+  profile onto every run. It hardcoded that profile name and set
+  `AWS_PROFILE` to it whenever the variable was unset, so the mocked suite
+  raised `ProfileNotFound` on any machine without it, a fresh clone
+  included. The profile is now used only when botocore can see it, with
+  placeholder credentials as the fallback, and an explicitly chosen
+  `AWS_PROFILE` still wins.
 - Configured `per-file-ignores` for `E402` under `tests/`, where
   `pytest.importorskip` for an optional extra must precede the imports it
   guards. Those seven errors were the only thing standing between the existing
