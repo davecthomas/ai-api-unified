@@ -18,9 +18,20 @@ version lives in `pyproject.toml` (see the README release section).
   `base_url` argument.
 - `AiOpenAICompatibleCompletions`, the base for vendor engines. A subclass
   sets class attributes for its API key and base-URL settings, default
-  endpoint, model catalogue and context windows, image-input and reasoning
-  models, structured-output mode, and pricing-registry label. The DeepSeek,
-  Qwen, and Z.ai engines will build on it.
+  endpoint, model catalog and context windows, image-input and reasoning
+  models, structured-output mode, and pricing-registry label.
+- DeepSeek, Qwen, and GLM (Z.ai) models hosted on Amazon Bedrock, through
+  the existing Bedrock engine and your AWS account. None of these calls
+  reach the model makers' own services. Cataloged with context windows,
+  capability flags, and on-demand pricing from the AWS Price List API:
+  `deepseek.v3.2`, `us.deepseek.r1-v1:0`, `qwen.qwen3-next-80b-a3b`,
+  `qwen.qwen3-235b-a22b-2507-v1:0` (us-east-2 and us-west-2 only),
+  `qwen.qwen3-coder-next`, `qwen.qwen3-32b-v1:0`, `zai.glm-5`,
+  `zai.glm-4.7`, and `zai.glm-4.7-flash`. All are text-only and support
+  streaming. All except DeepSeek R1 support tool calls and schema-enforced
+  structured output (verified live). None supports `count_tokens`.
+- `bedrock` completions engine name, an alias for the Bedrock engine that
+  does not name a model family (`COMPLETIONS_ENGINE=bedrock`).
 
 ### Changed
 
@@ -30,6 +41,22 @@ version lives in `pyproject.toml` (see the README release section).
   `functions` parameter, `json_object` mode puts the schema in the system
   prompt, organization identity reports none, and observability events
   carry the vendor label instead of `openai`.
+- Bedrock `send_structured_output` sent the JSON schema as a dict, which
+  botocore rejects before the request leaves the client, so it failed on
+  every model. It now sends the JSON string Converse requires. A new test
+  runs requests through botocore's own parameter validation.
+- Bedrock `send_prompt` and `strict_schema_prompt` read only the first
+  content block, so a reasoning model that puts its reasoning block first
+  returned empty text. They now join every text block.
+- Bedrock `strict_schema_prompt` on the DeepSeek, Qwen, and GLM models uses
+  native structured output, since those models reject the stop sequence the
+  existing path sends. DeepSeek R1, which also rejects the assistant
+  prefill and has no native structured output, raises a capability error.
+- A Bedrock "model identifier is invalid" error now adds that the model may
+  not be offered in the configured region and names `AWS_REGION`.
+- Tests no longer default to a hard-coded AWS profile; they use
+  `AWS_PROFILE` when set and placeholder credentials otherwise. The dev
+  dependencies add `botocore[crt]`, which `aws login` profiles need.
 - Internal: the `openai` engine gained class attributes for the token field,
   registry label, and vendor display name, a `_build_capabilities` hook,
   and `AIOpenAIBase` gained `API_KEY_SETTING` and `_resolve_api_key`. The
@@ -64,7 +91,7 @@ OpenAI, and Google and against the AWS Bedrock model cards.
 
 ### Changed
 
-- Engine defaults move one generation behind the newest catalogued model:
+- Engine defaults move one generation behind the newest cataloged model:
   `claude` `claude-opus-4-8` -> `claude-opus-5`; `openai` `gpt-5.4-mini` ->
   `gpt-5.6-luna`; `google-gemini` `gemini-3.5-flash` -> `gemini-3.7-flash`.
   Embedding defaults are unchanged because vectors from different models
@@ -81,7 +108,7 @@ OpenAI, and Google and against the AWS Bedrock model cards.
 - OpenAI speech-to-text uses `gpt-transcribe` instead of `whisper-1`, which
   shuts down 2027-02-26.
 - `claude-sonnet-5` is priced at $2 / $10. The launch rate became the
-  standard price after Anthropic cancelled the scheduled increase to $3 / $15.
+  standard price after Anthropic canceled the scheduled increase to $3 / $15.
 - Bedrock Nova v1 context windows now match the model cards (128K Micro,
   300K Lite and Pro, 1M Premier, 200K for Claude 3.5 Haiku). The previous
   values were about 32 times too large, so the context guard never fired.
@@ -120,7 +147,7 @@ OpenAI, and Google and against the AWS Bedrock model cards.
   This is a minor rather than a major bump: the module sat under
   `middleware/impl/`, outside the public surface the README documents, which
   is the stable base interfaces and the factories. Anyone importing it
-  directly was reaching past that boundary into a module labelled a
+  directly was reaching past that boundary into a module labeled a
   proof of concept.
 
 ### Changed
@@ -285,8 +312,8 @@ factory, or middleware changed in this release.
 ## 2.25.0
 
 - `list_model_names` on the google-gemini completions engine now checks the
-  static model catalogue against the provider's live `models.list` before
-  answering. The catalogue differs per auth path (Gemini API vs Vertex),
+  static model catalog against the provider's live `models.list` before
+  answering. The catalog differs per auth path (Gemini API vs Vertex),
   project, and region, so the hardcoded `GEMINI_MODEL_SPECS` list could name
   models the current credentials cannot call. Observed live: the Gemini API
   no longer lists the 2.0-family spec entries, and a Vertex project answered
@@ -294,7 +321,7 @@ factory, or middleware changed in this release.
 - How much that check verifies depends on the auth path, and the docstring
   now says so. The Gemini API publishes `supported_actions`, so entries that
   cannot `generateContent` are dropped. Vertex publishes none — the SDK's
-  Vertex converter does not map the field — and its publisher catalogue is
+  Vertex converter does not map the field — and its publisher catalog is
   not scoped to `GOOGLE_LOCATION`, so there this is a name-presence check and
   a globally-listed model can still answer 404 in the configured region.
 - The configured model is always listed, so `model_name` never goes missing
@@ -326,7 +353,7 @@ factory, or middleware changed in this release.
   `models.list` no longer names any of them and `generateContent` answers 404
   for each, so their scheduled 2026-06-01 sunset has passed in fact. This
   matters most for the static list, which is what callers are served when the
-  live catalogue cannot be reached — a dead entry there would be advertised
+  live catalog cannot be reached — a dead entry there would be advertised
   as callable on the one path that cannot check it.
 - Constructing a client on a retired model now fails instead of warning and
   quietly falling back to the default model, so a pinned
@@ -340,7 +367,7 @@ factory, or middleware changed in this release.
   in `_translate_config_exception` that also hid the 1.5 retirements; it is
   tracked separately and not changed here, since it affects every engine and
   capability. The call still fails fast either way.
-- No deprecated completions model remains catalogued, so the client-level
+- No deprecated completions model remains cataloged, so the client-level
   lifecycle test now covers the retired branch, and the deprecated branch
   stays covered at the registry level in `test_model_pricing.py`.
 - `AIGoogleBase.list_models` gains optional `required_action`,
@@ -426,7 +453,7 @@ factory, or middleware changed in this release.
 
 ## 2.21.0
 
-- Catalogue the latest models served by all three major completions
+- Catalog the latest models served by all three major completions
   providers (verified against each provider's live models API on
   2026-08-03), with registry pricing and capability entries:
   - Anthropic: `claude-opus-5` and `claude-sonnet-5` (both 1M context;
@@ -440,7 +467,7 @@ factory, or middleware changed in this release.
     `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`,
     and `gemini-3.1-pro-preview` (tiered >200K pricing) — with a
     reasoning-capable Gemini 3 capabilities branch.
-- Engine defaults move to one generation behind the newest catalogued
+- Engine defaults move to one generation behind the newest cataloged
   model: OpenAI `gpt-4o-mini` -> `gpt-5.4-mini`, Gemini
   `gemini-2.5-flash` -> `gemini-3.5-flash` (default and unknown-model
   fallback). The Claude default stays `claude-opus-4-8`, already one

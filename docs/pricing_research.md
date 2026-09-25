@@ -80,6 +80,15 @@ models split into input / cached-input / output.
 | Bedrock | amazon.nova-pro | 0.80 | n/a | 3.20 | high |
 | Bedrock | amazon.nova-premier | 2.50 | n/a | 12.50 | high |
 | Bedrock | claude-3-5-haiku | 0.80 | n/a | 4.00 | high |
+| Bedrock | deepseek.v3.2 | 0.62 | n/a | 1.85 | high |
+| Bedrock | us.deepseek.r1-v1:0 | 1.35 | n/a | 5.40 | high |
+| Bedrock | qwen.qwen3-next-80b-a3b § | 0.14 | n/a | 1.20 | med |
+| Bedrock | qwen.qwen3-235b-a22b-2507-v1:0 (us-east-2) | 0.22 | n/a | 0.88 | high |
+| Bedrock | qwen.qwen3-coder-next | 0.50 | n/a | 1.20 | high |
+| Bedrock | qwen.qwen3-32b-v1:0 | 0.15 | n/a | 0.60 | high |
+| Bedrock | zai.glm-5 | 1.00 | n/a | 3.20 | high |
+| Bedrock | zai.glm-4.7 | 0.60 | n/a | 2.20 | high |
+| Bedrock | zai.glm-4.7-flash | 0.07 | n/a | 0.40 | high |
 | Anthropic | claude-fable-5-1 | 10.00 | 0.25 | 50.00 | high |
 | Anthropic | claude-opus-5-5 | 4.00 | 0.20 | 20.00 | high |
 | Anthropic | claude-fable-5 | 10.00 | 1.00 | 50.00 | high |
@@ -91,6 +100,11 @@ models split into input / cached-input / output.
 | Anthropic | claude-sonnet-4-6 | 3.00 | 0.30 | 15.00 | high |
 | Anthropic | claude-haiku-4-5 | 1.00 | 0.10 | 5.00 | high |
 | Anthropic | claude-opus-4-1 ✖ | 15.00 | 1.50 | 75.00 | high |
+
+Bedrock DeepSeek, Qwen, and GLM rows come from the AWS Price List API
+(on-demand standard tier, us-east-1 unless noted) on 2026-09-25. § Qwen3 Next
+80B has no Converse price listing yet; the row uses its us-east-2
+OpenAI-compatible endpoint rate.
 
 Lifecycle markers: ⚠ deprecated (still served; warns once per process).
 ✖ retired (no longer served; requesting it raises).
@@ -104,7 +118,7 @@ cached input and 1.5x output (registry tier `context>272k`). ‡ Gemini 3.6–3.
 Flash rows show list rates; promotional pricing ($0.75 in / $0.075 cached /
 $3.75 out) runs through 2026-12-31. † claude-sonnet-5's launch rate became its
 standard price; the increase to $3 / $15 scheduled for 2026-09-01 was
-cancelled. claude-fable-5-1 reads cache at 0.025x base input and
+canceled. claude-fable-5-1 reads cache at 0.025x base input and
 claude-opus-5-5 at 0.05x, not the usual 0.1x. gemini-3.1-pro-preview is the
 latest pro tier served by the Gemini API (preview-only as of 2026-08).
 Anthropic rates are the native-API list (added 2026-07 with the `claude`

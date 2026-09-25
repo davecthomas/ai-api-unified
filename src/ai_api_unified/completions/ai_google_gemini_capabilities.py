@@ -33,7 +33,7 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
             ],
             # All Gemini chat models stream via generate_content_stream.
             "supports_streaming": True,
-            # All catalogued Gemini models accept function declarations with
+            # All cataloged Gemini models accept function declarations with
             # forced calling, raw-JSON-schema structured output
             # (response_json_schema), and the SDK's client.aio async surface.
             "supports_tool_use": True,

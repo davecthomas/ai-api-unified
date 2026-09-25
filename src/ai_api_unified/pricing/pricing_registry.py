@@ -46,6 +46,9 @@ _SRC_OPENAI: str = "https://developers.openai.com/api/docs/pricing"
 _SRC_GOOGLE: str = "https://ai.google.dev/gemini-api/docs/pricing"
 _SRC_GOOGLE_DEP: str = "https://ai.google.dev/gemini-api/docs/deprecations"
 _SRC_BEDROCK: str = "https://aws.amazon.com/bedrock/pricing/"
+_SRC_BEDROCK_PRICING_API: str = (
+    "AWS Price List API (service AmazonBedrock), https://aws.amazon.com/bedrock/pricing/"
+)
 _SRC_ANTHROPIC: str = "https://platform.claude.com/docs/en/about-claude/models/overview"
 _SRC_VOYAGE: str = "https://docs.voyageai.com/docs/pricing"
 _SRC_OPENAI_DEP: str = "https://developers.openai.com/api/docs/deprecations"
@@ -1097,7 +1100,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r="2.50",
                 write_1h_r="4.00",
                 notes="The launch introductory rate became the standard price; "
-                "the scheduled 2026-09-01 increase to $3/$15 was cancelled.",
+                "the scheduled 2026-09-01 increase to $3/$15 was canceled.",
             ),
         ),
         _info(
@@ -1197,6 +1200,126 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             status=ModelLifecycleStatus.RETIRED,
             replacement="claude-opus-4-8",
         ),
+        # ── Bedrock open-weight models (on-demand standard tier, us-east-1
+        # unless noted; from the AWS Price List API on 2026-09-25) ───────────
+        _info(
+            PROVIDER_BEDROCK,
+            "deepseek.v3.2",
+            _tok(
+                "0.62",
+                "1.85",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "us.deepseek.r1-v1:0",
+            _tok(
+                "1.35",
+                "5.40",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "qwen.qwen3-next-80b-a3b",
+            _tok(
+                "0.14",
+                "1.20",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                confidence="medium",
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies. Rate taken from the us-east-2 OpenAI-compatible (bedrock-mantle) listing; the Price List API has no Converse entry yet.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "qwen.qwen3-235b-a22b-2507-v1:0",
+            _tok(
+                "0.22",
+                "0.88",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies. us-east-2 rate; the model is not served on the Converse API in us-east-1.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "qwen.qwen3-coder-next",
+            _tok(
+                "0.50",
+                "1.20",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "qwen.qwen3-32b-v1:0",
+            _tok(
+                "0.15",
+                "0.60",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "zai.glm-5",
+            _tok(
+                "1.00",
+                "3.20",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "zai.glm-4.7",
+            _tok(
+                "0.60",
+                "2.20",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "zai.glm-4.7-flash",
+            _tok(
+                "0.07",
+                "0.40",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
         # ── Bedrock / Titan embeddings ──────────────────────────────────────
         _info(
             PROVIDER_BEDROCK,
@@ -1218,12 +1341,12 @@ _STRICT_DEPRECATIONS_ENV: str = "AI_STRICT_DEPRECATIONS"
 
 
 def get_model_info(provider: str, model: str) -> AIModelInfo | None:
-    """Return the registry entry for a model, or None when not catalogued."""
+    """Return the registry entry for a model, or None when not cataloged."""
     return DICT_MODEL_INFO.get((provider, model))
 
 
 def get_model_pricing(provider: str, model: str) -> AIModelPricing | None:
-    """Return pricing for a model, or None when not catalogued or priced."""
+    """Return pricing for a model, or None when not cataloged or priced."""
     info: AIModelInfo | None = get_model_info(provider, model)
     return info.pricing if info is not None else None
 
@@ -1259,7 +1382,7 @@ def enforce_model_lifecycle(provider: str, model: str) -> None:
     """
     Apply the lifecycle policy for a resolved (provider, model).
 
-    Call once when a client resolves its model. Active or uncatalogued models
+    Call once when a client resolves its model. Active or uncataloged models
     pass silently.
 
     Args:
@@ -1272,7 +1395,7 @@ def enforce_model_lifecycle(provider: str, model: str) -> None:
     """
     info: AIModelInfo | None = get_model_info(provider, model)
     if info is None or info.status is ModelLifecycleStatus.ACTIVE:
-        # Early return: active or uncatalogued models need no notification.
+        # Early return: active or uncataloged models need no notification.
         return None
 
     message: str = _format_lifecycle_message(info)

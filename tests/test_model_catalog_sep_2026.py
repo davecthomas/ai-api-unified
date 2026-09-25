@@ -4,7 +4,7 @@
 """
 Tests for the 2026-09-25 provider model sweep.
 
-Covers the newly catalogued models and their registry pricing, the lifecycle
+Covers the newly cataloged models and their registry pricing, the lifecycle
 retirements (Sora, Imagen 4, Veo 2/3.0, dall-e) and deprecations, the engine
 default moves, the forced-tool_choice guard on Claude models that reject it,
 and the Gemini images engine's native generate_content path.
@@ -211,7 +211,7 @@ class TestOpenAIEngines:
         assert client.completions_model == "gpt-5.6-luna"
         assert "gpt-6-astra" in client.list_model_names
 
-    def test_images_default_and_catalogue(self) -> None:
+    def test_images_default_and_catalog(self) -> None:
         assert AIOpenAIImages.DEFAULT_IMAGE_MODEL == "gpt-image-2"
         assert "dall-e-3" not in AIOpenAIImages.SUPPORTED_IMAGE_MODELS
 
@@ -243,7 +243,7 @@ def _build_bedrock_client(model: str) -> AiBedrockCompletions:
 
 
 class TestBedrockEngine:
-    def test_nova_2_lite_catalogued(self) -> None:
+    def test_nova_2_lite_cataloged(self) -> None:
         client = _build_bedrock_client("us.amazon.nova-2-lite-v1:0")
         assert "us.amazon.nova-2-lite-v1:0" in client.list_model_names
         assert client.max_context_tokens == 1_000_000
@@ -271,7 +271,7 @@ from ai_api_unified.embeddings.ai_voyage_embeddings import (
 )
 
 
-class TestVoyageCatalogue:
+class TestVoyageCatalog:
     def test_voyage_4_accepts_custom_dimensions(self) -> None:
         capabilities = AIEmbeddingsCapabilitiesVoyage.for_model("voyage-4")
         assert capabilities.default_dimensions == 1024

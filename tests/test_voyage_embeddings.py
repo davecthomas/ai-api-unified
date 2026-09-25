@@ -265,7 +265,7 @@ class TestErrorsAndRetries:
 
 
 class TestCapabilitiesCatalog:
-    def test_all_catalogued_models_have_dimensions_and_pricing(self):
+    def test_all_cataloged_models_have_dimensions_and_pricing(self):
         for model_name in AIEmbeddingsCapabilitiesVoyage.DICT_MODEL_DIMENSIONS:
             caps = AIEmbeddingsCapabilitiesVoyage.for_model(model_name)
             assert caps.default_dimensions > 0, model_name

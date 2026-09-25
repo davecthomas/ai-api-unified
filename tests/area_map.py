@@ -109,6 +109,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     ),
     # Pricing registry
     "test_model_pricing.py": ("pricing",),
+    "test_bedrock_open_weight_models.py": ("completions", "engine_bedrock", "pricing"),
     "test_openai_compatible_completions.py": ("completions", "engine_openai"),
     "test_model_catalog_sep_2026.py": (
         "pricing",

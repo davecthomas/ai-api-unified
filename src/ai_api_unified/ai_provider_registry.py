@@ -183,6 +183,19 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ),
     (
         AI_PROVIDER_CAPABILITY_COMPLETIONS,
+        "bedrock",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
+        str_engine="bedrock",
+        str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
+        str_class_name="AiBedrockCompletions",
+        str_required_extra="bedrock",
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
+        str_local_install_command='poetry install --extras "bedrock"',
+        set_str_dependency_roots={"boto3", "botocore"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_COMPLETIONS,
         "nova",
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,

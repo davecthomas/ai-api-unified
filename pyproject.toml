@@ -192,6 +192,8 @@ requires-poetry = ">=2.0,<2.2"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 pytest-asyncio = ">=0.24.0,<1.0.0"
+# Lets botocore read `aws login` profiles when running live Bedrock tests.
+botocore = { version = ">=1.40.0", extras = ["crt"] }
 
 # ─── Tell Poetry where your package lives ────────────────────────────────────
 [[tool.poetry.packages]]
