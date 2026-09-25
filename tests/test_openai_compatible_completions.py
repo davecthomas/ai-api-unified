@@ -350,3 +350,116 @@ class TestFactoryAndOpenAIUnchanged:
         result = client.send_structured_output("Compile.", response_schema=GRAPH_SCHEMA)
         assert result.data is None
         assert result.finish_reason is AIFinishReason.LENGTH
+
+
+# ── Inheritance guard ────────────────────────────────────────────────────────
+
+from ai_api_unified.ai_openai_base import AIOpenAIBase
+
+# Every method the OpenAI engine classes define, with how the compatible
+# engine treats it:
+#   "shared"      - Chat Completions protocol code, correct for any
+#                   compatible server, inherited as is.
+#   "overridden"  - OpenAI-specific; the compatible engine replaces it.
+#   "unreachable" - OpenAI-only helper whose only caller is overridden.
+DICT_REVIEWED_OPENAI_METHODS: dict[str, str] = {
+    # AIOpenAIBase
+    "_fetch_org_id_via_header_probe": "unreachable",
+    "_fetch_org_info_via_account_api": "unreachable",
+    "_get_org_info_capability_provider": "overridden",
+    "_get_org_info_provider": "overridden",
+    "_resolve_api_key": "overridden",
+    "async_client": "shared",
+    "get_api_base_url": "overridden",
+    # AiOpenAICompletions
+    "_asend_conversation_provider": "shared",
+    "_asend_prompt_provider": "shared",
+    "_asend_structured_output_provider": "shared",
+    "_async_client_for_call": "shared",
+    "_build_capabilities": "overridden",
+    "_build_chat_conversation_request_kwargs": "shared",
+    "_build_chat_provider_tools": "shared",
+    "_build_chat_structured_request_kwargs": "overridden",
+    "_build_conversation_observability_metadata": "shared",
+    "_build_structured_observability_metadata": "shared",
+    "_build_structured_output_result_from_parts": "shared",
+    "_build_tool_result_message_provider": "shared",
+    "_build_turn_result_from_chat": "shared",
+    "_build_user_message_content": "overridden",
+    "_client_for_call": "shared",
+    "_extend_messages_with_turn_provider": "shared",
+    "_extract_openai_cached_tokens": "shared",
+    "_extract_openai_completion_tokens": "shared",
+    "_extract_openai_prompt_tokens": "shared",
+    "_extract_openai_total_tokens": "shared",
+    "_observed_chat_structured_result": "shared",
+    "_observed_chat_turn_result": "shared",
+    "_raise_request_error": "shared",
+    "_sdk_option_method": "shared",
+    "_send_conversation_provider": "shared",
+    "_send_prompt_streaming_provider": "shared",
+    "_send_structured_output_provider": "shared",
+    "_serialize_chat_assistant_message": "shared",
+    "_sum_optional_ints": "shared",
+    "_usage_from_chat_response": "shared",
+    "capabilities": "shared",
+    "list_model_names": "overridden",
+    "max_context_tokens": "overridden",
+    "send_prompt": "shared",
+    "strict_schema_prompt": "overridden",
+}
+
+
+def _defined_methods(cls: type) -> set[str]:
+    return {
+        str_name
+        for str_name, value in vars(cls).items()
+        if not (str_name.startswith("__") and str_name.endswith("__"))
+        and (
+            callable(value) or isinstance(value, (property, staticmethod, classmethod))
+        )
+    }
+
+
+class TestInheritanceGuard:
+    """
+    The compatible engine inherits from the OpenAI engine, so anything added
+    there flows into every vendor engine. This guard makes that a decision:
+    a new or removed OpenAI method fails here until it is classified above.
+    If most new additions need overriding, extract a neutral Chat Completions
+    base with openai and openai-compatible as siblings instead.
+    """
+
+    def test_every_openai_method_is_reviewed(self) -> None:
+        set_defined: set[str] = _defined_methods(AIOpenAIBase) | _defined_methods(
+            AiOpenAICompletions
+        )
+        set_reviewed: set[str] = set(DICT_REVIEWED_OPENAI_METHODS)
+        set_unreviewed: set[str] = set_defined - set_reviewed
+        set_stale: set[str] = set_reviewed - set_defined
+        assert not set_unreviewed, (
+            "New OpenAI engine methods are inherited by every OpenAI-compatible "
+            f"vendor engine: {sorted(set_unreviewed)}. Decide whether each is "
+            "shared protocol code or OpenAI-specific (override it in "
+            "AiOpenAICompatibleCompletions), then classify it in "
+            "DICT_REVIEWED_OPENAI_METHODS."
+        )
+        assert not set_stale, (
+            f"Reviewed methods no longer exist: {sorted(set_stale)}. Remove them "
+            "from DICT_REVIEWED_OPENAI_METHODS."
+        )
+
+    def test_overridden_methods_are_actually_overridden(self) -> None:
+        set_compatible: set[str] = set(vars(AiOpenAICompatibleCompletions))
+        list_missing: list[str] = [
+            str_name
+            for str_name, str_status in DICT_REVIEWED_OPENAI_METHODS.items()
+            if str_status == "overridden" and str_name not in set_compatible
+        ]
+        assert (
+            not list_missing
+        ), f"Marked overridden but inherited unchanged: {list_missing}."
+
+    def test_unreachable_helpers_have_their_callers_overridden(self) -> None:
+        # The org lookups run only from _get_org_info_provider.
+        assert "_get_org_info_provider" in vars(AiOpenAICompatibleCompletions)
