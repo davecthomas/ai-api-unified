@@ -40,12 +40,16 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 _EFFECTIVE: date = date(2026, 7, 7)
 # Later compilation date for models added after the initial 2026-07-07 sweep.
 _EFFECTIVE_AUG: date = date(2026, 8, 3)
+# Compilation date for models added in the 2026-09-25 sweep.
+_EFFECTIVE_SEP: date = date(2026, 9, 25)
 _SRC_OPENAI: str = "https://developers.openai.com/api/docs/pricing"
 _SRC_GOOGLE: str = "https://ai.google.dev/gemini-api/docs/pricing"
 _SRC_GOOGLE_DEP: str = "https://ai.google.dev/gemini-api/docs/deprecations"
 _SRC_BEDROCK: str = "https://aws.amazon.com/bedrock/pricing/"
 _SRC_ANTHROPIC: str = "https://platform.claude.com/docs/en/about-claude/models/overview"
 _SRC_VOYAGE: str = "https://docs.voyageai.com/docs/pricing"
+_SRC_OPENAI_DEP: str = "https://developers.openai.com/api/docs/deprecations"
+_SRC_ANTHROPIC_PRICING: str = "https://platform.claude.com/docs/en/about-claude/pricing"
 
 # Cache-write rate for providers that charge nothing to populate a cache.
 # Distinct from None, which means "charged but not yet rated" and falls
@@ -120,6 +124,168 @@ def _info(
 DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
     [
         # ── OpenAI completions ──────────────────────────────────────────────
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-6-astra",
+            _tok(
+                "10.00",
+                "50.00",
+                "1.00",
+                _SRC_OPENAI,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                tiers=[
+                    AIPricingTier(
+                        label="context>272k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("20.00"),
+                            output_per_1m=Decimal("75.00"),
+                            cached_input_per_1m=Decimal("2.00"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=272K input tokens; above that the "
+                "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-6-sol",
+            _tok(
+                "2.00",
+                "10.00",
+                "0.20",
+                _SRC_OPENAI,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                tiers=[
+                    AIPricingTier(
+                        label="context>272k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("4.00"),
+                            output_per_1m=Decimal("15.00"),
+                            cached_input_per_1m=Decimal("0.40"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=272K input tokens; above that the "
+                "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-6-luna",
+            _tok(
+                "0.10",
+                "0.50",
+                "0.01",
+                _SRC_OPENAI,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                tiers=[
+                    AIPricingTier(
+                        label="context>272k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("0.20"),
+                            output_per_1m=Decimal("0.75"),
+                            cached_input_per_1m=Decimal("0.02"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=272K input tokens; above that the "
+                "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.6-sol",
+            _tok(
+                "4.00",
+                "20.00",
+                "0.40",
+                _SRC_OPENAI,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                tiers=[
+                    AIPricingTier(
+                        label="context>272k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("8.00"),
+                            output_per_1m=Decimal("30.00"),
+                            cached_input_per_1m=Decimal("0.80"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=272K input tokens; above that the "
+                "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.6-terra",
+            _tok(
+                "2.00",
+                "12.00",
+                "0.20",
+                _SRC_OPENAI,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                tiers=[
+                    AIPricingTier(
+                        label="context>272k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("4.00"),
+                            output_per_1m=Decimal("18.00"),
+                            cached_input_per_1m=Decimal("0.40"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=272K input tokens; above that the "
+                "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-5.6-luna",
+            _tok(
+                "0.20",
+                "1.20",
+                "0.02",
+                _SRC_OPENAI,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                tiers=[
+                    AIPricingTier(
+                        label="context>272k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("0.40"),
+                            output_per_1m=Decimal("1.80"),
+                            cached_input_per_1m=Decimal("0.04"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=272K input tokens; above that the "
+                "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
         _info(
             PROVIDER_OPENAI,
             "gpt-5.5",
@@ -263,6 +429,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 10, 23),
+            replacement="gpt-5.6-luna",
         ),
         _info(
             PROVIDER_OPENAI,
@@ -275,6 +444,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 10, 23),
+            replacement="gpt-5.6-luna",
         ),
         _info(
             PROVIDER_OPENAI,
@@ -300,6 +472,54 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_1h_r=_FREE_WRITES,
             ),
         ),
+        # ── OpenAI images (lifecycle only) ──────────────────────────────────
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-image-1",
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 10, 23),
+            replacement="gpt-image-2",
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-image-1-mini",
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 12, 1),
+            replacement="gpt-image-2",
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-image-1.5",
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 12, 1),
+            replacement="gpt-image-2",
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "dall-e-2",
+            status=ModelLifecycleStatus.RETIRED,
+            replacement="gpt-image-2",
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "dall-e-3",
+            status=ModelLifecycleStatus.RETIRED,
+            replacement="gpt-image-2",
+        ),
+        # ── OpenAI video (retired: the Videos API shut down with Sora 2 and
+        # has no replacement; /v1/videos returns 404, probed 2026-09-25) ─────
+        _info(
+            PROVIDER_OPENAI,
+            "sora-2",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 9, 24),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "sora-2-pro",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 9, 24),
+        ),
         # ── OpenAI embeddings (input only) ──────────────────────────────────
         _info(
             PROVIDER_OPENAI,
@@ -317,6 +537,64 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             _tok("0.10", None, None, _SRC_OPENAI),
         ),
         # ── Voyage AI embeddings (input only) ───────────────────────────────
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-4-large",
+            _tok(
+                "0.12",
+                None,
+                None,
+                _SRC_VOYAGE,
+                effective=_EFFECTIVE_SEP,
+                notes="First 200M tokens per account are free.",
+            ),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-4",
+            _tok(
+                "0.06",
+                None,
+                None,
+                _SRC_VOYAGE,
+                effective=_EFFECTIVE_SEP,
+                notes="First 200M tokens per account are free.",
+            ),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-4-lite",
+            _tok(
+                "0.02",
+                None,
+                None,
+                _SRC_VOYAGE,
+                effective=_EFFECTIVE_SEP,
+                notes="First 200M tokens per account are free.",
+            ),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-code-4",
+            _tok(
+                "0.12",
+                None,
+                None,
+                _SRC_VOYAGE,
+                effective=_EFFECTIVE_SEP,
+                notes="First 200M tokens per account are free.",
+            ),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-3.5",
+            _tok("0.06", None, None, _SRC_VOYAGE, effective=_EFFECTIVE_SEP),
+        ),
+        _info(
+            PROVIDER_VOYAGE,
+            "voyage-3.5-lite",
+            _tok("0.02", None, None, _SRC_VOYAGE, effective=_EFFECTIVE_SEP),
+        ),
         _info(
             PROVIDER_VOYAGE,
             "voyage-3-lite",
@@ -350,6 +628,36 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         # ── Google completions (active) ─────────────────────────────────────
         _info(
             PROVIDER_GOOGLE,
+            "gemini-3.8-flash",
+            _tok(
+                "1.50",
+                "7.50",
+                "0.15",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                notes="List rates; promotional pricing ($0.75 in / $3.75 out / "
+                "$0.075 cached) runs through 2026-12-31.",
+            ),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3.7-flash",
+            _tok(
+                "1.50",
+                "7.50",
+                "0.15",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                notes="List rates; promotional pricing ($0.75 in / $3.75 out / "
+                "$0.075 cached) runs through 2026-12-31.",
+            ),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
             "gemini-3.6-flash",
             _tok(
                 "1.50",
@@ -359,6 +667,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 effective=_EFFECTIVE_AUG,
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
+                notes="List rates; promotional pricing ($0.75 in / $3.75 out / "
+                "$0.075 cached) runs through 2026-12-31.",
             ),
         ),
         _info(
@@ -575,7 +885,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 "(image $0.45/1M, audio $6.50/1M, video $12.00/1M).",
             ),
         ),
-        # ── Google images (deprecated) ──────────────────────────────────────
+        # ── Google images (Imagen 4 retired 2026-08-17 and hard 404, probed
+        # 2026-09-25; rates retained for historical cost enrichment) ────────
         _info(
             PROVIDER_GOOGLE,
             "imagen-4.0-generate-001",
@@ -591,9 +902,67 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                     AIPricingTier(label="ultra", per_unit_usd=Decimal("0.06")),
                 ],
             ),
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 8, 17),
-            replacement="a current-generation Gemini image model",
+            replacement="gemini-3.1-flash-image",
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "imagen-4.0-ultra-generate-001",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 8, 17),
+            replacement="gemini-3-pro-image",
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "imagen-4.0-fast-generate-001",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 8, 17),
+            replacement="gemini-3.1-flash-lite-image",
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3-pro-image-preview",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 6, 25),
+            replacement="gemini-3-pro-image",
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3.1-flash-image-preview",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 6, 25),
+            replacement="gemini-3.1-flash-image",
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-2.5-flash-image",
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 10, 2),
+            replacement="gemini-3.1-flash-image",
+        ),
+        # ── Google video (Veo 2.0 and 3.0 retired 2026-06-30 and hard 404,
+        # probed 2026-09-25) ─────────────────────────────────────────────────
+        _info(
+            PROVIDER_GOOGLE,
+            "veo-3.0-generate-001",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 6, 30),
+            replacement="veo-3.1-generate-preview",
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "veo-3.0-fast-generate-001",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 6, 30),
+            replacement="veo-3.1-fast-generate-preview",
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "veo-2.0-generate-001",
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 6, 30),
+            replacement="veo-3.1-generate-preview",
         ),
         # ── Bedrock completions (the engine reports cacheWriteInputTokens for
         # every model here, so each carries either an explicit write rate or a
@@ -659,9 +1028,38 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             ),
         ),
         # ── Anthropic completions (native API; cached rate is the documented
-        # 0.1x prompt-cache read multiplier. Cache writes bill above base input
+        # 0.1x prompt-cache read multiplier except where an entry's note says
+        # otherwise (Fable 5.1 and Opus 5.5 read cheaper). Cache writes bill above base input
         # and are priced per cache lifetime: 1.25x for the 5-minute TTL and 2x
         # for the 1-hour TTL) ────────────────────────────────────────────────
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-fable-5-1",
+            _tok(
+                "10.00",
+                "50.00",
+                "0.25",
+                _SRC_ANTHROPIC_PRICING,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r="12.50",
+                write_1h_r="20.00",
+                notes="Cache reads bill at 0.025x base input, not the usual 0.1x.",
+            ),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-opus-5-5",
+            _tok(
+                "4.00",
+                "20.00",
+                "0.20",
+                _SRC_ANTHROPIC_PRICING,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r="5.00",
+                write_1h_r="8.00",
+                notes="Cache reads bill at 0.05x base input, not the usual 0.1x.",
+            ),
+        ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-fable-5",
@@ -691,15 +1089,15 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             PROVIDER_ANTHROPIC,
             "claude-sonnet-5",
             _tok(
-                "3.00",
-                "15.00",
-                "0.30",
-                _SRC_ANTHROPIC,
-                effective=_EFFECTIVE_AUG,
-                write_5m_r="3.75",
-                write_1h_r="6.00",
-                notes="List rates; introductory pricing ($2.00 in / $10.00 out) "
-                "runs through 2026-08-31.",
+                "2.00",
+                "10.00",
+                "0.20",
+                _SRC_ANTHROPIC_PRICING,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r="2.50",
+                write_1h_r="4.00",
+                notes="The launch introductory rate became the standard price; "
+                "the scheduled 2026-09-01 increase to $3/$15 was cancelled.",
             ),
         ),
         _info(

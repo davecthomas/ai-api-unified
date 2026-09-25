@@ -67,6 +67,11 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         "claude-opus-4-5",
         "claude-opus-4-6",
     )
+    # Models that reject a forced toolChoice; they run tool use on auto only.
+    TUPLE_NO_FORCED_TOOL_CHOICE_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+    )
 
     @classmethod
     def for_model(
@@ -145,22 +150,35 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
         return self.DICT_CONTEXT_WINDOWS.get(self.completions_model, 0)
 
+    # Context windows in tokens, from the Bedrock model cards. Nova 2 and
+    # the Claude 5.x models accept on-demand traffic only through a geo or
+    # global inference profile, so the us. profile IDs are catalogued.
     DICT_CONTEXT_WINDOWS: dict[str, int] = {
-        "amazon.nova-micro-v1:0": 4_096_000,
-        "amazon.nova-lite-v1:0": 8_192_000,
-        "amazon.nova-pro-v1:0": 16_384_000,
-        "amazon.nova-premier-v1:0": 32_768_000,
-        "us.anthropic.claude-3-5-haiku-20241022-v1:0": 8_192_000,
+        "us.amazon.nova-2-lite-v1:0": 1_000_000,
+        "amazon.nova-micro-v1:0": 128_000,
+        "amazon.nova-lite-v1:0": 300_000,
+        "amazon.nova-pro-v1:0": 300_000,
+        "amazon.nova-premier-v1:0": 1_000_000,
+        "us.anthropic.claude-fable-5-1": 1_000_000,
+        "us.anthropic.claude-opus-5-5": 1_000_000,
+        "us.anthropic.claude-opus-5": 1_000_000,
+        "us.anthropic.claude-sonnet-5": 1_000_000,
+        "us.anthropic.claude-3-5-haiku-20241022-v1:0": 200_000,
     }
 
     @property
     def list_model_names(self) -> list[str]:
-        # As of Oct 2025, aggregated from AWS release notes:
+        # Verified against the Bedrock model cards on 2026-09-25.
         return [
+            "us.amazon.nova-2-lite-v1:0",
             "amazon.nova-micro-v1:0",
             "amazon.nova-lite-v1:0",
             "amazon.nova-pro-v1:0",
             "amazon.nova-premier-v1:0",
+            "us.anthropic.claude-fable-5-1",
+            "us.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-opus-5",
+            "us.anthropic.claude-sonnet-5",
             "us.anthropic.claude-3-5-haiku-20241022-v1:0",
         ]
 
@@ -1111,6 +1129,16 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         Sends one conversation turn via the Converse API with toolConfig.
         """
         self._reject_bedrock_timeout(request_timeout_seconds)
+        if tool_choice is not None and any(
+            marker in self.model.lower()
+            for marker in AICompletionsCapabilitiesBedrock.TUPLE_NO_FORCED_TOOL_CHOICE_MODEL_MARKERS
+        ):
+            # Early exit: the provider rejects any forced tool choice for
+            # these models, so fail before the network call.
+            raise ValueError(
+                f"{self.model} does not accept a forced tool_choice. Pass "
+                "tool_choice=None and name the tool in the prompt instead."
+            )
         dict_merge_options, str_retry_override = self._split_provider_options(
             provider_options
         )

@@ -42,6 +42,8 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
     DEFAULT_INSTRUCTIONS: ClassVar[str] = (
         "Speak in an energetic and clear way as if you are a radio advertisement broadcast"
     )
+    # whisper-1 shuts down 2027-02-26; gpt-transcribe is its named successor.
+    STT_MODEL: ClassVar[str] = "gpt-transcribe"
     MIN_SPEED: ClassVar[float] = 0.25  # Speed is ignored for gpt-4o-mini-tts
     MAX_SPEED: ClassVar[float] = 4.0
     _MODEL_DEFINITIONS: ClassVar[list[dict[str, str]]] = [
@@ -535,7 +537,7 @@ class AIVoiceOpenAI(AIVoiceBase, AIOpenAIBase):
                 try:
                     resp = self.client.audio.transcriptions.create(
                         file=buf,
-                        model="whisper-1",
+                        model=self.STT_MODEL,
                         response_format="text",
                         language=language or "en",
                     )

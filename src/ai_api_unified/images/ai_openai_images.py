@@ -10,6 +10,10 @@ from typing import Any, ClassVar
 from openai import OpenAIError
 
 from ai_api_unified.ai_openai_base import AIOpenAIBase
+from ai_api_unified.pricing.pricing_registry import (
+    PROVIDER_OPENAI,
+    enforce_model_lifecycle,
+)
 
 from ..ai_base import (
     AIBaseImageProperties,
@@ -54,6 +58,18 @@ class AIOpenAIImageProperties(AIBaseImageProperties):
 
 
 class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
+    DEFAULT_IMAGE_MODEL: ClassVar[str] = "gpt-image-2"
+    # Verified against the live models.list catalogue on 2026-09-25; the
+    # dall-e models are no longer served.
+    SUPPORTED_IMAGE_MODELS: ClassVar[list[str]] = [
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2",
+        "gpt-image-1.5",  # shuts down 2026-12-01
+        "gpt-image-1-mini",  # shuts down 2026-12-01
+        "gpt-image-1",  # shuts down 2026-10-23
+    ]
+
     def __init__(self, model: str | None = None, **kwargs: Any):
         """
         Initializes the AIOpenAIImages class, setting the model and related configuration.
@@ -64,12 +80,15 @@ class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
         super().__init__(model=model, **kwargs)
         image_model = model
         if image_model is None:
-            image_model = self.env.get_setting("IMAGE_MODEL_NAME", "gpt-image-1")
+            image_model = self.env.get_setting(
+                "IMAGE_MODEL_NAME", self.DEFAULT_IMAGE_MODEL
+            )
         if image_model.strip() == "":
             raise ValueError(
                 "IMAGE_MODEL_NAME environment variable must be set to a valid OpenAI image model name."
             )
         self.image_model_name: str = image_model.strip()
+        enforce_model_lifecycle(PROVIDER_OPENAI, self.image_model_name)
 
     def model_name(self) -> str:
         """Return the name of the image model in use."""
@@ -77,7 +96,7 @@ class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
 
     def list_model_names(self) -> list[str]:
         """Return the list of image model names supported by this client."""
-        return ["gpt-image-1", "dall-e-2", "dall-e-3"]
+        return list(self.SUPPORTED_IMAGE_MODELS)
 
     def generate_images(
         self, image_prompt: str, image_properties: AIBaseImageProperties

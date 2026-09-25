@@ -73,7 +73,15 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
 
     # Context window sizes (max tokens each model can handle)
     DICT_OPENAI_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
-        # --- GPT-5.x current family (API) ---
+        # --- GPT-6 family (API, Sep 2026; 922K max input of the 1.05M) ---
+        "gpt-6-astra": 1_050_000,
+        "gpt-6-sol": 1_050_000,
+        "gpt-6-luna": 1_050_000,
+        # --- GPT-5.6 family (API) ---
+        "gpt-5.6-sol": 1_050_000,
+        "gpt-5.6-terra": 1_050_000,
+        "gpt-5.6-luna": 1_050_000,
+        # --- GPT-5.x earlier family (API) ---
         "gpt-5.5": 400_000,
         "gpt-5.4": 400_000,
         "gpt-5.4-mini": 400_000,
@@ -97,6 +105,18 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
     }
 
     _OPENAI_FAMILY_PROPERTIES: ClassVar[dict[str, dict[str, Any]]] = {
+        # Reasoning models; the gpt-6-astra model page states an
+        # April 30, 2026 cutoff for the family.
+        "gpt-6": {
+            "reasoning": True,
+            "knowledge_cutoff_date": date(2026, 4, 30),
+        },
+        # Reasoning models; the gpt-5.6-terra model page states a
+        # February 16, 2026 cutoff.
+        "gpt-5.6": {
+            "reasoning": True,
+            "knowledge_cutoff_date": date(2026, 2, 16),
+        },
         # Reasoning models with documented 400k total context; cutoff explicitly published.
         "gpt-5": {
             "reasoning": True,
@@ -142,7 +162,12 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
         capabilities["pricing"] = get_model_pricing(PROVIDER_OPENAI, normalized_name)
 
         # 3) Family properties: map by prefix to avoid duplicating per-model conditionals
-        if normalized_name.startswith("gpt-5"):
+        # gpt-5.6 is checked before gpt-5 because it shares the prefix.
+        if normalized_name.startswith("gpt-6"):
+            capabilities.update(cls._OPENAI_FAMILY_PROPERTIES["gpt-6"])
+        elif normalized_name.startswith("gpt-5.6"):
+            capabilities.update(cls._OPENAI_FAMILY_PROPERTIES["gpt-5.6"])
+        elif normalized_name.startswith("gpt-5"):
             capabilities.update(cls._OPENAI_FAMILY_PROPERTIES["gpt-5"])
         elif normalized_name.startswith("gpt-4.1"):
             capabilities.update(cls._OPENAI_FAMILY_PROPERTIES["gpt-4.1"])
@@ -222,6 +247,9 @@ class AICompletionsPromptParamsOpenAI(AICompletionsPromptParamsBase):
 
 
 class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
+    # One generation behind the newest catalogued family (GPT-6).
+    DEFAULT_COMPLETIONS_MODEL: ClassVar[str] = "gpt-5.6-luna"
+
     def __init__(self, model: str = "", **kwargs: Any):
         """
         Initializes the AiOpenAICompletions class, setting the model and related configuration.
@@ -232,7 +260,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         AIOpenAIBase.__init__(self, **kwargs)
         explicit_model: str = model.strip() if model else ""
         self.completions_model = explicit_model or self.env.get_setting(
-            "COMPLETIONS_MODEL_NAME", "gpt-5.4-mini"
+            "COMPLETIONS_MODEL_NAME", self.DEFAULT_COMPLETIONS_MODEL
         )
         AIBaseCompletions.__init__(self, model=self.completions_model, **kwargs)
         self.model = self.completions_model
@@ -249,11 +277,19 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
 
     @property
     def list_model_names(self) -> list[str]:
-        # Updated as of Aug 2025 based on OpenAI announcements and docs
+        # Verified against the live models.list catalogue on 2026-09-25.
         return [
-            # --- GPT-5.x current family ---
-            "gpt-5.5",  # current flagship (Apr 2026)
-            "gpt-5.4",  # previous flagship, current workhorse
+            # --- GPT-6 family (Sep 2026) ---
+            "gpt-6-astra",  # flagship, most capable
+            "gpt-6-sol",  # coding and agent workhorse
+            "gpt-6-luna",  # high-volume, lowest cost
+            # --- GPT-5.6 family ---
+            "gpt-5.6-sol",  # previous-generation flagship
+            "gpt-5.6-terra",  # previous-generation mid tier
+            "gpt-5.6-luna",  # previous-generation small tier (default)
+            # --- GPT-5.x earlier family ---
+            "gpt-5.5",  # Apr 2026 flagship
+            "gpt-5.4",  # earlier workhorse
             "gpt-5.4-mini",  # smaller, cheaper 5.4 variant
             "gpt-5.4-nano",  # lowest-cost 5.4 variant
             "gpt-5.2",  # older 5.x generation, still served
@@ -265,9 +301,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             # --- GPT-4.1 Family (still supported, introduced Apr 2025) ---
             "gpt-4.1",  # high context (1M tokens), not deprecated yet
             "gpt-4.1-mini",  # lower-cost variant
-            "gpt-4.1-nano",  # smallest variant
-            # --- o4 Reasoning Series (still active) ---
-            "o4-mini",  # reasoning-focused model
+            "gpt-4.1-nano",  # smallest variant; shuts down 2026-10-23
+            # --- o4 Reasoning Series ---
+            "o4-mini",  # reasoning-focused model; shuts down 2026-10-23
             "o4-mini-high",  # higher reasoning capacity variant
             # --- GPT-4o Omni Series (superseded by GPT-5 but still available) ---
             "gpt-4o",  # multimodal model (text, vision, audio)

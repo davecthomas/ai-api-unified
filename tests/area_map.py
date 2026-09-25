@@ -109,6 +109,17 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     ),
     # Pricing registry
     "test_model_pricing.py": ("pricing",),
+    "test_model_catalog_sep_2026.py": (
+        "pricing",
+        "completions",
+        "engine_anthropic",
+        "engine_openai",
+        "engine_gemini",
+        "engine_bedrock",
+        "embeddings",
+        "images",
+        "videos",
+    ),
     # Middleware: observability, finops, PII
     "test_custom_recognizer_registration.py": ("middleware",),
     "test_finops_cost_observability.py": ("middleware", "pricing"),

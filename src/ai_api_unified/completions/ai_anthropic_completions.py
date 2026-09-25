@@ -72,6 +72,8 @@ class AICompletionsCapabilitiesAnthropic(AICompletionsCapabilitiesBase):
 
     # Context window sizes (max input tokens each model can handle).
     DICT_ANTHROPIC_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
+        "claude-fable-5-1": 1_000_000,
+        "claude-opus-5-5": 1_000_000,
         "claude-fable-5": 1_000_000,
         "claude-opus-5": 1_000_000,
         "claude-sonnet-5": 1_000_000,
@@ -117,7 +119,12 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     with structured-output prompts, streaming, and token counting.
     """
 
-    DEFAULT_COMPLETIONS_MODEL: ClassVar[str] = "claude-opus-4-8"
+    DEFAULT_COMPLETIONS_MODEL: ClassVar[str] = "claude-opus-5"
+    # Models that reject a forced tool_choice ({"type": "tool"} or "any")
+    # with a 400; tool use must run with tool_choice auto on these.
+    SET_MODELS_WITHOUT_FORCED_TOOL_CHOICE: ClassVar[frozenset[str]] = frozenset(
+        {"claude-fable-5-1", "claude-opus-5-5"}
+    )
     # The Messages API requires max_tokens on every request. Non-streaming
     # requests stay under SDK HTTP-timeout guards at this size.
     SEND_PROMPT_MAX_TOKENS: ClassVar[int] = 16_000
@@ -173,10 +180,12 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         # Current Claude lineup on the native Anthropic API (aliases, not
         # date-suffixed snapshots).
         return [
-            "claude-fable-5",  # most capable, premium tier
-            "claude-opus-5",  # current Opus-tier flagship
+            "claude-fable-5-1",  # most capable, premium tier
+            "claude-opus-5-5",  # current Opus-tier flagship
+            "claude-fable-5",  # previous premium tier
+            "claude-opus-5",  # previous Opus-tier flagship (default)
             "claude-sonnet-5",  # latest speed/intelligence balance
-            "claude-opus-4-8",  # previous Opus-tier flagship (default)
+            "claude-opus-4-8",  # older Opus
             "claude-opus-4-7",  # previous-generation Opus
             "claude-opus-4-6",  # older Opus
             "claude-sonnet-4-6",  # previous-generation Sonnet
@@ -751,7 +760,8 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         Generate structured output via the Messages API output_config JSON-schema
         format and parse the response into the specified Pydantic model.
 
-        On models with always-on thinking (claude-fable-5), thinking tokens
+        On models with always-on thinking (claude-fable-5, claude-fable-5-1,
+        claude-opus-5-5), thinking tokens
         count against max_tokens; pass a max_response_tokens well above the
         2048 shared default there so the budget covers thinking plus the JSON
         body.
@@ -893,6 +903,14 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         if tools:
             dict_request_kwargs["tools"] = self._build_provider_tools(tools)
         if tool_choice is not None:
+            if self.completions_model in self.SET_MODELS_WITHOUT_FORCED_TOOL_CHOICE:
+                # Early exit: the provider 400s on any forced tool choice for
+                # these models, so fail before the network call.
+                raise ValueError(
+                    f"{self.completions_model} does not accept a forced "
+                    "tool_choice. Pass tool_choice=None and name the tool in "
+                    "the prompt instead."
+                )
             dict_request_kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
         # provider_options merge last so callers can extend the raw request;
         # unknown keys are the provider's to accept or reject.

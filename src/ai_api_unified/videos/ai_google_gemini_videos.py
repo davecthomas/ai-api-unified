@@ -24,6 +24,10 @@ from ai_api_unified.ai_base import (
     AiApiObservedVideosResultModel,
 )
 from ai_api_unified.ai_google_base import AIGoogleBase
+from ai_api_unified.pricing.pricing_registry import (
+    PROVIDER_GOOGLE,
+    enforce_model_lifecycle,
+)
 from ai_api_unified.util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -120,9 +124,6 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         "veo-3.1-generate-preview",
         "veo-3.1-fast-generate-preview",
         "veo-3.1-lite-generate-preview",
-        "veo-3.0-generate-001",
-        "veo-3.0-fast-generate-001",
-        "veo-2.0-generate-001",
     ]
     STATUS_RUNNING: ClassVar[AIVideoGenerationStatus] = AIVideoGenerationStatus.RUNNING
     PROVIDER_METADATA_SUBMITTED_AT_UTC_KEY: ClassVar[str] = "job_submitted_at_utc"
@@ -138,6 +139,7 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
         )
         resolved_model = resolved_model.strip() or self.DEFAULT_VIDEO_MODEL
         self.video_model_name: str = resolved_model
+        enforce_model_lifecycle(PROVIDER_GOOGLE, self.video_model_name)
         self.client: genai.Client = self.get_client(model=self.video_model_name)
 
     def model_name(self) -> str:

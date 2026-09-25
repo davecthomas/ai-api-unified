@@ -4,6 +4,76 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.28.0
+
+Model sweep, verified 2026-09-25 against the live models APIs of Anthropic,
+OpenAI, and Google and against the AWS Bedrock model cards.
+
+### Added
+
+- Anthropic (`claude`): `claude-opus-5-5` ($4 / $20, cache reads $0.20) and
+  `claude-fable-5-1` ($10 / $50, cache reads $0.25), both 1M context.
+- OpenAI (`openai`, `openai-responses`): `gpt-6-astra`, `gpt-6-sol`,
+  `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`, all with
+  a 1.05M context window, reasoning capabilities, and a `context>272k`
+  pricing tier (2x input, 1.5x output above 272K input tokens).
+- OpenAI images: `gpt-image-2`, `gpt-image-2.5-flare`,
+  `gpt-image-2.5-sunburst`, `gpt-image-1.5`, and `gpt-image-1-mini`.
+- Google Gemini: `gemini-3.8-flash` and `gemini-3.7-flash`; Gemini images
+  `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, and
+  `gemini-3-pro-image`; Cloud TTS `gemini-3.1-flash-tts-preview`.
+- Bedrock: `us.amazon.nova-2-lite-v1:0` and the Claude 5.x inference
+  profiles `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`,
+  `us.anthropic.claude-opus-5`, and `us.anthropic.claude-sonnet-5`.
+- Voyage: `voyage-4-large`, `voyage-4`, `voyage-4-lite`, `voyage-code-4`,
+  `voyage-3.5`, and `voyage-3.5-lite`, each accepting 256/512/1024/2048
+  output dimensions.
+- ElevenLabs: `eleven_v3` (now generally available) and `eleven_flash_v2_5`
+  as selectable models.
+
+### Changed
+
+- Engine defaults move one generation behind the newest catalogued model:
+  `claude` `claude-opus-4-8` -> `claude-opus-5`; `openai` `gpt-5.4-mini` ->
+  `gpt-5.6-luna`; `google-gemini` `gemini-3.5-flash` -> `gemini-3.7-flash`.
+  Embedding defaults are unchanged because vectors from different models
+  cannot be compared.
+- The Gemini images engine now generates through `generate_content` with the
+  native Gemini image models, defaulting to `gemini-3.1-flash-image`. It
+  previously called Imagen 4 through `generate_images`, and Imagen 4 was
+  withdrawn from the Gemini API on 2026-08-17, so every call to the old
+  default failed with a 404. Gemini image models return one image per
+  request, so `num_images` issues one request per image. `person_generation`
+  is sent only in Vertex AI mode because the Developer API rejects it.
+- OpenAI images default to `gpt-image-2` (was `gpt-image-1`, which shuts
+  down 2026-10-23).
+- OpenAI speech-to-text uses `gpt-transcribe` instead of `whisper-1`, which
+  shuts down 2027-02-26.
+- `claude-sonnet-5` is priced at $2 / $10. The launch rate became the
+  standard price after Anthropic cancelled the scheduled increase to $3 / $15.
+- Bedrock Nova v1 context windows now match the model cards (128K Micro,
+  300K Lite and Pro, 1M Premier, 200K for Claude 3.5 Haiku). The previous
+  values were about 32 times too large, so the context guard never fired.
+- `send_conversation(..., tool_choice=...)` raises `ValueError` before any
+  request on `claude-opus-5-5` and `claude-fable-5-1` (native and Bedrock).
+  Both models return a 400 for any forced tool choice.
+- The image and video engines now apply the registry lifecycle policy at
+  construction, as the completions and embeddings engines already did.
+
+### Retired and deprecated
+
+- Retired, so construction raises `AiProviderConfigurationError`: OpenAI
+  `sora-2` and `sora-2-pro` (the Videos API shut down 2026-09-24 with no
+  replacement), `dall-e-2`, `dall-e-3`; Google `imagen-4.0-*` (2026-08-17),
+  `veo-3.0-generate-001`, `veo-3.0-fast-generate-001`,
+  `veo-2.0-generate-001` (2026-06-30), and the `gemini-3-pro-image-preview`
+  and `gemini-3.1-flash-image-preview` previews (2026-06-25). The OpenAI
+  video engine remains registered so existing configurations get that
+  explanation instead of an opaque 404.
+- Deprecated, warning once per process: `o4-mini`, `gpt-4.1-nano`, and
+  `gpt-image-1` (shutdown 2026-10-23); `gpt-image-1-mini` and
+  `gpt-image-1.5` (2026-12-01); `gemini-2.5-flash-image` (2026-10-02).
+
 ## 2.27.0
 
 ### Removed

@@ -58,6 +58,12 @@ class AIEmbeddingsCapabilitiesVoyage(AIEmbeddingsCapabilitiesBase):
     """
 
     DICT_MODEL_DIMENSIONS: ClassVar[dict[str, int]] = {
+        "voyage-4-large": 1024,
+        "voyage-4": 1024,
+        "voyage-4-lite": 1024,
+        "voyage-code-4": 1024,
+        "voyage-3.5": 1024,
+        "voyage-3.5-lite": 1024,
         "voyage-3-lite": 512,
         "voyage-3": 1024,
         "voyage-3-large": 1024,
@@ -66,6 +72,12 @@ class AIEmbeddingsCapabilitiesVoyage(AIEmbeddingsCapabilitiesBase):
         "voyage-law-2": 1024,
     }
     DICT_MODEL_MAX_INPUT_TOKENS: ClassVar[dict[str, int]] = {
+        "voyage-4-large": 32_000,
+        "voyage-4": 32_000,
+        "voyage-4-lite": 32_000,
+        "voyage-code-4": 32_000,
+        "voyage-3.5": 32_000,
+        "voyage-3.5-lite": 32_000,
         "voyage-3-lite": 32_000,
         "voyage-3": 32_000,
         "voyage-3-large": 32_000,
@@ -75,6 +87,12 @@ class AIEmbeddingsCapabilitiesVoyage(AIEmbeddingsCapabilitiesBase):
     }
     # Models accepting an output_dimension override (256/512/1024/2048).
     SET_CUSTOM_DIMENSION_MODELS: ClassVar[set[str]] = {
+        "voyage-4-large",
+        "voyage-4",
+        "voyage-4-lite",
+        "voyage-code-4",
+        "voyage-3.5",
+        "voyage-3.5-lite",
         "voyage-3-large",
         "voyage-code-3",
     }

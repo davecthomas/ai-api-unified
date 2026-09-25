@@ -80,8 +80,8 @@ GOOGLE_GENAI_ERRORS: object = gerr
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_COMPLETIONS_MODEL: str = "gemini-3.5-flash"
-DEFAULT_FALLBACK_MODEL: str = "gemini-3.5-flash"
+DEFAULT_COMPLETIONS_MODEL: str = "gemini-3.7-flash"
+DEFAULT_FALLBACK_MODEL: str = "gemini-3.7-flash"
 MAX_RETRIES: int = 5
 INITIAL_BACKOFF_DELAY: float = 1.0
 BACKOFF_MULTIPLIER: float = 2.0
@@ -110,9 +110,11 @@ LIST_MODELS_FAILURE_TTL_SECONDS: float = 60.0
 # (single source of truth); lifecycle (deprecated/retired) is enforced there.
 GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
     # Latest stable models (Gemini 3.x generation; token limits confirmed via
-    # the models.get API 2026-08-03: 1,048,576 in / 65,536 out).
-    "gemini-3.6-flash": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
-    "gemini-3.5-flash": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
+    # the models.get API 2026-08-03 and 2026-09-25: 1,048,576 in / 65,536 out).
+    "gemini-3.8-flash": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
+    "gemini-3.7-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    "gemini-3.6-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    "gemini-3.5-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
     "gemini-3.5-flash-lite": {
         "max_context_tokens": 1_048_576,
         "status": "Latest Stable",

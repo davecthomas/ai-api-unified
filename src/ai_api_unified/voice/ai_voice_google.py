@@ -76,6 +76,12 @@ class AIVoiceGoogle(AIVoiceBase, AIGoogleBase):
             "description": "Cost-optimized Gemini speech with instruction prompts.",
             "is_default": False,
         },
+        {
+            "name": "gemini-3.1-flash-tts-preview",
+            "display_name": "Gemini 3.1 Flash TTS (Preview)",
+            "description": "Newest Cloud TTS Gemini speech model; preview status.",
+            "is_default": False,
+        },
     ]
 
     _DEFAULT_LANGUAGE: ClassVar[str] = "en"
