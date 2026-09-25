@@ -249,6 +249,14 @@ class AICompletionsPromptParamsOpenAI(AICompletionsPromptParamsBase):
 class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
     # One generation behind the newest catalogued family (GPT-6).
     DEFAULT_COMPLETIONS_MODEL: ClassVar[str] = "gpt-5.6-luna"
+    # Pricing and lifecycle registry label for this engine's models.
+    PROVIDER_REGISTRY_LABEL: ClassVar[str] = PROVIDER_OPENAI
+    # Vendor name used in error messages.
+    PROVIDER_DISPLAY_NAME: ClassVar[str] = "OpenAI"
+    # Chat Completions field carrying the response token budget. OpenAI
+    # reasoning models require max_completion_tokens; many OpenAI-compatible
+    # servers accept only the older max_tokens.
+    MAX_TOKENS_REQUEST_FIELD: ClassVar[str] = "max_completion_tokens"
 
     def __init__(self, model: str = "", **kwargs: Any):
         """
@@ -264,14 +272,17 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         )
         AIBaseCompletions.__init__(self, model=self.completions_model, **kwargs)
         self.model = self.completions_model
-        enforce_model_lifecycle(PROVIDER_OPENAI, self.completions_model)
-        self._capabilities: AICompletionsCapabilitiesOpenAI = (
-            AICompletionsCapabilitiesOpenAI.for_model(self.completions_model)
-        )
+        enforce_model_lifecycle(self.PROVIDER_REGISTRY_LABEL, self.completions_model)
+        self._capabilities: AICompletionsCapabilitiesBase = self._build_capabilities()
+
+    def _build_capabilities(self) -> AICompletionsCapabilitiesBase:
+        """Resolves capabilities for the configured model."""
+        # Normal return with the OpenAI per-model capabilities.
+        return AICompletionsCapabilitiesOpenAI.for_model(self.completions_model)
 
     @property
-    def capabilities(self) -> AICompletionsCapabilitiesOpenAI:
-        """Return the resolved capabilities for the current OpenAI model."""
+    def capabilities(self) -> AICompletionsCapabilitiesBase:
+        """Return the resolved capabilities for the current model."""
 
         return self._capabilities
 
@@ -386,14 +397,15 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         """
         if isinstance(exception, APIStatusError):
             raise AiProviderRequestError(
-                f"OpenAI request failed with status "
+                f"{self.PROVIDER_DISPLAY_NAME} request failed with status "
                 f"{exception.status_code}: {exception.message}",
                 status_code=exception.status_code,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
             ) from exception
         if isinstance(exception, (APITimeoutError, APIConnectionError)):
             raise AiProviderRequestError(
-                f"OpenAI request failed before a status was available: " f"{exception}",
+                f"{self.PROVIDER_DISPLAY_NAME} request failed before a status "
+                f"was available: {exception}",
                 status_code=None,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
             ) from exception
@@ -557,7 +569,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             "messages": [{"role": "system", "content": system_prompt}, *messages],
         }
         if max_response_tokens is not None:
-            dict_request_kwargs["max_completion_tokens"] = max_response_tokens
+            dict_request_kwargs[self.MAX_TOKENS_REQUEST_FIELD] = max_response_tokens
         if tools:
             dict_request_kwargs["tools"] = self._build_chat_provider_tools(tools)
         if tool_choice is not None:
@@ -1011,7 +1023,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         dict_request_kwargs: dict[str, Any] = {
             "model": self.completions_model,
             "messages": list_messages,
-            "max_completion_tokens": max_response_tokens,
+            self.MAX_TOKENS_REQUEST_FIELD: max_response_tokens,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -1090,7 +1102,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             ],
         }
         if max_response_tokens is not None:
-            dict_request_kwargs["max_completion_tokens"] = max_response_tokens
+            dict_request_kwargs[self.MAX_TOKENS_REQUEST_FIELD] = max_response_tokens
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_completions_observability_input_metadata(
                 prompt=str_redacted_prompt,
@@ -1267,7 +1279,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         messages=messages,
                         functions=functions,
                         function_call={"name": "strict_schema_response"},
-                        max_completion_tokens=max_response_tokens,
+                        **{self.MAX_TOKENS_REQUEST_FIELD: max_response_tokens},
                     )
                     str_finish_reason: str = str(completion.choices[0].finish_reason)
                     choice_msg = completion.choices[0].message
@@ -1388,7 +1400,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             request_timeout_seconds=request_timeout_seconds
         )
         dict_token_kwargs: dict[str, Any] = (
-            {"max_completion_tokens": max_response_tokens}
+            {self.MAX_TOKENS_REQUEST_FIELD: max_response_tokens}
             if max_response_tokens is not None
             else {}
         )

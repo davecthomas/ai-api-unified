@@ -47,6 +47,9 @@ class AIOpenAIBase:
 
     DEFAULT_OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     OPENAI_US_BASE_URL: str = "https://us.api.openai.com/v1"
+    # Environment setting holding the API key. OpenAI-compatible subclasses
+    # point this at their own vendor key.
+    API_KEY_SETTING: str = "OPENAI_API_KEY"
 
     def __init__(
         self,
@@ -69,7 +72,7 @@ class AIOpenAIBase:
                 https:// unless it targets a loopback host.
         """
         self.env = EnvSettings()
-        self.api_key = self.env.get_setting("OPENAI_API_KEY")
+        self.api_key = self._resolve_api_key()
         # Blank is unconfigured here too: a present-but-blank OPENAI_USER would
         # otherwise resolve to "" and drop caller attribution to None, while the
         # documented contract promises the sentinel.
@@ -77,8 +80,6 @@ class AIOpenAIBase:
             self.env.get_setting(OPENAI_USER_SETTING_KEY, DEFAULT_OPENAI_USER) or ""
         ).strip()
         self.user = str_configured_user or DEFAULT_OPENAI_USER
-        if not self.api_key or self.api_key.strip() == "":
-            raise ValueError("OPENAI_API_KEY environment variable must be set.")
         self.base_url = self.get_api_base_url(base_url=base_url)
 
         self.retry_policy: str = resolve_retry_policy(
@@ -114,6 +115,22 @@ class AIOpenAIBase:
             self._async_client = AsyncOpenAI(**dict_client_kwargs)
         # Normal return with the shared async client instance.
         return self._async_client
+
+    def _resolve_api_key(self) -> str:
+        """
+        Returns the API key from API_KEY_SETTING.
+
+        Raises:
+            ValueError: When the setting is unset or blank.
+        """
+        raw_api_key: object = self.env.get_setting(self.API_KEY_SETTING)
+        str_api_key: str = str(raw_api_key or "").strip()
+        if not str_api_key:
+            raise ValueError(
+                f"{self.API_KEY_SETTING} environment variable must be set."
+            )
+        # Normal return with the configured key.
+        return str_api_key
 
     def get_api_base_url(self, *, base_url: str | None = None) -> str:
         """

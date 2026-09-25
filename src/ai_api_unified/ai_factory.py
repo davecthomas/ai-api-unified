@@ -51,7 +51,7 @@ VIDEO_MODEL_NAME_KEY: str = "VIDEO_MODEL_NAME"
 # Engines whose provider SDK accepts a base-URL override. Others ignore the
 # argument silently, so the factory rejects it for them instead.
 FROZENSET_BASE_URL_OVERRIDE_COMPLETIONS_ENGINES: frozenset[str] = frozenset(
-    {"claude", "openai", "openai-responses", "google-gemini"}
+    {"claude", "openai", "openai-responses", "openai-compatible", "google-gemini"}
 )
 VIDEO_ENGINE_KEY: str = "VIDEO_ENGINE"
 

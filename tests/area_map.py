@@ -109,6 +109,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     ),
     # Pricing registry
     "test_model_pricing.py": ("pricing",),
+    "test_openai_compatible_completions.py": ("completions", "engine_openai"),
     "test_model_catalog_sep_2026.py": (
         "pricing",
         "completions",
@@ -181,6 +182,10 @@ LIST_SOURCE_AREA_RULES: list[tuple[str, tuple[str, ...] | str]] = [
     ),
     (
         "src/ai_api_unified/completions/ai_openai_responses_completions.py",
+        ("completions", "engine_openai"),
+    ),
+    (
+        "src/ai_api_unified/completions/ai_openai_compatible_completions.py",
         ("completions", "engine_openai"),
     ),
     (
