@@ -82,6 +82,27 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         "qwen.",
         "zai.glm",
     )
+    # Models that reject an assistant prefill (the last turn must be the
+    # user's). "claude-opus-5" also matches opus-5-5, and "claude-fable-5"
+    # matches fable-5-1.
+    TUPLE_NO_PREFILL_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "deepseek.r1",
+    )
+    # Models that reject non-default sampling parameters (temperature, top_p).
+    TUPLE_NO_SAMPLING_PARAMS_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+    )
     # Models that reason before answering (Bedrock model cards).
     TUPLE_REASONING_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
         "deepseek.r1",
@@ -269,6 +290,29 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             raise RuntimeError("No text in response")
         return str_text
 
+    @staticmethod
+    def _extract_json_payload(str_text: str) -> str:
+        """
+        Pulls the JSON value out of a reply produced without a prefill, which
+        may wrap it in a code fence or surround it with prose.
+        """
+        str_stripped: str = str_text.strip()
+        if str_stripped.startswith("```"):
+            str_stripped = (
+                str_stripped.split("\n", 1)[1] if "\n" in str_stripped else ""
+            )
+            str_stripped = str_stripped.rsplit("```", 1)[0].strip()
+        if str_stripped[:1] in ("{", "["):
+            # Early return: the reply is already bare JSON.
+            return str_stripped
+        int_start: int = str_stripped.find("{")
+        int_end: int = str_stripped.rfind("}")
+        if int_start == -1 or int_end <= int_start:
+            # Early return: no object found; let json.loads report it.
+            return str_stripped
+        # Normal return with the outermost object.
+        return str_stripped[int_start : int_end + 1]
+
     def _strict_schema_via_structured_output(
         self,
         prompt: str,
@@ -335,27 +379,44 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         Free-form JSON generation with Pydantic v2 post-validation.
         Guarantees variety by using sampling instead of tool-locking.
 
-        The open-weight families (DeepSeek, Qwen, GLM) reject the stop
-        sequence this path sends, and DeepSeek R1 also rejects the assistant
-        prefill, so those models route through native structured output
-        instead (R1, which has none, raises a capability error).
+        The default request prefills the assistant turn with a JSON fence
+        and stops at the closing fence. Models that reject that shape route
+        elsewhere:
+        - the open-weight families (DeepSeek, Qwen, GLM) reject the stop
+          sequence, and Claude 4.6 and later reject the prefill. Those with
+          native structured output use Converse outputConfig;
+        - the rest (DeepSeek R1, and Claude 4.6+ models without native
+          structured output on Bedrock) send a plain request with no prefill
+          and no stop sequence, and the JSON is extracted from the reply.
+        Claude 4.7 and later also reject a non-default temperature, so it is
+        omitted for them.
         """
         self._validate_structured_max_response_tokens(
             provider_name=self.PROVIDER_VENDOR_BEDROCK,
             model_name=self.completions_model,
             max_response_tokens=max_response_tokens,
         )
-        if any(
-            marker in self.completions_model.lower()
+        str_model_lower: str = self.completions_model.lower()
+        bool_open_weight: bool = any(
+            marker in str_model_lower
             for marker in AICompletionsCapabilitiesBedrock.TUPLE_OPEN_WEIGHT_MODEL_MARKERS
-        ):
-            # Early return through native structured output for open-weight models.
+        )
+        bool_prefill: bool = not bool_open_weight and not any(
+            marker in str_model_lower
+            for marker in AICompletionsCapabilitiesBedrock.TUPLE_NO_PREFILL_MODEL_MARKERS
+        )
+        if not bool_prefill and self.capabilities.supports_structured_output:
+            # Early return through native structured output.
             return self._strict_schema_via_structured_output(
                 prompt,
                 response_model,
                 max_response_tokens,
                 other_params=other_params,
             )
+        bool_sampling_params: bool = not any(
+            marker in str_model_lower
+            for marker in AICompletionsCapabilitiesBedrock.TUPLE_NO_SAMPLING_PARAMS_MODEL_MARKERS
+        )
 
         prompt += self.generate_prompt_entropy_tag()
 
@@ -376,18 +437,16 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         user_content: list[dict[str, Any]] = self._build_user_content(
             full_prompt, other_params
         )
-        messages = [
-            {"role": "user", "content": user_content},
-            {"role": "assistant", "content": [{"text": "```json"}]},
-        ]
-
+        messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
         # 3. Sampling settings for maximum variety
-        inference_config = {
-            "maxTokens": max_response_tokens,
-            "temperature": 0.9,  # high randomness
-            "stopSequences": ["```"],  # stop at JSON end marker
-            # "topP": 0.9,  # nucleus sampling
-        }
+        inference_config: dict[str, Any] = {"maxTokens": max_response_tokens}
+        if bool_sampling_params:
+            inference_config["temperature"] = 0.9  # high randomness
+        if bool_prefill:
+            # Prefill an opening fence and stop at the closing one, so the
+            # reply is bare JSON.
+            messages.append({"role": "assistant", "content": [{"text": "```json"}]})
+            inference_config["stopSequences"] = ["```"]
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_completions_observability_input_metadata(
                 prompt=full_prompt,
@@ -428,7 +487,11 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                                 raw_output_text=raw_json,
                             )
                         raise
-                    raw_json = raw_json.rstrip("```").strip()
+                    raw_json = (
+                        raw_json.rstrip("```").strip()
+                        if bool_prefill
+                        else self._extract_json_payload(raw_json)
+                    )
                     if str_stop_reason == "max_tokens":
                         self._raise_structured_token_limit_error(
                             provider_name=self.PROVIDER_VENDOR_BEDROCK,

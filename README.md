@@ -1,4 +1,4 @@
-# ai-api-unified 2.29.0
+# ai-api-unified 2.29.1
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1062,7 +1062,7 @@ AWS_PROFILE=<your profile>
 | Model | Context | Tool calls and structured output | Notes |
 | --- | ---: | --- | --- |
 | `deepseek.v3.2` | 164K | yes | |
-| `us.deepseek.r1-v1:0` | 128K | no | reasoning model; `strict_schema_prompt` unsupported |
+| `us.deepseek.r1-v1:0` | 128K | no | reasoning model; `strict_schema_prompt` extracts JSON from a plain reply |
 | `qwen.qwen3-next-80b-a3b` | 256K | yes | reasoning |
 | `qwen.qwen3-235b-a22b-2507-v1:0` | 256K | yes | us-east-2 and us-west-2 only |
 | `qwen.qwen3-coder-next` | 256K | yes | coding |
@@ -1425,6 +1425,14 @@ Key behavior:
 - undersized or truncated structured responses raise `StructuredResponseTokenLimitError`
 
 `AIStructuredPrompt.send_structured_prompt(...)` is also available when you want the prompt to live on the model instance itself.
+
+On Bedrock, `strict_schema_prompt` picks a request each model accepts. By
+default it pre-fills the reply with a JSON code fence and stops at the closing
+fence. Claude 4.6 and later reject that pre-fill, so Opus 4.6 and the
+open-weight models use native structured output, and the rest (Sonnet 4.6,
+Claude 4.7 and later, DeepSeek R1) send a plain request and extract the JSON
+from the reply. Claude 4.7 and later also get no `temperature`, which they
+reject.
 
 ## Testing
 
