@@ -309,8 +309,17 @@ class TestStrictSchemaPrompt:
         assert "stopSequences" not in kwargs.get("inferenceConfig", {})
         assert kwargs["messages"][-1]["role"] == "user"
 
-    def test_r1_is_refused_before_the_request(self) -> None:
+    def test_r1_uses_a_plain_request_and_extracts_the_json(self) -> None:
         client = _build_client("us.deepseek.r1-v1:0")
-        with pytest.raises(AiProviderCapabilityUnsupportedError):
-            client.strict_schema_prompt("Capital of France?", _Capital)
-        client.client.converse.assert_not_called()
+        client.client.converse.return_value = _converse_response(
+            [
+                {"text": 'Here it is:\n```json\n{"city": "Paris"}\n```'},
+                {"reasoningContent": {"reasoningText": {"text": "thinking"}}},
+            ]
+        )
+        result = client.strict_schema_prompt("Capital of France?", _Capital)
+        assert result.city == "Paris"
+        kwargs = client.client.converse.call_args.kwargs
+        assert kwargs["messages"][-1]["role"] == "user"
+        assert "stopSequences" not in kwargs["inferenceConfig"]
+        assert "outputConfig" not in kwargs

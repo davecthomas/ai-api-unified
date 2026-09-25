@@ -4,6 +4,26 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.29.1
+
+### Fixed
+
+- Bedrock `strict_schema_prompt` failed on Claude 4.6 and later. It sends an
+  assistant pre-fill (a JSON code fence) with a matching stop sequence, and
+  those models reject a pre-fill with a 400; Claude 4.7 and later also
+  reject the `temperature` it sets. Each model now gets a request it
+  accepts:
+  - Claude Opus 4.6, which has native structured output on Bedrock, uses
+    Converse `outputConfig`, like the open-weight models already did;
+  - Claude Sonnet 4.6, Claude 4.7 and later (including the Claude 5
+    family), and DeepSeek R1 send a plain request with no pre-fill and no
+    stop sequence, and the JSON is extracted from the reply, whether bare,
+    fenced, or surrounded by prose;
+  - Claude 4.7 and later get no `temperature`.
+  Nova and Claude 4.5 and older keep the pre-fill request. DeepSeek R1's
+  `strict_schema_prompt`, which raised a capability error in 2.29.0, now
+  works.
+
 ## 2.29.0
 
 ### Added
