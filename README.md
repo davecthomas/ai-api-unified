@@ -1,4 +1,4 @@
-# ai-api-unified 2.28.0
+# ai-api-unified 2.29.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -48,7 +48,7 @@ The public entry points are the stable base interfaces and factories:
 
 | Capability  | Stable interface    | Engines                                                                                                                       | Required extra(s)                                    |
 | ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Completions | `AIBaseCompletions` | `openai`, `openai-responses`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `anthropic`, `google_gemini`, `bedrock`    |
+| Completions | `AIBaseCompletions` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `anthropic`, `google_gemini`, `bedrock`    |
 | Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`, `voyage`                                                                                  | `openai`, `bedrock`, `google_gemini`, `voyage`       |
 | Images      | `AIBaseImages`      | `openai`, `google-gemini`, `nova-canvas` and Bedrock image aliases                                                            | `openai`, `google_gemini`, `bedrock`                 |
 | Videos      | `AIBaseVideos`      | `openai`, `google-gemini`, `nova-reel` and Bedrock video aliases                                                              | `openai`, `google_gemini`, `bedrock`                 |
@@ -235,6 +235,38 @@ uses the Responses API, OpenAI's successor to Chat Completions. Both implement
 `send_prompt`, `strict_schema_prompt`, and
 `send_prompt_streaming`. The Responses engine is text-only for now; use the
 `openai` engine for image inputs.
+
+### OpenAI-compatible servers
+
+The `openai-compatible` engine drives any server that speaks the OpenAI Chat
+Completions protocol (vLLM, Ollama, LiteLLM, hosted vendors with an
+OpenAI-compatible endpoint) through the `openai` extra. It supports the same
+surface as the `openai` engine: `send_prompt`, streaming,
+`send_conversation` with tools, `send_structured_output`,
+`strict_schema_prompt`, and the async variants.
+
+```dotenv
+COMPLETIONS_ENGINE=openai-compatible
+OPENAI_COMPATIBLE_BASE_URL=http://localhost:8000/v1   # required
+COMPLETIONS_MODEL_NAME=Qwen/Qwen3-32B                 # required
+OPENAI_COMPATIBLE_API_KEY=...                         # optional for local servers
+OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=json_schema       # or json_object
+OPENAI_COMPATIBLE_CONTEXT_WINDOW=131072               # optional context guard
+```
+
+The base URL must be https:// unless it targets a loopback host. Requests
+send `max_tokens` rather than OpenAI's `max_completion_tokens`, which most
+compatible servers do not accept. Set `OPENAI_COMPATIBLE_STRUCTURED_OUTPUT`
+to `json_object` for servers that guarantee valid JSON but do not enforce a
+schema; the schema is then placed in the system prompt. The generic engine
+has no pricing, reports no organization identity, and labels observability
+events `openai-compatible`.
+
+Vendor engines subclass `AiOpenAICompatibleCompletions` and set class
+attributes (API key and base-URL settings, default endpoint, model
+catalogue, context windows, image and reasoning models, structured-output
+mode, and the pricing-registry label) instead of reading them from the
+environment.
 
 ### Anthropic Claude engines
 
@@ -841,7 +873,7 @@ There is no implicit default provider. Set the selector for each capability you 
 
 | Environment variable | Valid values                                                                                                                  |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
+| `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
 | `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
 | `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
 | `VIDEO_ENGINE`       | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel`                                                                     |
@@ -898,8 +930,8 @@ retired models fail fast (see the pricing registry).
 
 ### API Base URL Overrides
 
-The `claude`, `openai`, `openai-responses`, and `google-gemini` engines accept
-a base-URL override, so provider traffic can route through an LLM gateway,
+The `claude`, `openai`, `openai-responses`, `openai-compatible`, and
+`google-gemini` engines accept a base-URL override, so provider traffic can route through an LLM gateway,
 a corporate egress proxy, a recording proxy in tests, or any
 OpenAI-compatible server:
 
@@ -907,6 +939,7 @@ OpenAI-compatible server:
 | --- | --- |
 | `claude` | `ANTHROPIC_BASE_URL_OVERRIDE` |
 | `openai`, `openai-responses` | `OPENAI_BASE_URL_OVERRIDE` |
+| `openai-compatible` | `OPENAI_COMPATIBLE_BASE_URL` (required) |
 | `google-gemini` | `GOOGLE_GEMINI_BASE_URL_OVERRIDE` |
 
 ```dotenv

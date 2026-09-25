@@ -105,6 +105,19 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
     ),
     (
         AI_PROVIDER_CAPABILITY_COMPLETIONS,
+        "openai-compatible",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,
+        str_engine="openai-compatible",
+        str_module_path=("ai_api_unified.completions.ai_openai_compatible_completions"),
+        str_class_name="AiOpenAICompatibleCompletions",
+        str_required_extra="openai",
+        str_consumer_install_command=("poetry add 'ai-api-unified[openai]'"),
+        str_local_install_command='poetry install --extras "openai"',
+        set_str_dependency_roots={"openai"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_COMPLETIONS,
         "google-gemini",
     ): AiProviderSpec(
         str_capability=AI_PROVIDER_CAPABILITY_COMPLETIONS,

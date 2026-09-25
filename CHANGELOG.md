@@ -4,6 +4,37 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.29.0
+
+### Added
+
+- `openai-compatible` completions engine for any server that speaks the
+  OpenAI Chat Completions protocol (vLLM, Ollama, LiteLLM, and hosted
+  vendors with an OpenAI-compatible endpoint). It is configured with
+  `OPENAI_COMPATIBLE_BASE_URL` (required), `COMPLETIONS_MODEL_NAME`
+  (required), `OPENAI_COMPATIBLE_API_KEY` (optional),
+  `OPENAI_COMPATIBLE_STRUCTURED_OUTPUT` (`json_schema` or `json_object`),
+  and `OPENAI_COMPATIBLE_CONTEXT_WINDOW`, and it accepts the factory
+  `base_url` argument.
+- `AiOpenAICompatibleCompletions`, the base for vendor engines. A subclass
+  sets class attributes for its API key and base-URL settings, default
+  endpoint, model catalogue and context windows, image-input and reasoning
+  models, structured-output mode, and pricing-registry label. The DeepSeek,
+  Qwen, and Z.ai engines will build on it.
+
+### Changed
+
+- The compatible engine differs from `openai` where compatible servers
+  differ: it sends `max_tokens` instead of `max_completion_tokens`,
+  `strict_schema_prompt` uses `response_format` instead of the legacy
+  `functions` parameter, `json_object` mode puts the schema in the system
+  prompt, organization identity reports none, and observability events
+  carry the vendor label instead of `openai`.
+- Internal: the `openai` engine gained class attributes for the token field,
+  registry label, and vendor display name, a `_build_capabilities` hook,
+  and `AIOpenAIBase` gained `API_KEY_SETTING` and `_resolve_api_key`. The
+  `openai` and `openai-responses` engines behave as before.
+
 ## 2.28.0
 
 Model sweep, verified 2026-09-25 against the live models APIs of Anthropic,
