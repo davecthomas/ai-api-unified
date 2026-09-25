@@ -40,6 +40,12 @@ models split into input / cached-input / output.
 
 | Provider | Model | Input | Cached input | Output | Conf. |
 |---|---|---:|---:|---:|---|
+| OpenAI | gpt-6-astra (≤272K) | 10.00 | 1.00 | 50.00 | high |
+| OpenAI | gpt-6-sol (≤272K) | 2.00 | 0.20 | 10.00 | high |
+| OpenAI | gpt-6-luna (≤272K) | 0.10 | 0.01 | 0.50 | high |
+| OpenAI | gpt-5.6-sol (≤272K) | 4.00 | 0.40 | 20.00 | high |
+| OpenAI | gpt-5.6-terra (≤272K) | 2.00 | 0.20 | 12.00 | high |
+| OpenAI | gpt-5.6-luna (≤272K) | 0.20 | 0.02 | 1.20 | high |
 | OpenAI | gpt-5.5 | 5.00 | 0.50 | 30.00 | high |
 | OpenAI | gpt-5.4 | 2.50 | 0.25 | 15.00 | high |
 | OpenAI | gpt-5.4-mini | 0.75 | 0.075 | 4.50 | high |
@@ -51,11 +57,13 @@ models split into input / cached-input / output.
 | OpenAI | gpt-5-nano | 0.05 | 0.005 | 0.40 | high |
 | OpenAI | gpt-4.1 | 2.00 | 0.50 | 8.00 | high |
 | OpenAI | gpt-4.1-mini | 0.40 | 0.10 | 1.60 | high |
-| OpenAI | gpt-4.1-nano | 0.10 | 0.025 | 0.40 | high |
-| OpenAI | o4-mini | 1.10 | 0.275 | 4.40 | high |
+| OpenAI | gpt-4.1-nano ⚠ | 0.10 | 0.025 | 0.40 | high |
+| OpenAI | o4-mini ⚠ | 1.10 | 0.275 | 4.40 | high |
 | OpenAI | gpt-4o | 2.50 | 1.25 | 10.00 | high |
 | OpenAI | gpt-4o-mini | 0.15 | 0.075 | 0.60 | high |
-| Google | gemini-3.6-flash | 1.50 | 0.15 | 7.50 | high |
+| Google | gemini-3.8-flash ‡ | 1.50 | 0.15 | 7.50 | high |
+| Google | gemini-3.7-flash ‡ | 1.50 | 0.15 | 7.50 | high |
+| Google | gemini-3.6-flash ‡ | 1.50 | 0.15 | 7.50 | high |
 | Google | gemini-3.5-flash | 1.50 | 0.15 | 9.00 | high |
 | Google | gemini-3.5-flash-lite | 0.30 | 0.03 | 2.50 | high |
 | Google | gemini-3.1-flash-lite | 0.25 | 0.025 | 1.50 | high |
@@ -72,9 +80,11 @@ models split into input / cached-input / output.
 | Bedrock | amazon.nova-pro | 0.80 | n/a | 3.20 | high |
 | Bedrock | amazon.nova-premier | 2.50 | n/a | 12.50 | high |
 | Bedrock | claude-3-5-haiku | 0.80 | n/a | 4.00 | high |
+| Anthropic | claude-fable-5-1 | 10.00 | 0.25 | 50.00 | high |
+| Anthropic | claude-opus-5-5 | 4.00 | 0.20 | 20.00 | high |
 | Anthropic | claude-fable-5 | 10.00 | 1.00 | 50.00 | high |
 | Anthropic | claude-opus-5 | 5.00 | 0.50 | 25.00 | high |
-| Anthropic | claude-sonnet-5 † | 3.00 | 0.30 | 15.00 | high |
+| Anthropic | claude-sonnet-5 † | 2.00 | 0.20 | 10.00 | high |
 | Anthropic | claude-opus-4-8 | 5.00 | 0.50 | 25.00 | high |
 | Anthropic | claude-opus-4-7 | 5.00 | 0.50 | 25.00 | high |
 | Anthropic | claude-opus-4-6 | 5.00 | 0.50 | 25.00 | high |
@@ -87,8 +97,15 @@ Lifecycle markers: ⚠ deprecated (still served; warns once per process).
 
 Notes: rows added 2026-08-03 (claude-opus-5, claude-sonnet-5, and the Gemini
 3.x generation) were compiled from the same provider pricing pages as the rest
-of the table. † claude-sonnet-5 shows list rates; introductory pricing
-($2.00 in / $10.00 out) runs through 2026-08-31. gemini-3.1-pro-preview is the
+of the table. Rows added 2026-09-25 (GPT-6 and GPT-5.6, gemini-3.7/3.8-flash,
+claude-opus-5-5, claude-fable-5-1) likewise. OpenAI GPT-6 and GPT-5.6 rows
+show the ≤272K rate; above 272K input the whole request bills at 2x input and
+cached input and 1.5x output (registry tier `context>272k`). ‡ Gemini 3.6–3.8
+Flash rows show list rates; promotional pricing ($0.75 in / $0.075 cached /
+$3.75 out) runs through 2026-12-31. † claude-sonnet-5's launch rate became its
+standard price; the increase to $3 / $15 scheduled for 2026-09-01 was
+cancelled. claude-fable-5-1 reads cache at 0.025x base input and
+claude-opus-5-5 at 0.05x, not the usual 0.1x. gemini-3.1-pro-preview is the
 latest pro tier served by the Gemini API (preview-only as of 2026-08).
 Anthropic rates are the native-API list (added 2026-07 with the `claude`
 engine); the cached-input column is the documented 0.1x prompt-cache read rate.

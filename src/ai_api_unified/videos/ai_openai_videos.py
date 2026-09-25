@@ -19,6 +19,10 @@ from ai_api_unified.ai_base import (
     AiApiObservedVideosResultModel,
 )
 from ai_api_unified.ai_openai_base import AIOpenAIBase
+from ai_api_unified.pricing.pricing_registry import (
+    PROVIDER_OPENAI,
+    enforce_model_lifecycle,
+)
 from ai_api_unified.util.env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -75,6 +79,12 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
     """
     OpenAI Sora video-generation provider.
 
+    OpenAI shut down Sora 2 and the Videos API on 2026-09-24 with no
+    replacement, so both catalogued models are retired and construction
+    raises AiProviderConfigurationError. The engine stays registered so
+    existing configurations fail with that explanation instead of an
+    opaque 404.
+
     Uses the openai SDK's native ``client.videos`` resource for job submission,
     polling, and content download. The SDK sends the correct request shape for
     the current /v1/videos API (notably ``seconds`` as a string enum), which the
@@ -111,6 +121,7 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
             or self.DEFAULT_VIDEO_MODEL
         )
         resolved_model = resolved_model.strip() or self.DEFAULT_VIDEO_MODEL
+        enforce_model_lifecycle(PROVIDER_OPENAI, resolved_model)
         # AIOpenAIBase.__init__ builds self.client (the openai SDK client).
         AIOpenAIBase.__init__(self, **kwargs)
         AIBaseVideos.__init__(self, model=resolved_model)

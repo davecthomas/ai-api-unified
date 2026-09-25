@@ -44,19 +44,19 @@ GOOGLE_AUTH_METHOD=api_key
 COMPLETIONS_ENGINE=google-gemini
 
 # Generic AI settings
-# Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001 | voyage-3)
+# Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001 | voyage-3 | voyage-4)
 EMBEDDING_MODEL_NAME=gemini-embedding-001
 # EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
 # Completions model name, by engine. Leave unset to use the engine default
 # (one generation behind the newest catalogued model):
-#   openai:        default gpt-5.4-mini    | gpt-5.5 | gpt-5.4 | gpt-5.4-nano | gpt-4o-mini
-#   claude:        default claude-opus-4-8 | claude-opus-5 | claude-sonnet-5 | claude-fable-5 | claude-haiku-4-5
-#   google-gemini: default gemini-3.5-flash | gemini-3.6-flash | gemini-3.5-flash-lite | gemini-3.1-pro-preview | gemini-2.5-flash
+#   openai:        default gpt-5.6-luna    | gpt-6-astra | gpt-6-sol | gpt-6-luna | gpt-5.6-sol | gpt-5.6-terra | gpt-5.5
+#   claude:        default claude-opus-5   | claude-opus-5-5 | claude-fable-5-1 | claude-sonnet-5 | claude-opus-4-8 | claude-haiku-4-5
+#   google-gemini: default gemini-3.7-flash | gemini-3.8-flash | gemini-3.6-flash | gemini-3.5-flash-lite | gemini-3.1-pro-preview
 #   nova:          default amazon.nova-lite-v1:0 | amazon.nova-micro-v1:0
-COMPLETIONS_MODEL_NAME=gemini-3.5-flash
-# COMPLETIONS_MODEL_NAME=gemini-3.6-flash
-# COMPLETIONS_MODEL_NAME=claude-opus-5
-# COMPLETIONS_MODEL_NAME=gpt-5.5
+COMPLETIONS_MODEL_NAME=gemini-3.7-flash
+# COMPLETIONS_MODEL_NAME=gemini-3.8-flash
+# COMPLETIONS_MODEL_NAME=claude-opus-5-5
+# COMPLETIONS_MODEL_NAME=gpt-6-sol
 # COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
 # Embedding dimensions (1536 for OpenAI | 1024 for Titan | 3072 default for Gemini)
 # Leave unset to use the provider default for the selected engine.
@@ -103,7 +103,7 @@ DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
 # COMPLETIONS_ENGINE=google-gemini
 # EMBEDDING_ENGINE=google-gemini
 # Default models:
-#   Completions: gemini-3.5-flash
+#   Completions: gemini-3.7-flash
 #   Embeddings: gemini-embedding-001
 
 ########################################################################
@@ -121,14 +121,14 @@ MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=https://eastus.api.cognitive.microsoft.com
 
 # Image engine: openai | nova-canvas | google-gemini
 IMAGE_ENGINE=google-gemini
-# image model used for image generation requests: openai: gpt-image-1 ; amazon nova: amazon.nova-canvas-v1:0 ; google gemini: imagen-4.0-generate-001
-IMAGE_MODEL_NAME=imagen-4.0-generate-001
+# image model used for image generation requests: openai: gpt-image-2 ; amazon nova: amazon.nova-canvas-v1:0 ; google gemini: gemini-3.1-flash-image
+IMAGE_MODEL_NAME=gemini-3.1-flash-image
 
 # Video engine: openai | google-gemini | nova-reel | nova | bedrock
 # The simplest OSS default path is Google Veo via API key auth.
 VIDEO_ENGINE=google-gemini
 # Video model defaults by provider when left unset:
-#   openai -> sora-2
+#   openai -> sora-2 (retired 2026-09-24; the engine now raises on construction)
 #   google-gemini -> veo-3.1-lite-generate-preview
 #   nova-reel / bedrock -> amazon.nova-reel-v1:1
 VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview

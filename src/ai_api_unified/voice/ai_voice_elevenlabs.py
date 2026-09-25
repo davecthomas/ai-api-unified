@@ -40,13 +40,26 @@ class AIVoiceSelectionElevenLabs(AIVoiceSelectionBase):
 class AIVoiceElevenLabs(AIVoiceBase):
     """ElevenLabs implementation of :class:`AIVoiceBase`."""
 
-    V3_MODEL_ID: str = "eleven_v3"  # enterprise-only
+    V3_MODEL_ID: str = "eleven_v3"  # generally available
     _MODEL_DEFINITIONS: ClassVar[list[dict[str, Any]]] = [
         {
             "name": "eleven_multilingual_v2",
             "display_name": "ElevenLabs Multilingual V2",
             "description": "High-quality multilingual model supporting 32 languages.",
             "is_default": True,
+        },
+        {
+            "name": "eleven_v3",
+            "display_name": "Eleven v3",
+            "description": "Most expressive model; 5,000-character request limit.",
+            "is_default": False,
+        },
+        {
+            "name": "eleven_flash_v2_5",
+            "display_name": "Eleven Flash v2.5",
+            "description": "Lowest-latency multilingual model; replaces the "
+            "deprecated eleven_turbo_v2_5.",
+            "is_default": False,
         },
     ]
     default_model_id: str = Field(
@@ -336,7 +349,7 @@ class AIVoiceElevenLabs(AIVoiceBase):
     def get_models_dict(self) -> dict[str, str]:
         all_models: list[Model] = self.client.models.list()
         dict_response: dict[str, str] = {m.model_id: m.name for m in all_models}
-        dict_response[self.V3_MODEL_ID] = "ElevenLabs V3 (Enterprise only)"
+        dict_response.setdefault(self.V3_MODEL_ID, "Eleven v3")
         return dict_response
 
     # ------------- synthesis & playback -------------------------------- #

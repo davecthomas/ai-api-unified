@@ -292,7 +292,8 @@ class TestRegistry:
 
     def test_anthropic_claude_5_generation(self) -> None:
         # Added 2026-08-03 from the live models API; opus-5 matches opus-4-8
-        # rates, sonnet-5 is registered at list (not introductory) rates.
+        # rates. Sonnet 5's launch rate became its standard price on
+        # 2026-09-01 when the scheduled increase was cancelled.
         opus = get_model_pricing("anthropic", "claude-opus-5")
         assert opus is not None
         assert opus.token_rates.input_per_1m == Decimal("5.00")
@@ -301,8 +302,8 @@ class TestRegistry:
 
         sonnet = get_model_pricing("anthropic", "claude-sonnet-5")
         assert sonnet is not None
-        assert sonnet.token_rates.input_per_1m == Decimal("3.00")
-        assert sonnet.token_rates.output_per_1m == Decimal("15.00")
+        assert sonnet.token_rates.input_per_1m == Decimal("2.00")
+        assert sonnet.token_rates.output_per_1m == Decimal("10.00")
 
     def test_openai_gpt_5_5_present(self) -> None:
         pricing = get_model_pricing("openai", "gpt-5.5")

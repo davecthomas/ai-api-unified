@@ -1,4 +1,4 @@
-# ai-api-unified 2.27.0
+# ai-api-unified 2.28.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -57,10 +57,10 @@ The public entry points are the stable base interfaces and factories:
 
 Default model guidance in the checked-in OSS env files:
 
-- Anthropic completions: `claude-opus-4-8`
-- Google completions: `gemini-3.5-flash`
+- Anthropic completions: `claude-opus-5`
+- Google completions: `gemini-3.7-flash`
 - Google embeddings: `gemini-embedding-001` (text-only) or `gemini-embedding-2` (multimodal)
-- Google images: `imagen-4.0-generate-001`
+- Google images: `gemini-3.1-flash-image`
 - Google videos: `veo-3.1-lite-generate-preview`
 - Google voice: `gemini-2.5-pro-tts`
 
@@ -162,9 +162,9 @@ AI_VOICE_ENGINE=google
 GOOGLE_GEMINI_API_KEY=...
 GOOGLE_AUTH_METHOD=api_key
 
-COMPLETIONS_MODEL_NAME=gemini-3.5-flash
+COMPLETIONS_MODEL_NAME=gemini-3.7-flash
 EMBEDDING_MODEL_NAME=gemini-embedding-001
-IMAGE_MODEL_NAME=imagen-4.0-generate-001
+IMAGE_MODEL_NAME=gemini-3.1-flash-image
 VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
 DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
 ```
@@ -255,20 +255,24 @@ engine additionally implements the async variants and batch completions. Use
 
 ```dotenv
 COMPLETIONS_ENGINE=claude
-COMPLETIONS_MODEL_NAME=claude-opus-4-8
+COMPLETIONS_MODEL_NAME=claude-opus-5
 ANTHROPIC_API_KEY=...
 ```
 
 Models catalogued for the `claude` engine (alias model IDs):
-`claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`
-(default), `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, and
-`claude-haiku-4-5`. Capabilities per model include the context window (1M
+`claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5`
+(default), `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`,
+`claude-opus-4-6`, `claude-sonnet-4-6`, and `claude-haiku-4-5`. Capabilities per model include the context window (1M
 tokens except `claude-haiku-4-5` at 200K), streaming, provider-side token
 counting, image inputs, and registry pricing. Structured output uses the Messages API JSON-schema response format,
 so `strict_schema_prompt` works on every catalogued model. On
-`claude-fable-5`, whose thinking is always on and counts against `max_tokens`,
-pass a `max_response_tokens` well above the 2048 default so the budget covers
-thinking plus the JSON body. Image attachments are capped at Anthropic's 5MB
+`claude-fable-5`, `claude-fable-5-1`, and `claude-opus-5-5`, whose thinking
+is always on and counts against `max_tokens`, pass a `max_response_tokens`
+well above the 2048 default so the budget covers thinking plus the JSON body.
+`claude-fable-5-1` and `claude-opus-5-5` reject a forced tool choice, so
+`send_conversation(..., tool_choice=...)` raises `ValueError` on those models
+before any request is sent; leave `tool_choice` unset and name the tool in
+the prompt. Image attachments are capped at Anthropic's 5MB
 per-image limit.
 
 ### Send prompt options
@@ -572,7 +576,12 @@ deprecated models to the same construction-time error (useful in CI).
 A retired model keeps whatever pricing it carried while it was active, so cost
 enrichment can still price usage recorded before the withdrawal date. As of
 2.22.0, `claude-opus-4-1` is retired (withdrawn 2026-08-05); use
-`claude-opus-5`.
+`claude-opus-5`. As of 2.28.0, OpenAI `sora-2` / `sora-2-pro` (the Videos
+API shut down 2026-09-24 with no replacement), `dall-e-2` / `dall-e-3`,
+Google Imagen 4, and Veo 2.0 / 3.0 are retired. `o4-mini`, `gpt-4.1-nano`,
+and `gpt-image-1` are deprecated (shutdown 2026-10-23), as are
+`gpt-image-1-mini` and `gpt-image-1.5` (2026-12-01) and
+`gemini-2.5-flash-image` (2026-10-02).
 
 ### Embeddings
 
@@ -597,9 +606,10 @@ for client in (openai_client, voyage_client):
 ```
 
 The `voyage` engine (extra: `voyage`, auth: `VOYAGE_API_KEY`) serves Voyage
-AI's embeddings specialist models — `voyage-3` (default), `voyage-3-lite`,
-`voyage-3-large`, and the domain variants `voyage-code-3`,
-`voyage-finance-2`, `voyage-law-2` — with registry pricing so cost events
+AI's embeddings specialist models — `voyage-4-large`, `voyage-4`,
+`voyage-4-lite`, `voyage-code-4`, `voyage-3.5`, `voyage-3.5-lite`, `voyage-3`
+(default), `voyage-3-lite`, `voyage-3-large`, and the domain variants
+`voyage-code-3`, `voyage-finance-2`, `voyage-law-2` — with registry pricing so cost events
 work like completions. Anthropic recommends Voyage for embeddings since
 Anthropic serves none.
 
@@ -737,6 +747,11 @@ print(result.artifacts[0].file_path)
 
 #### Kick Off OpenAI Video Generation
 
+OpenAI shut down Sora 2 and the Videos API on 2026-09-24 with no
+replacement. Both `sora-2` models are now retired, so constructing this
+client raises `AiProviderConfigurationError`. The example below is kept
+for reference only; use the `google-gemini` or `nova-reel` video engine.
+
 Environment:
 
 ```dotenv
@@ -856,15 +871,24 @@ There is no implicit default provider. Set the selector for each capability you 
 ### Catalogued Completions Models
 
 Models with capability and pricing entries per engine, last verified against
-each provider's live models API on 2026-08-03. Defaults sit one generation
-behind the newest catalogued model.
+each provider's live models API on 2026-09-25 (Bedrock against the AWS model
+cards). Defaults sit one generation behind the newest catalogued model.
 
 | Engine | Default (no `COMPLETIONS_MODEL_NAME`) | Catalogued models |
 | --- | --- | --- |
-| `openai` / `openai-responses` | `gpt-5.4-mini` | `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini`, `o4-mini-high`, `gpt-4o`, `gpt-4o-mini` |
-| `claude` | `claude-opus-4-8` | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
-| `google-gemini` | `gemini-3.5-flash` | `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` (2.0 family deprecated) |
-| `nova` (Bedrock) | `amazon.nova-lite-v1:0` | `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0` |
+| `openai` / `openai-responses` | `gpt-5.6-luna` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini`, `o4-mini-high`, `gpt-4o`, `gpt-4o-mini` |
+| `claude` | `claude-opus-5` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
+| `google-gemini` | `gemini-3.7-flash` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` (2.0 family retired) |
+| `nova` / `anthropic` (Bedrock) | `amazon.nova-lite-v1:0` | `us.amazon.nova-2-lite-v1:0`, `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0`, `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`, `us.anthropic.claude-opus-5`, `us.anthropic.claude-sonnet-5`, `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
+
+Image and video engine catalogues: OpenAI images default to `gpt-image-2`
+(`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, and the
+deprecated `gpt-image-1.5`, `gpt-image-1-mini`, `gpt-image-1`); Gemini images
+default to `gemini-3.1-flash-image` (`gemini-3.1-flash-lite-image`,
+`gemini-3-pro-image`, and the deprecated `gemini-2.5-flash-image`), generated
+through `generate_content` because Imagen 4 is retired. Gemini video serves
+the Veo 3.1 models only. `person_generation` on Gemini images applies only
+in Vertex AI mode; the Gemini Developer API rejects it.
 
 An uncatalogued model name passes through to the provider on the OpenAI and
 Claude engines (with a conservative default context window); the
@@ -956,7 +980,7 @@ Required for the `claude` completions engine:
 
 Common optional settings:
 
-- `COMPLETIONS_MODEL_NAME` (defaults to `claude-opus-4-8`)
+- `COMPLETIONS_MODEL_NAME` (defaults to `claude-opus-5`)
 
 Claude via Amazon Bedrock (the `anthropic` engine) does not use
 `ANTHROPIC_API_KEY`; it authenticates with AWS credentials like the other
