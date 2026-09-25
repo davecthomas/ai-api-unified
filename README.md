@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while concrete providers are selected at runtime from environment configuration.
+`ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while environment configuration selects the concrete providers at runtime.
 
 **Production status.** This library is in production use, serving live traffic
 across several systems. It is published on PyPI on a regular release cadence,
@@ -150,7 +150,7 @@ poetry install --all-extras --with dev
 
 Copy [`env_template`](env_template) to `.env` and fill in only the providers you use.
 
-The OSS template now defaults to Google API-key auth:
+The OSS template defaults to Google API-key auth:
 
 ```dotenv
 COMPLETIONS_ENGINE=google-gemini
@@ -216,7 +216,8 @@ boundaries, so use `send_prompt` in PII-redacting deployments.
 
 Providers whose capabilities include `supports_token_counting` can return a
 provider-counted input token total without running inference. Bedrock supports
-this via its `CountTokens` operation and the native Anthropic API via its
+this via its `CountTokens` operation for Nova and Claude (not for the DeepSeek,
+Qwen, and GLM models it hosts), and the native Anthropic API via its
 `count_tokens` endpoint; other providers raise
 `AiProviderCapabilityUnsupportedError`.
 
@@ -325,20 +326,21 @@ text = client.send_prompt(
 ```
 
 All three parameters map to native provider fields on the `claude`,
-`openai`, `openai-responses`, and `google-gemini` engines. Bedrock-routed
+`openai`, `openai-responses`, `openai-compatible`, and `google-gemini`
+engines. Bedrock-routed
 engines map `system_prompt` and `max_response_tokens` but raise
 `AiProviderCapabilityUnsupportedError` for `request_timeout_seconds` (boto3
 has no per-call timeout). See the support matrix below.
 
 #### Feature support by engine
 
-| Feature | `claude` | `openai` | `openai-responses` | `google-gemini` | Bedrock-routed |
-|---|---|---|---|---|---|
-| `send_prompt` extended params | yes | yes | yes | yes | partial (no per-call timeout) |
-| `send_structured_output` | yes | yes | yes | yes | per-model (AWS structured-outputs list: Claude 4.5+) |
-| `send_conversation` tool loop | yes | yes | yes | yes | Nova + Claude families |
-| Async variants (`asend_*`) | yes | yes | yes | yes | no (boto3 has no official async client) |
-| `retry_policy` / `AiProviderRequestError` | yes | yes | yes | yes | yes (engine loop; SDK retries via `AWS_MAX_ATTEMPTS`) |
+| Feature | `claude` | `openai` | `openai-responses` | `openai-compatible` | `google-gemini` | Bedrock-routed |
+|---|---|---|---|---|---|---|
+| `send_prompt` extended params | yes | yes | yes | yes | yes | partial (no per-call timeout) |
+| `send_structured_output` | yes | yes | yes | yes (`json_schema` or `json_object` mode) | yes | per-model: Claude 4.5 and Opus 4.6, DeepSeek V3.2, Qwen3, GLM |
+| `send_conversation` tool loop | yes | yes | yes | yes | yes | Nova, Claude, DeepSeek V3.2, Qwen3, GLM (not DeepSeek R1) |
+| Async variants (`asend_*`) | yes | yes | yes | yes | yes | no (boto3 has no official async client) |
+| `retry_policy` / `AiProviderRequestError` | yes | yes | yes | yes | yes | yes (engine loop; SDK retries via `AWS_MAX_ATTEMPTS`) |
 
 Unsupported combinations raise the typed `AiProviderCapabilityUnsupportedError`
 and each engine's `client.capabilities` flags report support at runtime.
@@ -353,8 +355,10 @@ support via `capabilities.supports_structured_output`. Provider mappings:
 `claude` uses the Messages API JSON-schema response format (and streams and
 accumulates internally above its non-streaming budget); `openai` and
 `openai-responses` use the `json_schema` response format in schema-guided
-mode; `google-gemini` uses `response_json_schema`; Bedrock uses Converse
-`outputConfig` on the models AWS supports (Claude 4.5+).
+mode; `openai-compatible` uses `json_schema`, or `json_object` with the
+schema in the system prompt; `google-gemini` uses `response_json_schema`;
+Bedrock uses Converse `outputConfig` on the models AWS supports (Claude 4.5
+and Opus 4.6, DeepSeek V3.2, Qwen3, and GLM).
 
 ```python
 result = client.send_structured_output(
@@ -447,8 +451,8 @@ engine-specific content replayable as the next assistant turn. Because the
 assistant-turn wire shape differs per engine, `extend_messages_with_turn`
 appends it for you and `build_tool_result_message` produces the engine's
 tool-result shape, so the loop above runs unchanged on `claude`, `openai`,
-`openai-responses`, `google-gemini`, and tool-capable Bedrock models
-(Nova and Claude families). On Gemini, tool calls carry no provider ids, so
+`openai-responses`, `openai-compatible`, `google-gemini`, and tool-capable
+Bedrock models (Nova, Claude, DeepSeek V3.2, Qwen3, and GLM). On Gemini, tool calls carry no provider ids, so
 `AIToolCall.id` is the function name.
 
 ### Async variants
@@ -456,8 +460,9 @@ tool-result shape, so the loop above runs unchanged on `claude`, `openai`,
 Engines whose SDK has an async client expose `a`-prefixed variants with the
 same signatures: `asend_prompt`, `asend_structured_output`, and
 `asend_conversation`. Support is declared via `capabilities.supports_async`:
-`claude` (lazy `AsyncAnthropic`), `openai` and `openai-responses` (lazy
-`AsyncOpenAI`), and `google-gemini` (`client.aio`) implement all three;
+`claude` (lazy `AsyncAnthropic`), `openai`, `openai-responses`, and
+`openai-compatible` (lazy `AsyncOpenAI`), and `google-gemini` (`client.aio`)
+implement all three;
 Bedrock does not (boto3 has no official async client). Gemini async calls
 run a single attempt — the engine backoff loop is synchronous — so pair them
 with caller-owned backoff on `AiProviderRequestError`. Sync methods are
@@ -505,16 +510,14 @@ except AiProviderRequestError as error:
 The `claude` engine can process many prompts as one asynchronous batch through
 Anthropic's Message Batches API. Batches run in the background (most finish well
 under an hour, up to a 24-hour ceiling) at roughly half the per-token cost of
-individual calls — use them for bulk work that can wait, such as
-classification, extraction, or evaluation runs.
+individual calls — use them for bulk work that can wait.
 
 Batch support is capability-gated like streaming and token counting: check
 `capabilities.supports_batch` before calling. Every cataloged `claude` model
 supports it; other engines raise `AiProviderCapabilityUnsupportedError`.
 
-Each request carries a `custom_id` you choose. Results come back keyed by that
-`custom_id` (in arbitrary order), so you correlate results to requests by
-`custom_id`.
+Each request carries a `custom_id` you choose. Results come back in arbitrary
+order, keyed by that `custom_id`.
 
 The blocking convenience path submits, polls, and returns results in one call:
 
@@ -931,9 +934,9 @@ retired models fail fast (see the pricing registry).
 ### API Base URL Overrides
 
 The `claude`, `openai`, `openai-responses`, `openai-compatible`, and
-`google-gemini` engines accept a base-URL override, so provider traffic can route through an LLM gateway,
-a corporate egress proxy, a recording proxy in tests, or any
-OpenAI-compatible server:
+`google-gemini` engines accept a base-URL override, so provider traffic can
+route through an LLM gateway, a corporate egress proxy, a recording proxy in
+tests, or any OpenAI-compatible server:
 
 | Engine | Setting |
 | --- | --- |
@@ -981,7 +984,7 @@ Rules and rationale:
   does not follow `ANTHROPIC_BASE_URL_OVERRIDE`. Routing inference through a
   gateway never silently hands that gateway an administration credential. Set
   `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` to opt the admin lookup in as well.
-- The deprecated `OPENAI_BASE_URL` is validated by the same rules, since other
+- The same rules validate the deprecated `OPENAI_BASE_URL`, since other
   tooling commonly sets that name process-wide.
 - Engines without SDK support (Bedrock-routed, `titan`, `voyage`, voice)
   raise `AiProviderCapabilityUnsupportedError` when passed `base_url`, rather
@@ -1110,11 +1113,11 @@ work in only one client:
 | --- | :---: | :---: | --- |
 | Completions (incl. streaming) | ✅ | ✅ | |
 | Text embeddings | ✅ | ✅ | |
-| Image generation (Imagen) | ✅ | ✅ | |
+| Image generation (Gemini image models) | ✅ | ✅ | `person_generation` is sent only in Vertex mode |
 | Multimodal (media) embeddings | ✅ | ❌ | the SDK sends only text parts to the Vertex embedding endpoint, so the library raises `NotImplementedError` when media is attached in Vertex mode |
 | Text-to-video with local download | ✅ | ❌ | downloaded via the Files API (`client.files.download`), which the SDK supports only in the Developer client; under Vertex set `download_outputs=False` to receive a remote `gs://` URI instead |
 | `source_video` (video continuation) | ❌ | ✅ | the library raises `NotImplementedError` in `api_key` mode; this path requires Vertex |
-| Voice (Gemini TTS / STT) | ⚠️ | ✅ | the library wires API keys into the Cloud TTS/STT clients, but Google may reject API keys that are not enabled for those APIs; `service_account` is the reliable mode |
+| Voice (Gemini TTS / STT) | ⚠️ | ✅ | the library wires API keys into the Cloud TTS/STT clients. Google may reject a key not enabled for those APIs, so `service_account` is the reliable mode |
 
 Pick the mode for what you need: multimodal-media embeddings and
 text-to-video-with-download require `api_key`, and `source_video` requires
@@ -1170,7 +1173,7 @@ Factory entry points:
 - `AIFactory.get_ai_video_client()`
 - `AIFactory.get_ai_voice_client()` (or `AIVoiceFactory.create()`)
 
-Concrete providers are no longer re-exported from package `__init__.py` modules. If you need a concrete class directly, import it from its implementation module, for example:
+Concrete providers are not re-exported from package `__init__.py` modules. If you need a concrete class directly, import it from the module that defines it, for example:
 
 ```python
 from ai_api_unified.completions.ai_google_gemini_completions import (
@@ -1188,7 +1191,7 @@ Typical factory failure modes:
 
 ## Middleware
 
-Middleware is configured by YAML referenced through `AI_MIDDLEWARE_CONFIG_PATH`.
+A YAML file named by `AI_MIDDLEWARE_CONFIG_PATH` configures middleware.
 
 ### Observability
 
@@ -1482,9 +1485,9 @@ git push origin v<version>
 
 - `COMPLETIONS_ENGINE must be configured explicitly` or similar: set the required engine selector for that capability.
 - `AiProviderDependencyUnavailableError`: install the extra for the selected provider.
-- Google auth errors: the OSS default is `GOOGLE_AUTH_METHOD=api_key`. If you switch to `service_account`, make sure `GOOGLE_APPLICATION_CREDENTIALS` points to a valid local JSON credential file and set `GOOGLE_PROJECT_ID` and `GOOGLE_LOCATION` when required.
+- Google auth errors: the OSS default is `GOOGLE_AUTH_METHOD=api_key`. If you switch to `service_account`, point `GOOGLE_APPLICATION_CREDENTIALS` at a valid local JSON credential file. Set `GOOGLE_PROJECT_ID` and `GOOGLE_LOCATION` when required.
 - Unexpected embeddings dimensions: leave `EMBEDDING_DIMENSIONS` unset unless you intentionally want a non-default size.
-- Google image generation or TTS failures in live tests can reflect account/service state rather than library bugs, for example a disabled cloud API or missing paid-plan access.
+- Google image generation or TTS failures in live tests often come from account or service state: a disabled cloud API, or missing paid-plan access. Check those before suspecting a library bug.
 - `AI_API_GEO_RESIDENCY=US` is a best-effort routing hint. Only providers that expose regional routing controls can honor it directly.
 
 ## License
