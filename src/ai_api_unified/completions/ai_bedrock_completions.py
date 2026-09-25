@@ -152,7 +152,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
 
     # Context windows in tokens, from the Bedrock model cards. Nova 2 and
     # the Claude 5.x models accept on-demand traffic only through a geo or
-    # global inference profile, so the us. profile IDs are catalogued.
+    # global inference profile, so the us. profile IDs are cataloged.
     DICT_CONTEXT_WINDOWS: dict[str, int] = {
         "us.amazon.nova-2-lite-v1:0": 1_000_000,
         "amazon.nova-micro-v1:0": 128_000,

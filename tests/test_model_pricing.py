@@ -141,7 +141,7 @@ class TestRegistry:
     def test_new_codex_model_present(self) -> None:
         assert get_model_pricing("openai", "gpt-5.1-codex-max") is not None
 
-    def test_uncatalogued_model_returns_none(self) -> None:
+    def test_uncataloged_model_returns_none(self) -> None:
         assert get_model_pricing("openai", "does-not-exist") is None
 
     def test_every_anthropic_model_carries_cache_write_rates(self) -> None:
@@ -293,7 +293,7 @@ class TestRegistry:
     def test_anthropic_claude_5_generation(self) -> None:
         # Added 2026-08-03 from the live models API; opus-5 matches opus-4-8
         # rates. Sonnet 5's launch rate became its standard price on
-        # 2026-09-01 when the scheduled increase was cancelled.
+        # 2026-09-01 when the scheduled increase was canceled.
         opus = get_model_pricing("anthropic", "claude-opus-5")
         assert opus is not None
         assert opus.token_rates.input_per_1m == Decimal("5.00")
@@ -329,7 +329,7 @@ class TestRegistry:
 class TestLifecycle:
     """enforce_model_lifecycle policy per status."""
 
-    # Deprecation is a state the catalogue passes through, so pinning these
+    # Deprecation is a state the catalog passes through, so pinning these
     # tests to whichever real model is deprecated this month makes them fail
     # when that model is retired. This entry is owned by the test.
     DEPRECATED_FIXTURE: str = "test-only-deprecated-model"
@@ -360,7 +360,7 @@ class TestLifecycle:
             enforce_model_lifecycle("openai", "gpt-5.4")
         assert caught == []
 
-    def test_uncatalogued_model_passes_silently(self) -> None:
+    def test_uncataloged_model_passes_silently(self) -> None:
         enforce_model_lifecycle("openai", "unknown-model")  # no raise
 
     def test_retired_model_raises(self) -> None:

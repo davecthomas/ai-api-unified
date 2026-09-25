@@ -264,7 +264,7 @@ events `openai-compatible`.
 
 Vendor engines subclass `AiOpenAICompatibleCompletions` and set class
 attributes (API key and base-URL settings, default endpoint, model
-catalogue, context windows, image and reasoning models, structured-output
+catalog, context windows, image and reasoning models, structured-output
 mode, and the pricing-registry label) instead of reading them from the
 environment.
 
@@ -291,13 +291,13 @@ COMPLETIONS_MODEL_NAME=claude-opus-5
 ANTHROPIC_API_KEY=...
 ```
 
-Models catalogued for the `claude` engine (alias model IDs):
+Models cataloged for the `claude` engine (alias model IDs):
 `claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5`
 (default), `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`,
 `claude-opus-4-6`, `claude-sonnet-4-6`, and `claude-haiku-4-5`. Capabilities per model include the context window (1M
 tokens except `claude-haiku-4-5` at 200K), streaming, provider-side token
 counting, image inputs, and registry pricing. Structured output uses the Messages API JSON-schema response format,
-so `strict_schema_prompt` works on every catalogued model. On
+so `strict_schema_prompt` works on every cataloged model. On
 `claude-fable-5`, `claude-fable-5-1`, and `claude-opus-5-5`, whose thinking
 is always on and counts against `max_tokens`, pass a `max_response_tokens`
 well above the 2048 default so the budget covers thinking plus the JSON body.
@@ -509,7 +509,7 @@ individual calls — use them for bulk work that can wait, such as
 classification, extraction, or evaluation runs.
 
 Batch support is capability-gated like streaming and token counting: check
-`capabilities.supports_batch` before calling. Every catalogued `claude` model
+`capabilities.supports_batch` before calling. Every cataloged `claude` model
 supports it; other engines raise `AiProviderCapabilityUnsupportedError`.
 
 Each request carries a `custom_id` you choose. Results come back keyed by that
@@ -900,20 +900,20 @@ There is no implicit default provider. Set the selector for each capability you 
 | `GOOGLE_GEMINI_BASE_URL_OVERRIDE` | Optional API base-URL override for `google-gemini` (https required) |
 | `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` | Optional separate override for the Anthropic Admin API lookup; the admin key does not follow the inference override |
 
-### Catalogued Completions Models
+### Cataloged Completions Models
 
 Models with capability and pricing entries per engine, last verified against
 each provider's live models API on 2026-09-25 (Bedrock against the AWS model
-cards). Defaults sit one generation behind the newest catalogued model.
+cards). Defaults sit one generation behind the newest cataloged model.
 
-| Engine | Default (no `COMPLETIONS_MODEL_NAME`) | Catalogued models |
+| Engine | Default (no `COMPLETIONS_MODEL_NAME`) | Cataloged models |
 | --- | --- | --- |
 | `openai` / `openai-responses` | `gpt-5.6-luna` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini`, `o4-mini-high`, `gpt-4o`, `gpt-4o-mini` |
 | `claude` | `claude-opus-5` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
 | `google-gemini` | `gemini-3.7-flash` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` (2.0 family retired) |
 | `nova` / `anthropic` (Bedrock) | `amazon.nova-lite-v1:0` | `us.amazon.nova-2-lite-v1:0`, `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0`, `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`, `us.anthropic.claude-opus-5`, `us.anthropic.claude-sonnet-5`, `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
 
-Image and video engine catalogues: OpenAI images default to `gpt-image-2`
+Image and video engine catalogs: OpenAI images default to `gpt-image-2`
 (`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, and the
 deprecated `gpt-image-1.5`, `gpt-image-1-mini`, `gpt-image-1`); Gemini images
 default to `gemini-3.1-flash-image` (`gemini-3.1-flash-lite-image`,
@@ -922,7 +922,7 @@ through `generate_content` because Imagen 4 is retired. Gemini video serves
 the Veo 3.1 models only. `person_generation` on Gemini images applies only
 in Vertex AI mode; the Gemini Developer API rejects it.
 
-An uncatalogued model name passes through to the provider on the OpenAI and
+An uncataloged model name passes through to the provider on the OpenAI and
 Claude engines (with a conservative default context window); the
 `google-gemini` engine falls back to its default model and logs a warning.
 Deprecated models warn once per process with a sunset date and replacement;

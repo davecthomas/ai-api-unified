@@ -321,12 +321,12 @@ class TestGoogleGeminiModules:
                     mock_models = Mock()
                     mock_client.models = mock_models
                     mock_models.get.return_value = None
-                    # A real catalogue, so list_model_names exercises the live
+                    # A real catalog, so list_model_names exercises the live
                     # path here rather than passing through its error fallback.
-                    catalogue_entry = Mock(spec=["name", "supported_actions"])
-                    catalogue_entry.name = "models/gemini-2.5-flash"
-                    catalogue_entry.supported_actions = ["generateContent"]
-                    mock_models.list.return_value = [catalogue_entry]
+                    catalog_entry = Mock(spec=["name", "supported_actions"])
+                    catalog_entry.name = "models/gemini-2.5-flash"
+                    catalog_entry.supported_actions = ["generateContent"]
+                    mock_models.list.return_value = [catalog_entry]
                     mock_genai.Client.return_value = mock_client
                     mock_genai.types = Mock()
 
@@ -340,7 +340,7 @@ class TestGoogleGeminiModules:
                     assert client.model_name == "gemini-2.5-flash"
                     assert isinstance(client.list_model_names, list)
                     assert "gemini-2.5-flash" in client.list_model_names
-                    # Live path: a spec entry the catalogue omits is dropped.
+                    # Live path: a spec entry the catalog omits is dropped.
                     assert "gemini-3.6-flash" in GEMINI_MODEL_SPECS
                     assert "gemini-3.6-flash" not in client.list_model_names
                     assert client.max_context_tokens > 0
@@ -360,7 +360,7 @@ class TestGoogleGeminiModules:
 
         This is the client-level half of the lifecycle policy: retired
         raises, deprecated warns and continues. It covers the retired half
-        because no deprecated completions model remains catalogued — the
+        because no deprecated completions model remains cataloged — the
         Gemini 2.0 family, which used to be the only one, is retired as of
         2026-08. The deprecated half stays covered at the registry level in
         test_model_pricing.py.

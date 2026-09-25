@@ -1097,7 +1097,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r="2.50",
                 write_1h_r="4.00",
                 notes="The launch introductory rate became the standard price; "
-                "the scheduled 2026-09-01 increase to $3/$15 was cancelled.",
+                "the scheduled 2026-09-01 increase to $3/$15 was canceled.",
             ),
         ),
         _info(
@@ -1218,12 +1218,12 @@ _STRICT_DEPRECATIONS_ENV: str = "AI_STRICT_DEPRECATIONS"
 
 
 def get_model_info(provider: str, model: str) -> AIModelInfo | None:
-    """Return the registry entry for a model, or None when not catalogued."""
+    """Return the registry entry for a model, or None when not cataloged."""
     return DICT_MODEL_INFO.get((provider, model))
 
 
 def get_model_pricing(provider: str, model: str) -> AIModelPricing | None:
-    """Return pricing for a model, or None when not catalogued or priced."""
+    """Return pricing for a model, or None when not cataloged or priced."""
     info: AIModelInfo | None = get_model_info(provider, model)
     return info.pricing if info is not None else None
 
@@ -1259,7 +1259,7 @@ def enforce_model_lifecycle(provider: str, model: str) -> None:
     """
     Apply the lifecycle policy for a resolved (provider, model).
 
-    Call once when a client resolves its model. Active or uncatalogued models
+    Call once when a client resolves its model. Active or uncataloged models
     pass silently.
 
     Args:
@@ -1272,7 +1272,7 @@ def enforce_model_lifecycle(provider: str, model: str) -> None:
     """
     info: AIModelInfo | None = get_model_info(provider, model)
     if info is None or info.status is ModelLifecycleStatus.ACTIVE:
-        # Early return: active or uncatalogued models need no notification.
+        # Early return: active or uncataloged models need no notification.
         return None
 
     message: str = _format_lifecycle_message(info)

@@ -235,7 +235,7 @@ class AiVoyageEmbeddings(AIBaseEmbeddings):
 
     @property
     def list_model_names(self) -> list[str]:
-        """Catalogued Voyage embedding model identifiers."""
+        """Cataloged Voyage embedding model identifiers."""
         return list(AIEmbeddingsCapabilitiesVoyage.DICT_MODEL_DIMENSIONS)
 
     @property

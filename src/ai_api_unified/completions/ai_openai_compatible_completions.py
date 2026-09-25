@@ -14,7 +14,7 @@ class setting:
   `max_completion_tokens`);
 - structured output (`json_schema`, or `json_object` with the schema in the
   system prompt for servers that only guarantee valid JSON);
-- the model catalogue, context windows, image input, and reasoning support;
+- the model catalog, context windows, image input, and reasoning support;
 - the pricing and lifecycle registry label and observability vendor label.
 
 OpenAI-only features are switched off: the organization identity lookups
@@ -98,10 +98,10 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
     STRUCTURED_OUTPUT_MODE_SETTING: ClassVar[str | None] = (
         "OPENAI_COMPATIBLE_STRUCTURED_OUTPUT"
     )
-    # Environment override for the context window of an uncatalogued model.
+    # Environment override for the context window of an uncataloged model.
     CONTEXT_WINDOW_SETTING: ClassVar[str | None] = "OPENAI_COMPATIBLE_CONTEXT_WINDOW"
-    # Catalogued models, in display order, and their input context windows.
-    LIST_CATALOGUED_MODELS: ClassVar[list[str]] = []
+    # Cataloged models, in display order, and their input context windows.
+    LIST_CATALOGED_MODELS: ClassVar[list[str]] = []
     DICT_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {}
     # Models that accept image input and that reason before answering.
     SET_IMAGE_INPUT_MODELS: ClassVar[frozenset[str]] = frozenset()
@@ -208,15 +208,15 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
 
     def _resolve_context_window(self) -> int:
         """
-        Returns the catalogued context window, then the environment
+        Returns the cataloged context window, then the environment
         override, then 0 (unknown; the context guard is skipped).
         """
-        int_catalogued: int | None = self.DICT_CONTEXT_WINDOWS.get(
+        int_cataloged: int | None = self.DICT_CONTEXT_WINDOWS.get(
             self.completions_model
         )
-        if int_catalogued is not None:
-            # Early return with the catalogued window.
-            return int_catalogued
+        if int_cataloged is not None:
+            # Early return with the cataloged window.
+            return int_cataloged
         if self.CONTEXT_WINDOW_SETTING is None:
             # Early return: no override setting for this engine.
             return 0
@@ -240,7 +240,7 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
         # Normal return with the configured window.
         return int_window
 
-    # ── Catalogue and capabilities ──────────────────────────────────────────
+    # ── Catalog and capabilities ──────────────────────────────────────────
 
     def _build_capabilities(self) -> AICompletionsCapabilitiesBase:
         """
@@ -269,12 +269,12 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
     @property
     def list_model_names(self) -> list[str]:
         """
-        Catalogued models; the generic engine reports the configured model
+        Cataloged models; the generic engine reports the configured model
         because it cannot know what the server hosts.
         """
-        if self.LIST_CATALOGUED_MODELS:
-            # Early return with the vendor catalogue.
-            return list(self.LIST_CATALOGUED_MODELS)
+        if self.LIST_CATALOGED_MODELS:
+            # Early return with the vendor catalog.
+            return list(self.LIST_CATALOGED_MODELS)
         # Normal return with the one model this client is configured for.
         return [self.completions_model]
 

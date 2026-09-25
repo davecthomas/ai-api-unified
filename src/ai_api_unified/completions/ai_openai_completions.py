@@ -64,7 +64,7 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
         "supports_data_residency_constraint": True,
         # All supported chat models stream via chat.completions stream=True.
         "supports_streaming": True,
-        # All catalogued chat models accept tools/tool_choice and the
+        # All cataloged chat models accept tools/tool_choice and the
         # json_schema response_format, and the SDK ships AsyncOpenAI.
         "supports_tool_use": True,
         "supports_structured_output": True,
@@ -247,7 +247,7 @@ class AICompletionsPromptParamsOpenAI(AICompletionsPromptParamsBase):
 
 
 class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
-    # One generation behind the newest catalogued family (GPT-6).
+    # One generation behind the newest cataloged family (GPT-6).
     DEFAULT_COMPLETIONS_MODEL: ClassVar[str] = "gpt-5.6-luna"
     # Pricing and lifecycle registry label for this engine's models.
     PROVIDER_REGISTRY_LABEL: ClassVar[str] = PROVIDER_OPENAI
@@ -288,7 +288,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
 
     @property
     def list_model_names(self) -> list[str]:
-        # Verified against the live models.list catalogue on 2026-09-25.
+        # Verified against the live models.list catalog on 2026-09-25.
         return [
             # --- GPT-6 family (Sep 2026) ---
             "gpt-6-astra",  # flagship, most capable

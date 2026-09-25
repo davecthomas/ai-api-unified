@@ -7,7 +7,7 @@ Tests for the OpenAI-compatible completions base and the generic
 
 Covers configuration resolution (base URL, API key, model), the vendor
 settings a subclass overrides (token field, structured-output mode,
-catalogue, image input, reasoning), the OpenAI-only features switched off,
+catalog, image input, reasoning), the OpenAI-only features switched off,
 factory resolution, and that the OpenAI engine itself is unchanged.
 """
 
@@ -111,7 +111,7 @@ class _VendorCompletions(AiOpenAICompatibleCompletions):
     STRUCTURED_OUTPUT_MODE: ClassVar[str] = "json_object"
     STRUCTURED_OUTPUT_MODE_SETTING: ClassVar[str | None] = None
     CONTEXT_WINDOW_SETTING: ClassVar[str | None] = None
-    LIST_CATALOGUED_MODELS: ClassVar[list[str]] = ["vx-chat", "vx-reasoner"]
+    LIST_CATALOGED_MODELS: ClassVar[list[str]] = ["vx-chat", "vx-reasoner"]
     DICT_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
         "vx-chat": 128_000,
         "vx-reasoner": 128_000,
@@ -201,7 +201,7 @@ class TestCapabilities:
             with pytest.raises(AiProviderConfigurationError, match="positive"):
                 AiOpenAICompatibleCompletions()
 
-    def test_vendor_catalogue_drives_capabilities(self) -> None:
+    def test_vendor_catalog_drives_capabilities(self) -> None:
         chat = _build_vendor_client()
         assert chat.list_model_names == ["vx-chat", "vx-reasoner"]
         assert chat.max_context_tokens == 128_000

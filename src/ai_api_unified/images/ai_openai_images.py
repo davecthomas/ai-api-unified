@@ -59,7 +59,7 @@ class AIOpenAIImageProperties(AIBaseImageProperties):
 
 class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
     DEFAULT_IMAGE_MODEL: ClassVar[str] = "gpt-image-2"
-    # Verified against the live models.list catalogue on 2026-09-25; the
+    # Verified against the live models.list catalog on 2026-09-25; the
     # dall-e models are no longer served.
     SUPPORTED_IMAGE_MODELS: ClassVar[list[str]] = [
         "gpt-image-2.5-flare",

@@ -80,7 +80,7 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
     OpenAI Sora video-generation provider.
 
     OpenAI shut down Sora 2 and the Videos API on 2026-09-24 with no
-    replacement, so both catalogued models are retired and construction
+    replacement, so both cataloged models are retired and construction
     raises AiProviderConfigurationError. The engine stays registered so
     existing configurations fail with that explanation instead of an
     opaque 404.

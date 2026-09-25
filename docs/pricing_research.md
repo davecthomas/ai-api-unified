@@ -104,7 +104,7 @@ cached input and 1.5x output (registry tier `context>272k`). ‡ Gemini 3.6–3.
 Flash rows show list rates; promotional pricing ($0.75 in / $0.075 cached /
 $3.75 out) runs through 2026-12-31. † claude-sonnet-5's launch rate became its
 standard price; the increase to $3 / $15 scheduled for 2026-09-01 was
-cancelled. claude-fable-5-1 reads cache at 0.025x base input and
+canceled. claude-fable-5-1 reads cache at 0.025x base input and
 claude-opus-5-5 at 0.05x, not the usual 0.1x. gemini-3.1-pro-preview is the
 latest pro tier served by the Gemini API (preview-only as of 2026-08).
 Anthropic rates are the native-API list (added 2026-07 with the `claude`
