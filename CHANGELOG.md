@@ -19,8 +19,19 @@ version lives in `pyproject.toml` (see the README release section).
 - `AiOpenAICompatibleCompletions`, the base for vendor engines. A subclass
   sets class attributes for its API key and base-URL settings, default
   endpoint, model catalog and context windows, image-input and reasoning
-  models, structured-output mode, and pricing-registry label. The DeepSeek,
-  Qwen, and Z.ai engines will build on it.
+  models, structured-output mode, and pricing-registry label.
+- DeepSeek, Qwen, and GLM (Z.ai) models hosted on Amazon Bedrock, through
+  the existing Bedrock engine and your AWS account. None of these calls
+  reach the model makers' own services. Cataloged with context windows,
+  capability flags, and on-demand pricing from the AWS Price List API:
+  `deepseek.v3.2`, `us.deepseek.r1-v1:0`, `qwen.qwen3-next-80b-a3b`,
+  `qwen.qwen3-235b-a22b-2507-v1:0` (us-east-2 and us-west-2 only),
+  `qwen.qwen3-coder-next`, `qwen.qwen3-32b-v1:0`, `zai.glm-5`,
+  `zai.glm-4.7`, and `zai.glm-4.7-flash`. All are text-only and support
+  streaming. All except DeepSeek R1 support tool calls and schema-enforced
+  structured output (verified live). None supports `count_tokens`.
+- `bedrock` completions engine name, an alias for the Bedrock engine that
+  does not name a model family (`COMPLETIONS_ENGINE=bedrock`).
 
 ### Changed
 
@@ -30,6 +41,22 @@ version lives in `pyproject.toml` (see the README release section).
   `functions` parameter, `json_object` mode puts the schema in the system
   prompt, organization identity reports none, and observability events
   carry the vendor label instead of `openai`.
+- Bedrock `send_structured_output` sent the JSON schema as a dict, which
+  botocore rejects before the request leaves the client, so it failed on
+  every model. It now sends the JSON string Converse requires. A new test
+  runs requests through botocore's own parameter validation.
+- Bedrock `send_prompt` and `strict_schema_prompt` read only the first
+  content block, so a reasoning model that puts its reasoning block first
+  returned empty text. They now join every text block.
+- Bedrock `strict_schema_prompt` on the DeepSeek, Qwen, and GLM models uses
+  native structured output, since those models reject the stop sequence the
+  existing path sends. DeepSeek R1, which also rejects the assistant
+  prefill and has no native structured output, raises a capability error.
+- A Bedrock "model identifier is invalid" error now adds that the model may
+  not be offered in the configured region and names `AWS_REGION`.
+- Tests no longer default to a hard-coded AWS profile; they use
+  `AWS_PROFILE` when set and placeholder credentials otherwise. The dev
+  dependencies add `botocore[crt]`, which `aws login` profiles need.
 - Internal: the `openai` engine gained class attributes for the token field,
   registry label, and vendor display name, a `_build_capabilities` hook,
   and `AIOpenAIBase` gained `API_KEY_SETTING` and `_resolve_api_key`. The

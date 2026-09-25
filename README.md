@@ -873,7 +873,7 @@ There is no implicit default provider. Set the selector for each capability you 
 
 | Environment variable | Valid values                                                                                                                  |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
+| `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
 | `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
 | `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
 | `VIDEO_ENGINE`       | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel`                                                                     |
@@ -911,7 +911,7 @@ cards). Defaults sit one generation behind the newest cataloged model.
 | `openai` / `openai-responses` | `gpt-5.6-luna` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini`, `o4-mini-high`, `gpt-4o`, `gpt-4o-mini` |
 | `claude` | `claude-opus-5` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
 | `google-gemini` | `gemini-3.7-flash` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` (2.0 family retired) |
-| `nova` / `anthropic` (Bedrock) | `amazon.nova-lite-v1:0` | `us.amazon.nova-2-lite-v1:0`, `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0`, `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`, `us.anthropic.claude-opus-5`, `us.anthropic.claude-sonnet-5`, `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
+| `bedrock` / `nova` / `anthropic` (Bedrock) | `amazon.nova-lite-v1:0` | `deepseek.v3.2`, `us.deepseek.r1-v1:0`, `qwen.qwen3-next-80b-a3b`, `qwen.qwen3-235b-a22b-2507-v1:0`, `qwen.qwen3-coder-next`, `qwen.qwen3-32b-v1:0`, `zai.glm-5`, `zai.glm-4.7`, `zai.glm-4.7-flash`, `us.amazon.nova-2-lite-v1:0`, `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0`, `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`, `us.anthropic.claude-opus-5`, `us.anthropic.claude-sonnet-5`, `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
 
 Image and video engine catalogs: OpenAI images default to `gpt-image-2`
 (`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, and the
@@ -1040,6 +1040,38 @@ Common optional settings:
 - `BEDROCK_VIDEO_OUTPUT_S3_URI`
 - `EMBEDDING_DIMENSIONS`
 - `AI_API_GEO_RESIDENCY`
+
+If your AWS profile uses `aws login` (a `login_session` profile), install
+`botocore[crt]` as well; botocore needs it to read those credentials.
+
+##### DeepSeek, Qwen, and GLM on Bedrock
+
+AWS hosts these models itself, so requests go to AWS under your AWS account
+and never reach DeepSeek, Alibaba, or Z.ai.
+
+```dotenv
+COMPLETIONS_ENGINE=bedrock
+COMPLETIONS_MODEL_NAME=deepseek.v3.2
+AWS_REGION=us-east-1
+AWS_PROFILE=<your profile>
+```
+
+| Model | Context | Tool calls and structured output | Notes |
+| --- | ---: | --- | --- |
+| `deepseek.v3.2` | 164K | yes | |
+| `us.deepseek.r1-v1:0` | 128K | no | reasoning model; `strict_schema_prompt` unsupported |
+| `qwen.qwen3-next-80b-a3b` | 256K | yes | reasoning |
+| `qwen.qwen3-235b-a22b-2507-v1:0` | 256K | yes | us-east-2 and us-west-2 only |
+| `qwen.qwen3-coder-next` | 256K | yes | coding |
+| `qwen.qwen3-32b-v1:0` | 32K | yes | reasoning |
+| `zai.glm-5` | 200K | yes | |
+| `zai.glm-4.7` | 203K | yes | |
+| `zai.glm-4.7-flash` | 203K | yes | lowest cost |
+
+All are text-only, stream, and are priced in the registry. None supports
+`count_tokens`. Enable each model under **Model access** in the Bedrock
+console first. For a model outside your default region, set `AWS_REGION` or
+pass `region=` to `AiBedrockCompletions`.
 
 For current Bedrock model IDs, use the AWS documentation:
 

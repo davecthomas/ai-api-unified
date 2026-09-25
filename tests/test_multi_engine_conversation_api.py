@@ -912,7 +912,10 @@ class TestBedrockConversation:
         kwargs = claude_client.client.converse.call_args.kwargs
         text_format = kwargs["outputConfig"]["textFormat"]
         assert text_format["type"] == "json_schema"
-        assert text_format["structure"]["jsonSchema"]["schema"] == GRAPH_SCHEMA
+        # Converse takes the schema as a JSON string, not a dict.
+        assert json.loads(text_format["structure"]["jsonSchema"]["schema"]) == (
+            GRAPH_SCHEMA
+        )
 
     def test_timeout_and_async_stay_unimplemented(self):
         client = _build_bedrock_client()

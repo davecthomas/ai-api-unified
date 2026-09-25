@@ -46,6 +46,9 @@ _SRC_OPENAI: str = "https://developers.openai.com/api/docs/pricing"
 _SRC_GOOGLE: str = "https://ai.google.dev/gemini-api/docs/pricing"
 _SRC_GOOGLE_DEP: str = "https://ai.google.dev/gemini-api/docs/deprecations"
 _SRC_BEDROCK: str = "https://aws.amazon.com/bedrock/pricing/"
+_SRC_BEDROCK_PRICING_API: str = (
+    "AWS Price List API (service AmazonBedrock), https://aws.amazon.com/bedrock/pricing/"
+)
 _SRC_ANTHROPIC: str = "https://platform.claude.com/docs/en/about-claude/models/overview"
 _SRC_VOYAGE: str = "https://docs.voyageai.com/docs/pricing"
 _SRC_OPENAI_DEP: str = "https://developers.openai.com/api/docs/deprecations"
@@ -1196,6 +1199,126 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             "claude-3-opus-20240229",
             status=ModelLifecycleStatus.RETIRED,
             replacement="claude-opus-4-8",
+        ),
+        # ── Bedrock open-weight models (on-demand standard tier, us-east-1
+        # unless noted; from the AWS Price List API on 2026-09-25) ───────────
+        _info(
+            PROVIDER_BEDROCK,
+            "deepseek.v3.2",
+            _tok(
+                "0.62",
+                "1.85",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "us.deepseek.r1-v1:0",
+            _tok(
+                "1.35",
+                "5.40",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "qwen.qwen3-next-80b-a3b",
+            _tok(
+                "0.14",
+                "1.20",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                confidence="medium",
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies. Rate taken from the us-east-2 OpenAI-compatible (bedrock-mantle) listing; the Price List API has no Converse entry yet.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "qwen.qwen3-235b-a22b-2507-v1:0",
+            _tok(
+                "0.22",
+                "0.88",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies. us-east-2 rate; the model is not served on the Converse API in us-east-1.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "qwen.qwen3-coder-next",
+            _tok(
+                "0.50",
+                "1.20",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "qwen.qwen3-32b-v1:0",
+            _tok(
+                "0.15",
+                "0.60",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "zai.glm-5",
+            _tok(
+                "1.00",
+                "3.20",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "zai.glm-4.7",
+            _tok(
+                "0.60",
+                "2.20",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
+        ),
+        _info(
+            PROVIDER_BEDROCK,
+            "zai.glm-4.7-flash",
+            _tok(
+                "0.07",
+                "0.40",
+                None,
+                _SRC_BEDROCK_PRICING_API,
+                effective=_EFFECTIVE_SEP,
+                notes="Bedrock lists no prompt caching for this model, so no cache write "
+                "rate applies.",
+            ),
         ),
         # ── Bedrock / Titan embeddings ──────────────────────────────────────
         _info(

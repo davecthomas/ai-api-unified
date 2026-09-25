@@ -25,7 +25,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 AWS_PROFILE_ENV_VAR: str = "AWS_PROFILE"
-DEFAULT_AWS_PROFILE_NAME: str = "radlibs-awspower"
 AWS_SDK_LOAD_CONFIG_ENV_VAR: str = "AWS_SDK_LOAD_CONFIG"
 AWS_SDK_LOAD_CONFIG_ENABLED: str = "1"
 # Placeholders only. They let botocore build a client for the mocked suite on a
@@ -50,38 +49,14 @@ FROZENSET_FILES_NEEDING_PLACEHOLDER_KEYS: frozenset[str] = frozenset(
 )
 
 
-def _aws_profile_is_configured(profile_name: str) -> bool:
-    """
-    Reports whether the named profile exists in this machine's AWS configuration.
-
-    Args:
-        profile_name: Profile to look for, e.g. the repository default.
-
-    Returns:
-        True when botocore can see the profile, False when it cannot or when
-        boto3 is not installed.
-    """
-    try:
-        import botocore.session
-    except ImportError:
-        # Normal return: without the bedrock extra there is no boto3 to configure.
-        return False
-    try:
-        return profile_name in botocore.session.Session().available_profiles
-    except Exception:
-        # A malformed or unreadable AWS config is not this test suite's problem.
-        return False
-
-
 def ensure_aws_test_environment() -> None:
     """
     Ensure pytest sessions inherit AWS configuration the Bedrock tests can use.
 
-    Prefers an explicit AWS_PROFILE, then the repository default when that
-    profile actually exists on this machine. Falls back to static dummy
-    credentials so the mocked suite stays hermetic: CI and a fresh clone have
-    no AWS config, and forcing a profile name there makes botocore raise
-    ProfileNotFound before a mocked test can run. Live tests in *_nonmock.py
+    Uses AWS_PROFILE when one is set (for example from .env). Otherwise falls
+    back to static dummy credentials so the mocked suite stays hermetic: CI
+    and a fresh clone have no AWS config, and a hard-coded profile name there
+    makes botocore raise ProfileNotFound before a mocked test can run. Live tests in *_nonmock.py
     are excluded from mocked runs and supply their own real credentials.
     """
     if not os.environ.get(AWS_SDK_LOAD_CONFIG_ENV_VAR):
@@ -95,10 +70,6 @@ def ensure_aws_test_environment() -> None:
         del os.environ[AWS_PROFILE_ENV_VAR]
     if os.environ.get(AWS_PROFILE_ENV_VAR):
         # Normal return: the caller chose a profile and it wins.
-        return
-    if _aws_profile_is_configured(DEFAULT_AWS_PROFILE_NAME):
-        os.environ[AWS_PROFILE_ENV_VAR] = DEFAULT_AWS_PROFILE_NAME
-        # Normal return with the repository default profile selected.
         return
     for str_var_name, str_placeholder in DICT_DUMMY_AWS_CREDENTIALS.items():
         os.environ.setdefault(str_var_name, str_placeholder)

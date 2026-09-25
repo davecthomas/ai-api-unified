@@ -52,11 +52,15 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
     Based on https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
     """
 
-    # Model families with Converse toolConfig support that this engine maps
-    # (Amazon Nova and Anthropic Claude on Bedrock).
+    # Model families with Converse toolConfig support that this engine maps.
+    # DeepSeek V3.x, Qwen3, and GLM tool calling was verified live on
+    # 2026-09-25; DeepSeek R1 rejects toolConfig, so only "deepseek.v3" matches.
     TUPLE_TOOL_USE_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
         "nova",
         "anthropic.claude",
+        "deepseek.v3",
+        "qwen.qwen3",
+        "zai.glm",
     )
     # Models AWS lists as supporting native structured outputs
     # (Converse outputConfig.textFormat); see
@@ -66,6 +70,24 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         "claude-sonnet-4-5",
         "claude-opus-4-5",
         "claude-opus-4-6",
+        "deepseek.v3",
+        "qwen.qwen3",
+        "zai.glm",
+    )
+    # Open-weight families served on Bedrock: text-only input, and no
+    # CountTokens support (both per the Bedrock model cards, and CountTokens
+    # verified live on 2026-09-25).
+    TUPLE_OPEN_WEIGHT_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "deepseek.",
+        "qwen.",
+        "zai.glm",
+    )
+    # Models that reason before answering (Bedrock model cards).
+    TUPLE_REASONING_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "deepseek.r1",
+        "qwen.qwen3-next",
+        "qwen.qwen3-32b",
+        "qwen.qwen3-235b",
     )
     # Models that reject a forced toolChoice; they run tool use on auto only.
     TUPLE_NO_FORCED_TOOL_CHOICE_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
@@ -93,14 +115,26 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
             marker in normalized_name
             for marker in cls.TUPLE_STRUCTURED_OUTPUT_MODEL_MARKERS
         )
+        bool_open_weight: bool = any(
+            marker in normalized_name for marker in cls.TUPLE_OPEN_WEIGHT_MODEL_MARKERS
+        )
+        list_data_types: list[SupportedDataType] = (
+            [SupportedDataType.TEXT]
+            if bool_open_weight
+            else [SupportedDataType.TEXT, SupportedDataType.IMAGE]
+        )
         # Normal return with Bedrock capabilities; every chat model this client
-        # targets streams via the ConverseStream API and supports the
-        # provider-side CountTokens operation.
+        # targets streams via the ConverseStream API, and all but the
+        # open-weight families support the provider-side CountTokens operation.
         return cls(
             context_window_length=context_window_length,
-            supported_data_types=[SupportedDataType.TEXT, SupportedDataType.IMAGE],
+            reasoning=any(
+                marker in normalized_name
+                for marker in cls.TUPLE_REASONING_MODEL_MARKERS
+            ),
+            supported_data_types=list_data_types,
             supports_streaming=True,
-            supports_token_counting=True,
+            supports_token_counting=not bool_open_weight,
             supports_tool_use=bool_supports_tool_use,
             supports_structured_output=bool_supports_structured_output,
             pricing=get_model_pricing(PROVIDER_BEDROCK, model_name),
@@ -154,6 +188,15 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
     # the Claude 5.x models accept on-demand traffic only through a geo or
     # global inference profile, so the us. profile IDs are cataloged.
     DICT_CONTEXT_WINDOWS: dict[str, int] = {
+        "deepseek.v3.2": 164_000,
+        "us.deepseek.r1-v1:0": 128_000,
+        "qwen.qwen3-next-80b-a3b": 256_000,
+        "qwen.qwen3-235b-a22b-2507-v1:0": 256_000,
+        "qwen.qwen3-coder-next": 256_000,
+        "qwen.qwen3-32b-v1:0": 32_000,
+        "zai.glm-5": 200_000,
+        "zai.glm-4.7": 203_000,
+        "zai.glm-4.7-flash": 203_000,
         "us.amazon.nova-2-lite-v1:0": 1_000_000,
         "amazon.nova-micro-v1:0": 128_000,
         "amazon.nova-lite-v1:0": 300_000,
@@ -180,6 +223,17 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             "us.anthropic.claude-opus-5",
             "us.anthropic.claude-sonnet-5",
             "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+            # Open-weight models hosted by AWS (text only). Qwen3 235B is
+            # served in us-east-2 and us-west-2, not us-east-1.
+            "deepseek.v3.2",
+            "us.deepseek.r1-v1:0",
+            "qwen.qwen3-next-80b-a3b",
+            "qwen.qwen3-235b-a22b-2507-v1:0",
+            "qwen.qwen3-coder-next",
+            "qwen.qwen3-32b-v1:0",
+            "zai.glm-5",
+            "zai.glm-4.7",
+            "zai.glm-4.7-flash",
         ]
 
     @property
@@ -190,11 +244,84 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             context_window_length=self.max_context_tokens,
         )
 
+    @staticmethod
+    def _join_converse_text(list_content: list[dict[str, Any]] | None) -> str | None:
+        """
+        Joins every text block of a Converse message, skipping reasoning and
+        tool blocks. Returns None when the message has no text block, since
+        reasoning models may put a reasoningContent block before the answer.
+        """
+        list_text_parts: list[str] = [
+            str(dict_block.get("text") or "")
+            for dict_block in list_content or []
+            if "text" in dict_block
+        ]
+        if not list_text_parts:
+            # Early return because the message carries no text.
+            return None
+        # Normal return with the concatenated answer text.
+        return "".join(list_text_parts)
+
     def _extract_json_text_from_converse_response(self, resp: dict[str, Any]) -> str:
         content = resp.get("output", {}).get("message", {}).get("content", [])
-        if not content or "text" not in content[0]:
+        str_text: str | None = self._join_converse_text(content)
+        if str_text is None:
             raise RuntimeError("No text in response")
-        return content[0]["text"]
+        return str_text
+
+    def _strict_schema_via_structured_output(
+        self,
+        prompt: str,
+        response_model: Type[AIStructuredPrompt],
+        max_response_tokens: int,
+        *,
+        other_params: AICompletionsPromptParamsBase | None,
+    ) -> AIStructuredPrompt:
+        """
+        strict_schema_prompt for models that need Converse outputConfig
+        instead of the prefill and stop-sequence path.
+
+        Raises:
+            AiProviderCapabilityUnsupportedError: When the model has no native
+                structured output either.
+            ValueError: When images are attached or no JSON came back.
+            StructuredResponseTokenLimitError: When the output was truncated.
+        """
+        if not self.capabilities.supports_structured_output:
+            raise AiProviderCapabilityUnsupportedError(
+                f"{type(self).__name__} model '{self.model_name}' does not support "
+                "strict_schema_prompt: it rejects the assistant prefill and stop "
+                "sequence that method relies on and has no native structured "
+                "output. Use send_prompt and parse the JSON yourself."
+            )
+        if other_params is not None and other_params.has_included_media:
+            raise ValueError(
+                f"Model '{self.model_name}' accepts text only; remove the image "
+                "attachments."
+            )
+        structured_result: AIStructuredOutputResult = self.send_structured_output(
+            prompt,
+            response_model=response_model,
+            system_prompt=(
+                other_params.system_prompt if other_params is not None else None
+            ),
+            max_response_tokens=max_response_tokens,
+        )
+        if structured_result.data is None:
+            if structured_result.finish_reason is AIFinishReason.LENGTH:
+                self._raise_structured_token_limit_error(
+                    provider_name=self.PROVIDER_VENDOR_BEDROCK,
+                    model_name=self.completions_model,
+                    max_response_tokens=max_response_tokens,
+                    finish_reason=structured_result.finish_reason.value,
+                    raw_output_text=structured_result.raw_text,
+                )
+            raise ValueError(
+                f"Bedrock model '{self.model_name}' returned no structured output "
+                f"(finish_reason={structured_result.finish_reason.value})."
+            )
+        # Normal return with the validated response model.
+        return response_model.model_validate(structured_result.data)
 
     def strict_schema_prompt(
         self,
@@ -207,12 +334,28 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
         Free-form JSON generation with Pydantic v2 post-validation.
         Guarantees variety by using sampling instead of tool-locking.
+
+        The open-weight families (DeepSeek, Qwen, GLM) reject the stop
+        sequence this path sends, and DeepSeek R1 also rejects the assistant
+        prefill, so those models route through native structured output
+        instead (R1, which has none, raises a capability error).
         """
         self._validate_structured_max_response_tokens(
             provider_name=self.PROVIDER_VENDOR_BEDROCK,
             model_name=self.completions_model,
             max_response_tokens=max_response_tokens,
         )
+        if any(
+            marker in self.completions_model.lower()
+            for marker in AICompletionsCapabilitiesBedrock.TUPLE_OPEN_WEIGHT_MODEL_MARKERS
+        ):
+            # Early return through native structured output for open-weight models.
+            return self._strict_schema_via_structured_output(
+                prompt,
+                response_model,
+                max_response_tokens,
+                other_params=other_params,
+            )
 
         prompt += self.generate_prompt_entropy_tag()
 
@@ -482,9 +625,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     content = (
                         response.get("output", {}).get("message", {}).get("content", [])
                     )
-                    raw_output_text: str = ""
-                    if content and "text" in content[0]:
-                        raw_output_text = content[0]["text"]
+                    raw_output_text: str = self._join_converse_text(content) or ""
                     observed_result: AiApiObservedCompletionsResultModel[str] = (
                         AiApiObservedCompletionsResultModel(
                             return_value=raw_output_text,
@@ -511,6 +652,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     if attempt == len(self.backoff_delays):
                         raise RuntimeError(
                             f"Bedrock converse failed: {exception}"
+                            f"{self._region_hint(exception)}"
                         ) from exception
                     self._sleep_with_backoff(delay)
 
@@ -927,7 +1069,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             dict_response: dict[str, Any] = getattr(exception, "response", None) or {}
             raw_status = dict_response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             raise AiProviderRequestError(
-                f"Bedrock request failed: {exception}",
+                f"Bedrock request failed: {exception}{self._region_hint(exception)}",
                 status_code=raw_status if isinstance(raw_status, int) else None,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
             ) from exception
@@ -940,6 +1082,21 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             ) from exception
         # Normal return so non-transport exceptions propagate unchanged.
         return None
+
+    def _region_hint(self, exception: Exception) -> str:
+        """
+        Returns a hint when Bedrock rejects the model id, which most often
+        means the model is not offered in the configured region.
+        """
+        if "model identifier is invalid" not in str(exception):
+            # Early return: not a model-availability failure.
+            return ""
+        # Normal return with the region the client used.
+        return (
+            f" Model '{self.model}' may not be offered in region "
+            f"'{self.region}'; check the model's Bedrock regions and set "
+            "AWS_REGION (or pass region=) accordingly."
+        )
 
     def _is_retryable_client_error(self, exception: Exception) -> bool:
         """
@@ -1460,7 +1617,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     "type": "json_schema",
                     "structure": {
                         "jsonSchema": {
-                            "schema": response_schema,
+                            # The Converse API takes the schema as a JSON
+                            # string; botocore rejects a dict before sending.
+                            "schema": json.dumps(response_schema),
                             "name": "structured_output",
                         }
                     },
