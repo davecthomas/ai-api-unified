@@ -26,6 +26,52 @@ The current package architecture is registry-backed and lazy-loaded:
 - package `__init__` modules export stable interfaces only
 - missing provider selectors are configuration errors, not implicit fallbacks
 
+## Supported models
+
+More than 100 models from 10 model makers (OpenAI, Anthropic, Google,
+Amazon, DeepSeek, Alibaba Qwen, Z.ai, Voyage AI, ElevenLabs, and Microsoft)
+behind one interface, plus any server that speaks the OpenAI API. Switching
+models is a configuration change: set the capability's engine (for example
+`COMPLETIONS_ENGINE`) and model (`COMPLETIONS_MODEL_NAME`).
+
+<!-- supported-models:start -->
+| Capability | Provider | Engine (`*_ENGINE`) | Models |
+| --- | --- | --- | --- |
+| Completions | OpenAI | `openai`, `openai-responses` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (default), `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano` ⚠ until 2026-10-23, `o4-mini` ⚠ until 2026-10-23, `gpt-4o`, `gpt-4o-mini` |
+| Completions | Anthropic | `claude` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5` (default), `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
+| Completions | Google | `google-gemini` | `gemini-3.8-flash`, `gemini-3.7-flash` (default), `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
+| Completions | Amazon Bedrock: Amazon Nova | `bedrock`, `nova` | `us.amazon.nova-2-lite-v1:0`, `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0` (default), `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0` |
+| Completions | Amazon Bedrock: Anthropic Claude | `bedrock`, `anthropic` | `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`, `us.anthropic.claude-opus-5`, `us.anthropic.claude-sonnet-5`, `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
+| Completions | Amazon Bedrock: DeepSeek | `bedrock` | `deepseek.v3.2`, `us.deepseek.r1-v1:0` |
+| Completions | Amazon Bedrock: Qwen (Alibaba) | `bedrock` | `qwen.qwen3-next-80b-a3b`, `qwen.qwen3-235b-a22b-2507-v1:0`, `qwen.qwen3-coder-next`, `qwen.qwen3-32b-v1:0` |
+| Completions | Amazon Bedrock: GLM (Z.ai) | `bedrock` | `zai.glm-5`, `zai.glm-4.7`, `zai.glm-4.7-flash` |
+| Completions | Any OpenAI-compatible server (vLLM, Ollama, LiteLLM, ...) | `openai-compatible` | any model the server hosts (`COMPLETIONS_MODEL_NAME`) |
+| Embeddings | OpenAI | `openai` | `text-embedding-3-small` (default), `text-embedding-3-large`, `text-embedding-ada-002` |
+| Embeddings | Google | `google-gemini` | `gemini-embedding-001` (default), `gemini-embedding-2` (multimodal) |
+| Embeddings | Voyage AI | `voyage` | `voyage-4-large`, `voyage-4`, `voyage-4-lite`, `voyage-code-4`, `voyage-3.5`, `voyage-3.5-lite`, `voyage-3-lite`, `voyage-3` (default), `voyage-3-large`, `voyage-code-3`, `voyage-finance-2`, `voyage-law-2` |
+| Embeddings | Amazon Bedrock: Titan | `titan` | `amazon.titan-embed-text-v2:0` (default), `amazon.titan-embed-text-v1` |
+| Images | OpenAI | `openai` | `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2` (default), `gpt-image-1.5` ⚠ until 2026-12-01, `gpt-image-1-mini` ⚠ until 2026-12-01, `gpt-image-1` ⚠ until 2026-10-23 |
+| Images | Google | `google-gemini` | `gemini-3.1-flash-image` (default), `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image` ⚠ until 2026-10-02 |
+| Images | Amazon Bedrock: Nova Canvas | `nova-canvas`, `bedrock`, `nova` | `amazon.nova-canvas-v1:0` (default) |
+| Video | Google | `google-gemini` | `veo-3.1-generate-preview`, `veo-3.1-fast-generate-preview`, `veo-3.1-lite-generate-preview` (default) |
+| Video | Amazon Bedrock: Nova Reel | `nova-reel`, `bedrock`, `nova` | `amazon.nova-reel-v1:1` (default) |
+| Video | OpenAI | `openai` | none: `sora-2` and `sora-2-pro` retired 2026-09-24 |
+| Text to speech | OpenAI | `openai` | `tts-1-hd` (default), `tts-1`, `gpt-4o-mini-tts` |
+| Text to speech | Google | `google` | `gemini-2.5-pro-tts` (default), `gemini-2.5-flash-tts`, `gemini-3.1-flash-tts-preview` |
+| Text to speech | ElevenLabs | `elevenlabs` | `eleven_multilingual_v2` (default), `eleven_v3`, `eleven_flash_v2_5` |
+| Text to speech | Microsoft Azure | `azure` | `neural`, `neural_hd`, `openai_neural`, `openai_hd` voice families |
+| Speech to text | OpenAI | `openai` | `gpt-transcribe` |
+| Speech to text | Google | `google` | Google Cloud Speech-to-Text |
+| Speech to text | ElevenLabs | `elevenlabs` | `scribe_v1` |
+<!-- supported-models:end -->
+
+(default) marks the model an engine uses when no model is configured. ⚠
+marks a deprecated model that still works until the date shown. Bedrock
+models run on AWS under your AWS account; AWS serves Qwen3 235B only in
+us-east-2 and us-west-2. The list matches each provider's live model list as
+of 2026-09-25 (Bedrock: the AWS model cards), and each model carries pricing
+in the [cost registry](#model-pricing).
+
 ## Overview
 
 Use this library when you want one consistent interface across multiple AI providers without binding application code to a single SDK. The library currently covers:
@@ -905,25 +951,12 @@ There is no implicit default provider. Set the selector for each capability you 
 
 ### Cataloged Completions Models
 
-Models with capability and pricing entries per engine, last verified against
-each provider's live models API on 2026-09-25 (Bedrock against the AWS model
-cards). Defaults sit one generation behind the newest cataloged model.
-
-| Engine | Default (no `COMPLETIONS_MODEL_NAME`) | Cataloged models |
-| --- | --- | --- |
-| `openai` / `openai-responses` | `gpt-5.6-luna` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o4-mini`, `o4-mini-high`, `gpt-4o`, `gpt-4o-mini` |
-| `claude` | `claude-opus-5` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
-| `google-gemini` | `gemini-3.7-flash` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` (2.0 family retired) |
-| `bedrock` / `nova` / `anthropic` (Bedrock) | `amazon.nova-lite-v1:0` | `deepseek.v3.2`, `us.deepseek.r1-v1:0`, `qwen.qwen3-next-80b-a3b`, `qwen.qwen3-235b-a22b-2507-v1:0`, `qwen.qwen3-coder-next`, `qwen.qwen3-32b-v1:0`, `zai.glm-5`, `zai.glm-4.7`, `zai.glm-4.7-flash`, `us.amazon.nova-2-lite-v1:0`, `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0`, `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0`, `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`, `us.anthropic.claude-opus-5`, `us.anthropic.claude-sonnet-5`, `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
-
-Image and video engine catalogs: OpenAI images default to `gpt-image-2`
-(`gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2`, and the
-deprecated `gpt-image-1.5`, `gpt-image-1-mini`, `gpt-image-1`); Gemini images
-default to `gemini-3.1-flash-image` (`gemini-3.1-flash-lite-image`,
-`gemini-3-pro-image`, and the deprecated `gemini-2.5-flash-image`), generated
-through `generate_content` because Imagen 4 is retired. Gemini video serves
-the Veo 3.1 models only. `person_generation` on Gemini images applies only
-in Vertex AI mode; the Gemini Developer API rejects it.
+The full list of cataloged models for every capability is in
+[Supported models](#supported-models). Engine defaults sit one generation
+behind the newest cataloged model. Gemini images generate through
+`generate_content` because Imagen 4 is retired, and `person_generation`
+on Gemini images applies only in Vertex AI mode; the Gemini Developer API
+rejects it.
 
 An uncataloged model name passes through to the provider on the OpenAI and
 Claude engines (with a conservative default context window); the
