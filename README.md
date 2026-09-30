@@ -688,6 +688,16 @@ Cost events are emitted by the engine that served the call, so cost
 attribution follows the actual route with no extra configuration. The
 prompt cache hint is provider-neutral and carries over.
 
+A live test of the chain runs Claude as the primary with an unknown model id
+and OpenAI as the fallback, so a real 404 drives a real second request:
+
+```bash
+poetry run pytest -m nonmock tests/test_model_fallback_nonmock.py -q
+```
+
+It needs `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in `.env` and skips without
+them.
+
 ### Batch completions (Anthropic)
 
 The `claude` engine can process many prompts as one asynchronous batch through
