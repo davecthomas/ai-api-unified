@@ -24,6 +24,7 @@ pytest.importorskip("boto3")
 from ai_api_unified import AIPromptCacheHint, AIPromptCacheRetention
 from ai_api_unified.ai_base import (
     AIBatchRequestItem,
+    AIStructuredPrompt,
     AICompletionsPromptParamsBase,
     AITurnResult,
 )
@@ -552,3 +553,53 @@ class TestBedrockImplicitFlag:
         self, str_model: str, bool_implicit: bool
     ) -> None:
         assert _bedrock(str_model).capabilities.implicit_prompt_caching is bool_implicit
+
+
+class TestBedrockPrecedenceAndGating:
+    def test_caller_cache_points_take_precedence(self) -> None:
+        client = _bedrock("us.anthropic.claude-opus-5")
+        list_messages: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": [{"text": "hi"}, {"cachePoint": {"type": "default"}}],
+            }
+        ]
+        assert client._build_converse_system(
+            SYSTEM_PROMPT, HINT_DEFAULT, list_messages
+        ) == [{"text": SYSTEM_PROMPT}]
+
+    def test_no_hint_skips_the_botocore_lookup(self) -> None:
+        client = _bedrock("us.anthropic.claude-opus-5")
+        with patch.object(
+            AiBedrockCompletions, "_converse_cache_point_support"
+        ) as mock_support:
+            client._build_converse_system(SYSTEM_PROMPT, None)
+        mock_support.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("str_model", "bool_1h"),
+        [
+            ("us.anthropic.claude-opus-5", True),
+            ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", False),
+            ("amazon.nova-lite-v1:0", False),
+        ],
+    )
+    def test_one_hour_ttl_capability(self, str_model: str, bool_1h: bool) -> None:
+        assert _bedrock(str_model).capabilities.supports_prompt_cache_1h_ttl is bool_1h
+
+    def test_strict_schema_via_structured_output_forwards_hint(self) -> None:
+        client = _bedrock("us.anthropic.claude-opus-4-6-v1")
+        mock_structured: Mock = Mock(return_value=Mock(data={"answer": "x"}))
+
+        class _Answer(AIStructuredPrompt):
+            answer: str
+
+            @staticmethod
+            def get_prompt() -> str:
+                return "hi"
+
+        with patch.object(client, "send_structured_output", mock_structured):
+            client.strict_schema_prompt(
+                "hi", _Answer, other_params=_params(HINT_DEFAULT)
+            )
+        assert mock_structured.call_args.kwargs["prompt_cache"] is HINT_DEFAULT
