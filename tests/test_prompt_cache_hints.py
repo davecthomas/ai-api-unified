@@ -529,3 +529,19 @@ class TestOpenAIDatedSnapshots:
             client._build_prompt_cache_kwargs(HINT_EXTENDED)["prompt_cache_retention"]
             == "24h"
         )
+
+
+class TestBedrockImplicitFlag:
+    @pytest.mark.parametrize(
+        ("str_model", "bool_implicit"),
+        [
+            ("us.anthropic.claude-opus-5", True),
+            ("amazon.nova-lite-v1:0", True),
+            ("us.anthropic.claude-3-5-haiku-20241022-v1:0", False),
+            ("deepseek.v3.2", False),
+        ],
+    )
+    def test_implicit_flag_follows_documented_cache_support(
+        self, str_model: str, bool_implicit: bool
+    ) -> None:
+        assert _bedrock(str_model).capabilities.implicit_prompt_caching is bool_implicit

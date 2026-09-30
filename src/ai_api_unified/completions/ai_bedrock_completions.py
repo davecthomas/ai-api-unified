@@ -143,11 +143,6 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
             "nova",
         )
     )
-    # Families Bedrock caches implicitly, without cachePoint blocks.
-    TUPLE_IMPLICIT_PROMPT_CACHE_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
-        "anthropic.claude",
-        "nova",
-    )
 
     @classmethod
     def for_model(
@@ -191,9 +186,12 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
             supports_token_counting=not bool_open_weight,
             supports_tool_use=bool_supports_tool_use,
             supports_structured_output=bool_supports_structured_output,
+            # AWS documents implicit caching for Nova and for the Claude models
+            # that support prompt caching, which is the same set that accepts
+            # cachePoint blocks.
             implicit_prompt_caching=any(
                 marker in normalized_name
-                for marker in cls.TUPLE_IMPLICIT_PROMPT_CACHE_MODEL_MARKERS
+                for marker in cls.TUPLE_PROMPT_CACHE_MODEL_MARKERS
             ),
             supports_prompt_cache_hint=any(
                 marker in normalized_name
