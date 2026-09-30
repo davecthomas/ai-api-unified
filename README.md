@@ -1,4 +1,4 @@
-# ai-api-unified 2.29.1
+# ai-api-unified 2.30.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -517,6 +517,49 @@ unchanged.
 ```python
 turn = await client.asend_conversation("system", messages, tools=tools)
 ```
+
+### Prompt caching
+
+Providers bill repeated prompt prefixes at a discounted cached-input rate. Some
+cache every long prefix on their own; others cache only what the request marks.
+`AIPromptCacheHint` asks for caching in one provider-neutral way: it marks the
+system prompt and tool definitions as a stable prefix. Pass it on
+`other_params.prompt_cache` (`send_prompt`, `asend_prompt`,
+`send_prompt_streaming`, `strict_schema_prompt`), as `prompt_cache=` on
+`send_conversation`, `send_structured_output`, and their async variants, or on
+`AIBatchRequestItem.prompt_cache` for Anthropic batches.
+
+```python
+from ai_api_unified import AIPromptCacheHint, AIPromptCacheRetention
+
+hint = AIPromptCacheHint(
+    retention=AIPromptCacheRetention.EXTENDED,  # DEFAULT (about 5 min) or EXTENDED
+    key="tenant-42",                            # optional; OpenAI cache routing
+)
+turn = client.send_conversation(
+    LONG_STABLE_SYSTEM_PROMPT, messages, tools=tools, prompt_cache=hint
+)
+```
+
+| Engine | Without a hint | With a hint |
+| ------ | -------------- | ----------- |
+| `claude` | No caching | `cache_control` breakpoint on the system block; conversations also cache the growing history. EXTENDED = 1-hour TTL |
+| Bedrock (Claude, Nova) | Implicit, best effort | `cachePoint` after the system block. EXTENDED = 1-hour TTL on Claude 4.5 and later; Nova stays at 5 minutes |
+| `openai`, `openai-responses` | Implicit on prefixes of 1,024+ tokens | Adds `prompt_cache_key`; EXTENDED sends `prompt_cache_retention="24h"` on models that offer it |
+| `google-gemini` | Implicit on Gemini 2.5+; durable (up to 24 hours, no storage fee) on Gemini 3.x | Ignored, since there is nothing to add |
+| `openai-compatible`, other Bedrock models | Provider dependent | Ignored |
+
+`capabilities.implicit_prompt_caching` and `capabilities.supports_prompt_cache_hint`
+report both columns per model. Caching changes cost and latency but never the
+response, so an engine that cannot honor the hint ignores it instead of raising.
+The hint is not free on every provider: Anthropic and Bedrock bill cache
+writes at 1.25x base input (2x for the 1-hour TTL), so it pays off only when
+requests sharing the prefix repeat within the TTL. A hit needs a byte-identical
+prefix, so keep timestamps and request IDs out of the system prompt. Cache
+reads and writes show up in `AITurnResult.usage` and in the cost-tracking
+events described under [Cost tracking](#cost-tracking-financial-ops).
+Batch requests run in any order over minutes to hours, so batch cache hits are
+best effort; EXTENDED retention usually suits them better than DEFAULT.
 
 ### Retry policy and typed request errors
 

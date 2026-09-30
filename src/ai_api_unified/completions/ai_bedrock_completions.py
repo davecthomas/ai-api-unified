@@ -16,6 +16,8 @@ from ..ai_base import (
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
+    AIPromptCacheHint,
+    AIPromptCacheRetention,
     AITokenUsage,
     AITool,
     AIToolCall,
@@ -115,6 +117,37 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         "claude-fable-5-1",
         "claude-opus-5-5",
     )
+    # Models that also accept the 1-hour cachePoint TTL; see
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+    # "claude-opus-5" also matches opus-5-5, and "claude-fable-5" fable-5-1.
+    TUPLE_PROMPT_CACHE_1H_TTL_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "claude-haiku-4-5",
+        "claude-sonnet-4-5",
+        "claude-sonnet-4-6",
+        "claude-opus-4-5",
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-mythos-5",
+    )
+    # Models that accept Converse cachePoint blocks (explicit prompt caching;
+    # same AWS page). Nova's checkpoints take the default 5-minute TTL only.
+    TUPLE_PROMPT_CACHE_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        TUPLE_PROMPT_CACHE_1H_TTL_MODEL_MARKERS
+        + (
+            "claude-3-7-sonnet",
+            "claude-3-5-sonnet-20241022-v2",
+            "nova",
+        )
+    )
+    # Families Bedrock caches implicitly, without cachePoint blocks.
+    TUPLE_IMPLICIT_PROMPT_CACHE_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "anthropic.claude",
+        "nova",
+    )
 
     @classmethod
     def for_model(
@@ -158,6 +191,14 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
             supports_token_counting=not bool_open_weight,
             supports_tool_use=bool_supports_tool_use,
             supports_structured_output=bool_supports_structured_output,
+            implicit_prompt_caching=any(
+                marker in normalized_name
+                for marker in cls.TUPLE_IMPLICIT_PROMPT_CACHE_MODEL_MARKERS
+            ),
+            supports_prompt_cache_hint=any(
+                marker in normalized_name
+                for marker in cls.TUPLE_PROMPT_CACHE_MODEL_MARKERS
+            ),
             pricing=get_model_pricing(PROVIDER_BEDROCK, model_name),
         )
 
@@ -468,7 +509,10 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     resp = self.client.converse(
                         modelId=self.model,
                         messages=messages,
-                        system=[{"text": system_prompt}],
+                        system=self._build_converse_system(
+                            system_prompt,
+                            self._resolve_prompt_cache_hint(other_params),
+                        ),
                         inferenceConfig=inference_config,
                     )
                     str_stop_reason: str = (
@@ -682,7 +726,10 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     response = self.client.converse(
                         modelId=self.model,
                         messages=messages,
-                        system=[{"text": system_prompt}],
+                        system=self._build_converse_system(
+                            system_prompt,
+                            self._resolve_prompt_cache_hint(other_params),
+                        ),
                         inferenceConfig=inference_config,
                     )
                     content = (
@@ -791,7 +838,10 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             response = self.client.converse_stream(
                 modelId=self.model,
                 messages=messages,
-                system=[{"text": system_prompt}],
+                system=self._build_converse_system(
+                    system_prompt,
+                    self._resolve_prompt_cache_hint(other_params),
+                ),
                 inferenceConfig=inference_config,
             )
             # Loop through ConverseStream events so callers see text as it arrives.
@@ -1033,6 +1083,41 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             return None
         # Normal return with the folded prompt plus output token total.
         return (prompt_tokens or 0) + (completion_tokens or 0)
+
+    def _build_converse_system(
+        self,
+        system_prompt: str,
+        prompt_cache: AIPromptCacheHint | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Builds the Converse system field, with a cachePoint when asked.
+
+        Converse renders tools before system, so a checkpoint after the system
+        text caches the tool definitions too. Models without explicit prompt
+        caching get no checkpoint, since Converse rejects the block there;
+        models without the 1-hour TTL get the default 5-minute checkpoint.
+
+        Args:
+            system_prompt: Effective system prompt for the request.
+            prompt_cache: Optional caller cache hint.
+
+        Returns:
+            Converse SystemContentBlock list.
+        """
+        list_system: list[dict[str, Any]] = [{"text": system_prompt}]
+        if prompt_cache is None or not self.capabilities.supports_prompt_cache_hint:
+            # Early return because caching was not requested or not supported.
+            return list_system
+        dict_cache_point: dict[str, str] = {"type": "default"}
+        str_model_lower: str = self.model.lower()
+        if prompt_cache.retention is AIPromptCacheRetention.EXTENDED and any(
+            marker in str_model_lower
+            for marker in AICompletionsCapabilitiesBedrock.TUPLE_PROMPT_CACHE_1H_TTL_MODEL_MARKERS
+        ):
+            dict_cache_point["ttl"] = "1h"
+        list_system.append({"cachePoint": dict_cache_point})
+        # Normal return with the system text followed by its checkpoint.
+        return list_system
 
     def _build_user_content(
         self,
@@ -1344,6 +1429,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Sends one conversation turn via the Converse API with toolConfig.
@@ -1365,7 +1451,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         dict_request_kwargs: dict[str, Any] = {
             "modelId": self.model,
             "messages": messages,
-            "system": [{"text": system_prompt}],
+            "system": self._build_converse_system(system_prompt, prompt_cache),
             "inferenceConfig": {"maxTokens": max_response_tokens or 1024},
         }
         if tools:
@@ -1648,6 +1734,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Generates structured output via Converse outputConfig.textFormat.
@@ -1673,7 +1760,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         dict_request_kwargs: dict[str, Any] = {
             "modelId": self.model,
             "messages": list_messages,
-            "system": [{"text": str_system_prompt}],
+            "system": self._build_converse_system(str_system_prompt, prompt_cache),
             "inferenceConfig": {"maxTokens": max_response_tokens},
             "outputConfig": {
                 "textFormat": {

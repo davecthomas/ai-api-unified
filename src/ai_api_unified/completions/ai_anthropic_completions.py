@@ -42,6 +42,8 @@ from ..ai_base import (
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
+    AIPromptCacheHint,
+    AIPromptCacheRetention,
     AITokenUsage,
     AITool,
     AIToolCall,
@@ -109,6 +111,7 @@ class AICompletionsCapabilitiesAnthropic(AICompletionsCapabilitiesBase):
             supports_tool_use=True,
             supports_structured_output=True,
             supports_async=True,
+            supports_prompt_cache_hint=True,
             pricing=get_model_pricing(PROVIDER_ANTHROPIC, normalized_name),
         )
 
@@ -201,6 +204,55 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         return AICompletionsCapabilitiesAnthropic.DICT_ANTHROPIC_CONTEXT_WINDOWS.get(
             self.completions_model, 0
         )
+
+    @staticmethod
+    def _build_cache_control(prompt_cache: AIPromptCacheHint) -> dict[str, str]:
+        """
+        Maps a prompt cache hint to a Messages API cache_control object.
+
+        Args:
+            prompt_cache: The caller's cache hint.
+
+        Returns:
+            An ephemeral cache_control dict; EXTENDED retention adds the 1-hour TTL.
+        """
+        dict_cache_control: dict[str, str] = {"type": "ephemeral"}
+        if prompt_cache.retention is AIPromptCacheRetention.EXTENDED:
+            dict_cache_control["ttl"] = "1h"
+        # Normal return with the provider cache_control object.
+        return dict_cache_control
+
+    @classmethod
+    def _build_system_param(
+        cls,
+        system_prompt: str,
+        prompt_cache: AIPromptCacheHint | None,
+    ) -> str | list[dict[str, Any]]:
+        """
+        Builds the Messages API system field, with a cache breakpoint when asked.
+
+        Tools render before system, so a breakpoint on the system block caches
+        the tool definitions too.
+
+        Args:
+            system_prompt: Effective system prompt for the request.
+            prompt_cache: Optional caller cache hint.
+
+        Returns:
+            The plain system string when no hint is set (the historical shape),
+            otherwise one text block carrying cache_control.
+        """
+        if prompt_cache is None:
+            # Early return with the unchanged string form.
+            return system_prompt
+        # Normal return with a cacheable system text block.
+        return [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": cls._build_cache_control(prompt_cache),
+            }
+        ]
 
     def _build_user_message_content(
         self,
@@ -694,7 +746,10 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 response = call_client.messages.create(
                     model=self.completions_model,
                     max_tokens=int_max_tokens,
-                    system=str_system_prompt,
+                    system=self._build_system_param(
+                        str_system_prompt,
+                        self._resolve_prompt_cache_hint(other_params),
+                    ),
                     messages=[{"role": "user", "content": user_content}],
                 )
             except Exception as exception:
@@ -814,7 +869,10 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             response = self.client.messages.create(
                 model=self.completions_model,
                 max_tokens=max_response_tokens,
-                system=system_prompt,
+                system=self._build_system_param(
+                    system_prompt,
+                    self._resolve_prompt_cache_hint(other_params),
+                ),
                 messages=[{"role": "user", "content": user_content}],
                 output_config=dict_output_config,
             )
@@ -890,16 +948,27 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         tool_choice: str | None,
         max_response_tokens: int | None,
         dict_merge_options: dict[str, Any],
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> dict[str, Any]:
         """
         Builds the Messages API request kwargs for one conversation turn.
+
+        With a prompt cache hint, the system block gets an explicit breakpoint
+        (caching tools and system) and the top-level cache_control turns on
+        automatic caching, which moves a second breakpoint forward over the
+        growing history each turn. Both use the same TTL, which the API
+        requires when the automatic breakpoint lands on a marked block.
         """
         dict_request_kwargs: dict[str, Any] = {
             "model": self.completions_model,
             "max_tokens": max_response_tokens or self.SEND_PROMPT_MAX_TOKENS,
-            "system": system_prompt,
+            "system": self._build_system_param(system_prompt, prompt_cache),
             "messages": messages,
         }
+        if prompt_cache is not None:
+            dict_request_kwargs["cache_control"] = self._build_cache_control(
+                prompt_cache
+            )
         if tools:
             dict_request_kwargs["tools"] = self._build_provider_tools(tools)
         if tool_choice is not None:
@@ -1002,6 +1071,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Sends one conversation turn to the Messages API.
@@ -1020,6 +1090,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             tool_choice=tool_choice,
             max_response_tokens=max_response_tokens,
             dict_merge_options=dict_merge_options,
+            prompt_cache=prompt_cache,
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_conversation_observability_metadata(
@@ -1066,6 +1137,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Async twin of _send_conversation_provider using the AsyncAnthropic client.
@@ -1084,6 +1156,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             tool_choice=tool_choice,
             max_response_tokens=max_response_tokens,
             dict_merge_options=dict_merge_options,
+            prompt_cache=prompt_cache,
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_conversation_observability_metadata(
@@ -1167,6 +1240,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         messages: list[dict[str, Any]] | None,
         max_response_tokens: int,
         dict_merge_options: dict[str, Any],
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> dict[str, Any]:
         """
         Builds the Messages API request kwargs for one structured-output call.
@@ -1182,7 +1256,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         dict_request_kwargs: dict[str, Any] = {
             "model": self.completions_model,
             "max_tokens": max_response_tokens,
-            "system": str_system_prompt,
+            "system": self._build_system_param(str_system_prompt, prompt_cache),
             "messages": self._build_structured_messages(
                 prompt=prompt, messages=messages
             ),
@@ -1443,6 +1517,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Generates structured output via the Messages API output_config format.
@@ -1461,6 +1536,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             messages=messages,
             max_response_tokens=max_response_tokens,
             dict_merge_options=dict_merge_options,
+            prompt_cache=prompt_cache,
         )
         bool_stream: bool = max_response_tokens > self.NONSTREAMING_MAX_TOKENS_THRESHOLD
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -1529,6 +1605,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Async twin of _send_structured_output_provider.
@@ -1547,6 +1624,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             messages=messages,
             max_response_tokens=max_response_tokens,
             dict_merge_options=dict_merge_options,
+            prompt_cache=prompt_cache,
         )
         bool_stream: bool = max_response_tokens > self.NONSTREAMING_MAX_TOKENS_THRESHOLD
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -1645,7 +1723,10 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 response = await call_client.messages.create(
                     model=self.completions_model,
                     max_tokens=int_max_tokens,
-                    system=str_system_prompt,
+                    system=self._build_system_param(
+                        str_system_prompt,
+                        self._resolve_prompt_cache_hint(other_params),
+                    ),
                     messages=[{"role": "user", "content": user_content}],
                 )
             except Exception as exception:
@@ -1743,7 +1824,10 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             stream = self.client.messages.create(
                 model=self.completions_model,
                 max_tokens=self.STREAMING_MAX_TOKENS,
-                system=system_prompt,
+                system=self._build_system_param(
+                    system_prompt,
+                    self._resolve_prompt_cache_hint(other_params),
+                ),
                 messages=[{"role": "user", "content": user_content}],
                 stream=True,
             )
@@ -2024,7 +2108,9 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             dict_params: dict[str, Any] = {
                 "model": self.completions_model,
                 "max_tokens": item.max_response_tokens or self.SEND_PROMPT_MAX_TOKENS,
-                "system": str_system_prompt,
+                "system": self._build_system_param(
+                    str_system_prompt, item.prompt_cache
+                ),
                 "messages": [{"role": "user", "content": str_prompt}],
             }
             list_batch_requests.append(

@@ -69,9 +69,54 @@ class SupportedDataType(Enum):
     PDF = "pdf"
 
 
+class AIPromptCacheRetention(str, Enum):
+    """How long a provider should keep a cached prompt prefix.
+
+    DEFAULT is the provider's standard window (about 5 minutes on Anthropic
+    and Bedrock, in-memory on OpenAI). EXTENDED asks for the longer window
+    where one exists (1 hour on Anthropic and Bedrock, 24 hours on OpenAI
+    models that offer it). Anthropic and Bedrock bill cache writes at a
+    premium over base input (1.25x for DEFAULT, 2x for EXTENDED), so EXTENDED
+    pays off only when requests sharing the prefix arrive more than about 5
+    minutes apart.
+    """
+
+    DEFAULT = "default"
+    EXTENDED = "extended"
+
+
+class AIPromptCacheHint(BaseModel):
+    """
+    Marks the system prompt and tool definitions as a stable prefix to cache.
+
+    Caching only changes cost and latency, never the response, so an engine
+    that cannot honor the hint ignores it. Engines map it to their native
+    mechanism: Anthropic cache_control, Bedrock cachePoint blocks, OpenAI
+    prompt_cache_key and prompt_cache_retention. Gemini caches repeated
+    prefixes implicitly (durable, up to 24 hours on Gemini 3.x), so it needs
+    no request change. On conversation turns, Anthropic also caches the
+    growing message history.
+
+    A cache hit needs a byte-identical prefix: keep timestamps, request IDs,
+    and other per-call values out of the system prompt.
+
+    Attributes:
+        retention: Requested cache lifetime; see AIPromptCacheRetention.
+        key: Optional routing key that groups requests sharing a prefix
+            (OpenAI prompt_cache_key). Ignored by other engines.
+    """
+
+    retention: AIPromptCacheRetention = AIPromptCacheRetention.DEFAULT
+    key: str | None = None
+
+
 class AICompletionsCapabilitiesBase(BaseModel):
     """
     Base class for capturing important attributes of completions models.
+
+    implicit_prompt_caching is True when the provider caches repeated prompt
+    prefixes without any request change. supports_prompt_cache_hint is True
+    when the engine maps AIPromptCacheHint to a provider cache control.
     """
 
     context_window_length: int
@@ -85,6 +130,8 @@ class AICompletionsCapabilitiesBase(BaseModel):
     supports_tool_use: bool = False
     supports_structured_output: bool = False
     supports_async: bool = False
+    implicit_prompt_caching: bool = False
+    supports_prompt_cache_hint: bool = False
     pricing: AIModelPricing | None = None
 
 
@@ -218,6 +265,10 @@ class AICompletionsPromptParamsBase(AIIncludedMediaParamsBase, ABC):
     MAX_MEDIA_BYTES: ClassVar[int | None] = MAX_IMAGE_BYTES
 
     system_prompt: str | None = None
+    # Optional request to cache the system prompt as a stable prefix. Honored
+    # by send_prompt, asend_prompt, send_prompt_streaming, and
+    # strict_schema_prompt; see AIPromptCacheHint.
+    prompt_cache: AIPromptCacheHint | None = None
 
 
 class AIBatchStatus(str, Enum):
@@ -256,6 +307,10 @@ class AIBatchRequestItem(BaseModel):
     prompt: str
     system_prompt: str | None = None
     max_response_tokens: int | None = None
+    # Optional request to cache the system prompt across the batch. Batch
+    # requests run in any order over minutes to hours, so hits are best effort
+    # and EXTENDED retention usually fits better; see AIPromptCacheHint.
+    prompt_cache: AIPromptCacheHint | None = None
 
 
 class AIBatchJob(BaseModel):
@@ -2700,6 +2755,25 @@ class AIBaseCompletions(AIBase):
         # Normal return with the engine default system prompt.
         return default_system_prompt
 
+    @staticmethod
+    def _resolve_prompt_cache_hint(
+        other_params: AICompletionsPromptParamsBase | None,
+    ) -> AIPromptCacheHint | None:
+        """
+        Returns the prompt cache hint carried by other_params, if any.
+
+        Args:
+            other_params: Optional provider params that may carry a hint.
+
+        Returns:
+            The caller's AIPromptCacheHint, or None when caching was not requested.
+        """
+        if other_params is None:
+            # Early return because no params were supplied.
+            return None
+        # Normal return with the params-supplied hint (possibly None).
+        return other_params.prompt_cache
+
     def _reject_unsupported_send_prompt_params(
         self,
         *,
@@ -2934,6 +3008,7 @@ class AIBaseCompletions(AIBase):
         max_response_tokens: int = STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS,
         request_timeout_seconds: float | None = None,
         provider_options: dict[str, Any] | None = None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Generates schema-constrained structured output and returns the parsed result.
@@ -2965,6 +3040,9 @@ class AIBaseCompletions(AIBase):
             request_timeout_seconds: Optional per-call provider timeout.
             provider_options: Engine-specific escape hatch merged into the
                 underlying request; engines ignore keys they do not understand.
+            prompt_cache: Optional request to cache the system prompt as a
+                stable prefix. Engines that cannot honor it ignore it; see
+                AIPromptCacheHint.
 
         Returns:
             AIStructuredOutputResult carrying parsed data, the normalized
@@ -2995,6 +3073,7 @@ class AIBaseCompletions(AIBase):
                 max_response_tokens=max_response_tokens,
                 request_timeout_seconds=request_timeout_seconds,
                 provider_options=provider_options,
+                prompt_cache=prompt_cache,
             )
         )
         # Normal return after optional pydantic validation of the parsed data.
@@ -3049,6 +3128,7 @@ class AIBaseCompletions(AIBase):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Provider hook for structured output generation.
@@ -3068,6 +3148,7 @@ class AIBaseCompletions(AIBase):
         max_response_tokens: int | None = None,
         request_timeout_seconds: float | None = None,
         provider_options: dict[str, Any] | None = None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Sends one conversation turn and returns the model's turn.
@@ -3092,6 +3173,9 @@ class AIBaseCompletions(AIBase):
             request_timeout_seconds: Optional per-call provider timeout.
             provider_options: Engine-specific escape hatch merged into the
                 underlying request; engines ignore keys they do not understand.
+            prompt_cache: Optional request to cache the system prompt, tools,
+                and (on Anthropic) the growing message history across turns.
+                Engines that cannot honor it ignore it; see AIPromptCacheHint.
 
         Returns:
             AITurnResult carrying text, requested tool calls, the normalized
@@ -3118,6 +3202,7 @@ class AIBaseCompletions(AIBase):
             max_response_tokens=max_response_tokens,
             request_timeout_seconds=request_timeout_seconds,
             provider_options=provider_options,
+            prompt_cache=prompt_cache,
         )
 
     def _send_conversation_provider(
@@ -3130,6 +3215,7 @@ class AIBaseCompletions(AIBase):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Provider hook for one conversation turn.
@@ -3484,6 +3570,7 @@ class AIBaseCompletions(AIBase):
         max_response_tokens: int = STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS,
         request_timeout_seconds: float | None = None,
         provider_options: dict[str, Any] | None = None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Async variant of send_structured_output. See send_structured_output.
@@ -3508,6 +3595,7 @@ class AIBaseCompletions(AIBase):
                 max_response_tokens=max_response_tokens,
                 request_timeout_seconds=request_timeout_seconds,
                 provider_options=provider_options,
+                prompt_cache=prompt_cache,
             )
         )
         # Normal return after optional pydantic validation of the parsed data.
@@ -3526,6 +3614,7 @@ class AIBaseCompletions(AIBase):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Provider hook for async structured output generation.
@@ -3545,6 +3634,7 @@ class AIBaseCompletions(AIBase):
         max_response_tokens: int | None = None,
         request_timeout_seconds: float | None = None,
         provider_options: dict[str, Any] | None = None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Async variant of send_conversation. See send_conversation.
@@ -3566,6 +3656,7 @@ class AIBaseCompletions(AIBase):
             max_response_tokens=max_response_tokens,
             request_timeout_seconds=request_timeout_seconds,
             provider_options=provider_options,
+            prompt_cache=prompt_cache,
         )
 
     async def _asend_conversation_provider(
@@ -3578,6 +3669,7 @@ class AIBaseCompletions(AIBase):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Provider hook for one async conversation turn.

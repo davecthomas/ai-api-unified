@@ -34,6 +34,7 @@ from typing import Any, ClassVar, Literal, Type
 from ..ai_base import (
     AIBaseCompletions,
     AICompletionsCapabilitiesBase,
+    AIPromptCacheHint,
     AIFinishReason,
     AICompletionsPromptParamsBase,
     AIProviderOrgInfoBase,
@@ -320,6 +321,7 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
         messages: list[dict[str, Any]] | None,
         max_response_tokens: int,
         dict_merge_options: dict[str, Any],
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> dict[str, Any]:
         """
         Builds the structured request. In json_object mode the server only
@@ -334,6 +336,7 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
                 messages=messages,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options={},
+                prompt_cache=prompt_cache,
             )
         )
         if self.structured_output_mode == STRUCTURED_OUTPUT_MODE_JSON_OBJECT:

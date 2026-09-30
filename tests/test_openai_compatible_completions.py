@@ -381,6 +381,9 @@ DICT_REVIEWED_OPENAI_METHODS: dict[str, str] = {
     "_build_chat_provider_tools": "shared",
     "_build_chat_structured_request_kwargs": "overridden",
     "_build_conversation_observability_metadata": "shared",
+    # Returns {} unless capabilities declare hint support, which the
+    # compatible engine's capabilities never do.
+    "_build_prompt_cache_kwargs": "shared",
     "_build_structured_observability_metadata": "shared",
     "_build_structured_output_result_from_parts": "shared",
     "_build_tool_result_message_provider": "shared",
