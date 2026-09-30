@@ -630,3 +630,14 @@ class TestAnthropicBreakpointScan:
             "tools": [{"name": "t", "cache_control": {"type": "ephemeral"}}],
         }
         assert AiAnthropicCompletions._count_cache_breakpoints([], dict_options) == 2
+
+
+class TestBedrockProviderOptionsPrecedence:
+    def test_caller_cache_point_in_tool_config_takes_precedence(self) -> None:
+        client = _bedrock("us.anthropic.claude-opus-5")
+        dict_options: dict[str, Any] = {
+            "toolConfig": {"tools": [{"cachePoint": {"type": "default"}}]}
+        }
+        assert client._build_converse_system(
+            SYSTEM_PROMPT, HINT_EXTENDED, None, dict_options
+        ) == [{"text": SYSTEM_PROMPT}]

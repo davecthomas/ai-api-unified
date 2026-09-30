@@ -1108,22 +1108,37 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         return (prompt_tokens or 0) + (completion_tokens or 0)
 
     @staticmethod
-    def _has_cache_points(messages: list[dict[str, Any]] | None) -> bool:
+    def _has_cache_points(
+        messages: list[dict[str, Any]] | None,
+        dict_merge_options: dict[str, Any] | None = None,
+    ) -> bool:
         """
-        Reports whether caller-supplied Converse messages carry cachePoint blocks.
+        Reports whether the caller already placed Converse cachePoint blocks.
+
+        Checks message content blocks and the provider_options fields that
+        accept checkpoints (system blocks and toolConfig.tools).
 
         Args:
             messages: Optional Converse messages.
+            dict_merge_options: Optional caller provider_options.
 
         Returns:
-            True when any content block is a cachePoint.
+            True when any of those blocks is a cachePoint.
         """
-        # Normal return after scanning every content block of every message.
-        return any(
-            isinstance(block, dict) and "cachePoint" in block
+        dict_options: dict[str, Any] = dict_merge_options or {}
+        dict_tool_config: Any = dict_options.get("toolConfig")
+        list_blocks: list[Any] = [
+            block
             for message in messages or []
             if isinstance(message, dict)
             for block in (message.get("content") or [])
+        ]
+        list_blocks += list(dict_options.get("system") or [])
+        if isinstance(dict_tool_config, dict):
+            list_blocks += list(dict_tool_config.get("tools") or [])
+        # Normal return after scanning every candidate block.
+        return any(
+            isinstance(block, dict) and "cachePoint" in block for block in list_blocks
         )
 
     def _build_converse_system(
@@ -1131,6 +1146,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         system_prompt: str,
         prompt_cache: AIPromptCacheHint | None,
         messages: list[dict[str, Any]] | None = None,
+        dict_merge_options: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Builds the Converse system field, with a cachePoint when asked.
@@ -1139,7 +1155,8 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         text caches the tool definitions too. Models without explicit prompt
         caching get no checkpoint, since Converse rejects the block there;
         models without the 1-hour TTL get the default 5-minute checkpoint.
-        When the caller's messages already carry cachePoint blocks, the caller
+        When the caller already placed cachePoint blocks (in messages or in
+        provider_options), the caller
         is managing caching and the hint adds none: one more could exceed the
         limit of 4 checkpoints per request or break TTL ordering.
 
@@ -1147,6 +1164,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             system_prompt: Effective system prompt for the request.
             prompt_cache: Optional caller cache hint.
             messages: Optional caller-supplied Converse messages to inspect.
+            dict_merge_options: Optional caller provider_options to inspect.
 
         Returns:
             Converse SystemContentBlock list.
@@ -1156,7 +1174,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             prompt_cache is None
             or not system_prompt.strip()
             or not self.capabilities.supports_prompt_cache_hint
-            or self._has_cache_points(messages)
+            or self._has_cache_points(messages, dict_merge_options)
         ):
             # Early return because caching was not requested, there is no
             # prefix to cache, the model does not accept checkpoints, or the
@@ -1510,7 +1528,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             "modelId": self.model,
             "messages": messages,
             "system": self._build_converse_system(
-                system_prompt, prompt_cache, messages
+                system_prompt, prompt_cache, messages, dict_merge_options
             ),
             "inferenceConfig": {"maxTokens": max_response_tokens or 1024},
         }
@@ -1864,7 +1882,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             "modelId": self.model,
             "messages": list_messages,
             "system": self._build_converse_system(
-                str_system_prompt, prompt_cache, list_messages
+                str_system_prompt, prompt_cache, list_messages, dict_merge_options
             ),
             "inferenceConfig": {"maxTokens": max_response_tokens},
             "outputConfig": {
