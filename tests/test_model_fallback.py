@@ -769,3 +769,265 @@ class TestFactory:
         )
         assert client.send_prompt("hi") == "from openai"
         assert client.last_route.engine == "openai"
+
+
+# ── Issue 65: OpenAI text-only turns must not read as provider-neutral ──────
+
+
+def _openai_engine_with_text_reply(text: str) -> Any:
+    """Real openai engine whose mocked SDK returns a text-only assistant turn."""
+    openai_module = pytest.importorskip("openai")
+    from openai.types.chat import ChatCompletionMessage
+
+    from ai_api_unified.completions.ai_openai_completions import AiOpenAICompletions
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        engine = AiOpenAICompletions(model="gpt-4o-mini")
+    engine.client = Mock()
+    # The real SDK message type, so raw_content is model_dump(exclude_none=True)
+    # and carries every field the SDK sets, such as annotations=[].
+    message = ChatCompletionMessage(role="assistant", content=text, annotations=[])
+    engine.client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=message, finish_reason="stop")],
+        usage=Mock(
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            prompt_tokens_details=Mock(cached_tokens=None),
+        ),
+    )
+    del openai_module
+    return engine
+
+
+class TestIssue65OpenAITextTurn:
+    def test_text_only_openai_turn_replays_without_sdk_fields(self) -> None:
+        engine = _openai_engine_with_text_reply("Blue.")
+        list_messages: list[dict[str, Any]] = [{"role": "user", "content": "Pick."}]
+        turn = engine.send_conversation("Be brief.", list_messages)
+        engine.extend_messages_with_turn(list_messages, turn)
+        assert list_messages[-1] == {"role": "assistant", "content": "Blue."}
+
+    def test_second_turn_after_failover_stays_on_openai(self) -> None:
+        primary = _FakeEngine(
+            "p", fail=_err(R.MODEL_UNAVAILABLE, 404), family="anthropic"
+        )
+        openai_engine = _openai_engine_with_text_reply("Blue.")
+        wrapper = AiFallbackCompletions(
+            primary=primary,
+            primary_candidate=AIFallbackCandidate(engine="fake", model="p"),
+            fallback_candidates=[
+                AIFallbackCandidate(engine="openai", model="gpt-4o-mini")
+            ],
+            client_builder=lambda candidate: openai_engine,
+            fallback_on={R.MODEL_UNAVAILABLE},
+        )
+        list_messages: list[dict[str, Any]] = [{"role": "user", "content": "Pick."}]
+        turn = wrapper.send_conversation("Be brief.", list_messages)
+        assert turn.provider_engine == "openai"
+        wrapper.extend_messages_with_turn(list_messages, turn)
+        list_messages.append({"role": "user", "content": "Which did you pick?"})
+        # A healthy primary must not receive the OpenAI turn's SDK fields, and
+        # a plain-text history may go to any candidate, so either route is
+        # acceptable as long as the replayed message is clean.
+        primary.fail = None
+        turn2 = wrapper.send_conversation("Be brief.", list_messages)
+        assert turn2.text in ("Blue.", "p:turn")
+        assert all(set(m) <= {"role", "content"} for m in list_messages)
+
+    def test_responses_message_item_reads_as_openai_responses(self) -> None:
+        from ai_api_unified.completions.ai_fallback_completions import (
+            history_family_of,
+        )
+
+        list_messages: list[dict[str, Any]] = [
+            {"role": "user", "content": "hi"},
+            {
+                "type": "message",
+                "role": "assistant",
+                "id": "msg_1",
+                "status": "completed",
+                "content": [
+                    {"type": "output_text", "text": "Blue.", "annotations": []}
+                ],
+            },
+        ]
+        assert history_family_of(list_messages) == "openai-responses"
+
+    def test_assistant_message_with_sdk_fields_reads_as_openai(self) -> None:
+        from ai_api_unified.completions.ai_fallback_completions import (
+            history_family_of,
+        )
+
+        assert (
+            history_family_of(
+                [{"role": "assistant", "content": "Blue.", "annotations": []}]
+            )
+            == "openai"
+        )
+        assert (
+            history_family_of(
+                [{"role": "assistant", "content": "Blue.", "refusal": None}]
+            )
+            == "openai"
+        )
+
+
+# ── Every real engine's saved turn must route back to that engine ───────────
+
+
+def _usage_mock(**kwargs: Any) -> Mock:
+    return Mock(**kwargs)
+
+
+def _real_engine_with_text_turn(str_family: str) -> Any:
+    """
+    Builds one real engine with a mocked SDK that answers a text-only turn,
+    using the SDK's own response types where it has them, so raw_content is
+    the shape production code would save.
+    """
+    if str_family == "anthropic":
+        anthropic = pytest.importorskip("anthropic")
+        from ai_api_unified.completions.ai_anthropic_completions import (
+            AiAnthropicCompletions,
+        )
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            engine = AiAnthropicCompletions(model="claude-opus-4-8")
+        engine.client = Mock()
+        engine.client.messages.create.return_value = Mock(
+            content=[anthropic.types.TextBlock(type="text", text="Blue.")],
+            stop_reason="end_turn",
+            usage=_usage_mock(
+                input_tokens=1, output_tokens=1, cache_read_input_tokens=None
+            ),
+        )
+        return engine
+    if str_family == "openai":
+        return _openai_engine_with_text_reply("Blue.")
+    if str_family == "openai-responses":
+        pytest.importorskip("openai")
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        from ai_api_unified.completions.ai_openai_responses_completions import (
+            AiOpenAIResponsesCompletions,
+        )
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            engine = AiOpenAIResponsesCompletions(model="gpt-5.1")
+        engine.client = Mock()
+        item = ResponseOutputMessage(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            status="completed",
+            content=[
+                ResponseOutputText(type="output_text", text="Blue.", annotations=[])
+            ],
+        )
+        engine.client.responses.create.return_value = Mock(
+            output=[item],
+            output_text="Blue.",
+            status="completed",
+            usage=_usage_mock(
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                input_tokens_details=Mock(cached_tokens=None),
+            ),
+        )
+        return engine
+    if str_family == "bedrock":
+        pytest.importorskip("boto3")
+        from ai_api_unified.completions.ai_bedrock_completions import (
+            AiBedrockCompletions,
+        )
+
+        with patch("ai_api_unified.ai_bedrock_base.boto3"):
+            engine = AiBedrockCompletions(model="us.anthropic.claude-opus-5")
+        engine.client = Mock()
+        engine.client.converse.return_value = {
+            "output": {
+                "message": {"role": "assistant", "content": [{"text": "Blue."}]}
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+        return engine
+    if str_family == "gemini":
+        genai = pytest.importorskip("google.genai")
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GoogleGeminiCompletions,
+        )
+
+        with patch.object(
+            GoogleGeminiCompletions,
+            "_initialize_client",
+            lambda self: setattr(self, "client", Mock()),
+        ):
+            engine = GoogleGeminiCompletions(model="gemini-2.5-flash")
+        engine.client.models.generate_content.return_value = Mock(
+            candidates=[
+                Mock(
+                    content=Mock(parts=[genai.types.Part(text="Blue.")]),
+                    finish_reason="FinishReason.STOP",
+                )
+            ],
+            usage_metadata=Mock(
+                prompt_token_count=1,
+                candidates_token_count=1,
+                total_token_count=2,
+                cached_content_token_count=None,
+            ),
+            text="Blue.",
+        )
+        return engine
+    raise AssertionError(str_family)
+
+
+class TestEveryEngineTurnRoutesHome:
+    @pytest.mark.parametrize(
+        "str_family", ["anthropic", "openai", "openai-responses", "bedrock", "gemini"]
+    )
+    def test_saved_text_turn_is_recognized(self, str_family: str) -> None:
+        from ai_api_unified.completions.ai_fallback_completions import (
+            engine_family_of,
+            history_family_of,
+        )
+
+        engine = _real_engine_with_text_turn(str_family)
+        assert engine_family_of(engine) == str_family
+        list_messages: list[dict[str, Any]] = [{"role": "user", "content": "Pick."}]
+        turn = engine.send_conversation("Be brief.", list_messages)
+        engine.extend_messages_with_turn(list_messages, turn)
+        # A neutral turn may replay anywhere; an engine-shaped one must name
+        # its own family, never another engine's and never "unknown".
+        if AiFallbackCompletions._history_is_engine_neutral(list_messages):
+            assert str_family == "openai"
+        else:
+            assert history_family_of(list_messages) == str_family
+
+
+class TestNeutralityEdges:
+    def test_name_key_is_not_neutral(self) -> None:
+        list_messages: list[dict[str, Any]] = [
+            {"role": "user", "name": "alice", "content": "hi"}
+        ]
+        assert AiFallbackCompletions._history_is_engine_neutral(list_messages) is False
+
+    def test_unknown_extra_key_pins_to_the_last_route(self) -> None:
+        # An OpenAI-compatible server (DeepSeek, Qwen) adds reasoning_content;
+        # no family lists it, so the turn must stay where it was served.
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE), family="anthropic")
+        fallback = _FakeEngine("f", family="openai")
+        wrapper = _chain(primary, fallback)
+        list_messages: list[dict[str, Any]] = [{"role": "user", "content": "hi"}]
+        wrapper.send_conversation("sys", list_messages)
+        list_messages.append(
+            {"role": "assistant", "content": "Blue.", "reasoning_content": "..."}
+        )
+        list_messages.append({"role": "user", "content": "more"})
+        primary.fail = None
+        turn = wrapper.send_conversation("sys", list_messages)
+        assert turn.text == "f:turn"
+        assert primary.calls.count("send_conversation") == 1

@@ -88,6 +88,23 @@ TUPLE_ENGINE_FAMILY_MODULE_MARKERS: tuple[tuple[str, str], ...] = (
     ("ai_google_gemini_completions", "gemini"),
 )
 
+# Top-level item types the Responses API uses in its input list. A message
+# item carries a role too, so this check runs before the role-based ones.
+FROZENSET_RESPONSES_ITEM_TYPES: frozenset[str] = frozenset(
+    {"message", "function_call", "function_call_output", "reasoning"}
+)
+
+# Keys a Chat Completions assistant message may carry beyond role and
+# content. Any of them marks the history as OpenAI-shaped; other providers
+# reject them.
+FROZENSET_OPENAI_ASSISTANT_KEYS: frozenset[str] = frozenset(
+    {"tool_calls", "function_call", "annotations", "refusal", "audio"}
+)
+
+# Keys a provider-neutral message may carry. Exactly these two: OpenAI also
+# accepts "name", but Anthropic and Bedrock reject it as an unknown key.
+FROZENSET_NEUTRAL_MESSAGE_KEYS: frozenset[str] = frozenset({"role", "content"})
+
 # Content-block keys Converse uses; a block with one of these and no "type"
 # is Bedrock-shaped.
 FROZENSET_CONVERSE_BLOCK_KEYS: frozenset[str] = frozenset(
@@ -234,12 +251,18 @@ def history_family_of(messages: list[dict[str, Any]]) -> str | None:
         if "parts" in message:
             # Early return: Gemini content objects.
             return "gemini"
-        if message.get("role") == "tool" or "tool_calls" in message:
-            # Early return: Chat Completions tool calls and results.
-            return "openai"
-        if "role" not in message and "type" in message:
-            # Early return: Responses API input items.
+        if message.get("type") in FROZENSET_RESPONSES_ITEM_TYPES or (
+            "role" not in message and "type" in message
+        ):
+            # Early return: Responses API input items, including message
+            # items, which carry a role as well as a type.
             return "openai-responses"
+        if message.get("role") == "tool" or (
+            FROZENSET_OPENAI_ASSISTANT_KEYS & message.keys()
+        ):
+            # Early return: Chat Completions tool results, tool calls, or an
+            # assistant message carrying SDK fields.
+            return "openai"
         content: Any = message.get("content")
         if not isinstance(content, list):
             continue
@@ -456,12 +479,21 @@ class AiFallbackCompletions(AIBaseCompletions):
         Returns:
             None when the history is provider-neutral (any candidate will
             do), otherwise the first built candidate of the family that
-            shaped it. Only a built candidate can have produced history.
+            shaped it. Only a built candidate can have produced history. A
+            history that is not neutral but matches no known family (a key
+            a provider's SDK added that this module does not list) pins to
+            the candidate that served the most recent call, since that is
+            the engine most likely to have produced it; guessing the primary
+            would replay a foreign shape there.
         """
-        str_family: str | None = history_family_of(messages)
-        if str_family is None:
+        if self._history_is_engine_neutral(messages):
             # Early return: neutral history.
             return None
+        str_family: str | None = history_family_of(messages)
+        if str_family is None:
+            # Early return: engine-shaped but unrecognized; stay where the
+            # last call was served.
+            return self._last_route_index
         # Loop over built candidates for one of the shaping family.
         for int_index, client in self._built_clients():
             if engine_family_of(client) == str_family:
@@ -831,7 +863,8 @@ class AiFallbackCompletions(AIBaseCompletions):
         Reports whether a conversation history can replay on any engine.
 
         Neutral history is user, assistant, and system messages whose
-        content is plain text.
+        content is plain text and that carry no other keys, since a key one
+        provider's SDK adds (annotations, refusal) is one another rejects.
 
         Args:
             messages: Caller-managed message history.
@@ -844,6 +877,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             isinstance(message, dict)
             and str(message.get("role", "")) in FROZENSET_NEUTRAL_ROLES
             and isinstance(message.get("content"), str)
+            and set(message) <= FROZENSET_NEUTRAL_MESSAGE_KEYS
             for message in messages
         )
 
