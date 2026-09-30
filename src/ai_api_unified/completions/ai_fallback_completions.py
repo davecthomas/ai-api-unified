@@ -56,6 +56,14 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# Values of the `ai_fallback_event` field on this module's log records, so a
+# log processor can count and alert on each without parsing the message.
+FALLBACK_EVENT_FAILOVER: str = "failover"
+FALLBACK_EVENT_SERVED: str = "served_by_fallback"
+FALLBACK_EVENT_EXHAUSTED: str = "chain_exhausted"
+FALLBACK_EVENT_UNBUILDABLE: str = "candidate_unbuildable"
+FALLBACK_EVENT_SKIPPED: str = "candidate_skipped"
+
 # Reasons a fallback client acts on unless configured otherwise.
 DEFAULT_FALLBACK_REASONS: frozenset[AiFallbackReason] = frozenset(
     {
@@ -412,10 +420,15 @@ class AiFallbackCompletions(AIBaseCompletions):
         try:
             client: AIBaseCompletions = self._client_builder(candidate)
         except Exception as exception:
-            _LOGGER.warning(
-                "Fallback candidate %s cannot be built and will be skipped: %s",
+            _LOGGER.error(
+                "FALLBACK candidate %s cannot be built and will be skipped for "
+                "the rest of the process: %s",
                 candidate.label,
                 exception,
+                extra={
+                    "ai_fallback_event": FALLBACK_EVENT_UNBUILDABLE,
+                    "fallback_candidate": candidate.label,
+                },
             )
             self._clients[int_index] = self._UNBUILDABLE
             # Early return: this candidate is out of the chain.
@@ -520,9 +533,13 @@ class AiFallbackCompletions(AIBaseCompletions):
                 ]
                 if list_missing:
                     _LOGGER.warning(
-                        "Fallback candidate %s skipped: %s not supported.",
+                        "FALLBACK candidate %s skipped: %s not supported.",
                         self._candidates[int_index].label,
                         ", ".join(list_missing),
+                        extra={
+                            "ai_fallback_event": FALLBACK_EVENT_SKIPPED,
+                            "fallback_candidate": self._candidates[int_index].label,
+                        },
                     )
                     continue
             yield int_index, client, int_index == list_indexes[-1]
@@ -547,18 +564,96 @@ class AiFallbackCompletions(AIBaseCompletions):
         Returns:
             True to try the next candidate; False to re-raise.
         """
-        if bool_is_last or error.fallback_reason not in self._fallback_on:
-            # Early return: nothing left to try, or not a fallback trigger.
+        if error.fallback_reason not in self._fallback_on:
+            # Early return: not a fallback trigger, so the error propagates.
             return False
-        _LOGGER.warning(
-            "%s failed on %s (%s); trying the next fallback candidate: %s",
+        str_reason: str = error.fallback_reason.value if error.fallback_reason else ""
+        if bool_is_last:
+            self._log_exhausted(str_operation, error, self._candidates[int_index].label)
+            # Early return: nothing left to try; the caller re-raises.
+            return False
+        str_next: str = self._candidates[int_index + 1].label
+        _LOGGER.error(
+            "FALLBACK: %s failed on %s (%s, status %s); trying %s next: %s",
             str_operation,
             self._candidates[int_index].label,
-            error.fallback_reason.value if error.fallback_reason else "",
+            str_reason,
+            error.status_code,
+            str_next,
             error,
+            extra={
+                "ai_fallback_event": FALLBACK_EVENT_FAILOVER,
+                "operation": str_operation,
+                "fallback_from": self._candidates[int_index].label,
+                "fallback_to": str_next,
+                "fallback_reason": str_reason,
+                "status_code": error.status_code,
+            },
         )
         # Normal return: move on.
         return True
+
+    def _log_exhausted(
+        self,
+        str_operation: str,
+        last_error: AiProviderRequestError | None,
+        str_candidates: str,
+    ) -> None:
+        """
+        Logs that no candidate could serve a request.
+
+        Args:
+            str_operation: Method name, for logs.
+            last_error: The failure that ended the chain, if any candidate ran.
+            str_candidates: Labels of the candidates that were tried or skipped.
+        """
+        _LOGGER.error(
+            "FALLBACK EXHAUSTED: %s failed on every candidate (%s); raising %s.",
+            str_operation,
+            str_candidates,
+            last_error if last_error is not None else "a request error",
+            extra={
+                "ai_fallback_event": FALLBACK_EVENT_EXHAUSTED,
+                "operation": str_operation,
+                "fallback_reason": (
+                    last_error.fallback_reason.value
+                    if last_error is not None and last_error.fallback_reason
+                    else ""
+                ),
+            },
+        )
+
+    def _log_served_by_fallback(
+        self, int_index: int, str_operation: str, error: AiProviderRequestError
+    ) -> None:
+        """
+        Logs that a fallback served a request the primary could not.
+
+        Emitted once per request that actually moved, so a dashboard can
+        count degraded requests without also counting every later turn of a
+        conversation that is pinned to a fallback engine.
+
+        Args:
+            int_index: Chain position that served the call.
+            str_operation: Method name, for logs.
+            error: The failure that started the failover.
+        """
+        _LOGGER.warning(
+            "FALLBACK SERVED: %s answered by %s after %s failed (%s).",
+            str_operation,
+            self._candidates[int_index].label,
+            self._candidates[0].label,
+            error.fallback_reason.value if error.fallback_reason else "",
+            extra={
+                "ai_fallback_event": FALLBACK_EVENT_SERVED,
+                "operation": str_operation,
+                "fallback_from": self._candidates[0].label,
+                "fallback_to": self._candidates[int_index].label,
+                "fallback_reason": (
+                    error.fallback_reason.value if error.fallback_reason else ""
+                ),
+            },
+        )
 
     @staticmethod
     def _typed_error(
@@ -653,10 +748,12 @@ class AiFallbackCompletions(AIBaseCompletions):
                     raise
                 last_error = error
                 continue
+            if last_error is not None:
+                self._log_served_by_fallback(int_index, str_operation, last_error)
             # Early return with the first result.
             return self._stamp_route(result, int_index)
         # Normal exit: every later candidate was skipped after a failure.
-        raise self._exhausted(last_error, int_start)
+        raise self._exhausted(last_error, int_start, str_operation)
 
     async def _arun(
         self,
@@ -687,13 +784,18 @@ class AiFallbackCompletions(AIBaseCompletions):
                     raise
                 last_error = error
                 continue
+            if last_error is not None:
+                self._log_served_by_fallback(int_index, str_operation, last_error)
             # Early return with the first result.
             return self._stamp_route(result, int_index)
         # Normal exit: every later candidate was skipped after a failure.
-        raise self._exhausted(last_error, int_start)
+        raise self._exhausted(last_error, int_start, str_operation)
 
     def _exhausted(
-        self, last_error: AiProviderRequestError | None, int_start: int
+        self,
+        last_error: AiProviderRequestError | None,
+        int_start: int,
+        str_operation: str,
     ) -> Exception:
         """
         Builds the error to raise when the chain produced no result.
@@ -701,10 +803,16 @@ class AiFallbackCompletions(AIBaseCompletions):
         Args:
             last_error: The last eligible failure, if any candidate ran.
             int_start: The chain position the call started from.
+            str_operation: Method name, for logs.
 
         Returns:
             The last error, or a request error naming an unusable start.
         """
+        self._log_exhausted(
+            str_operation,
+            last_error,
+            ", ".join(candidate.label for candidate in self._candidates[int_start:]),
+        )
         if last_error is not None:
             # Normal return with the failure that ended the chain.
             return last_error
@@ -861,13 +969,17 @@ class AiFallbackCompletions(AIBaseCompletions):
                     raise error if error is not None else exception
                 last_error = error
                 continue
+            if last_error is not None:
+                self._log_served_by_fallback(
+                    int_index, "send_prompt_streaming", last_error
+                )
             self._last_route_index = int_index
             yield str_first
             yield from iterator
             # Early return: the stream completed on this candidate.
             return
         # Normal exit: every later candidate was skipped after a failure.
-        raise self._exhausted(last_error, 0)
+        raise self._exhausted(last_error, 0, "send_prompt_streaming")
 
     def count_tokens(
         self,

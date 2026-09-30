@@ -34,6 +34,11 @@ version lives in `pyproject.toml` (see the README release section).
 - Every engine implements the `_raise_request_error` hook, so a fallback
   client can classify the raw SDK error a streaming call raises at its
   first chunk.
+- Fallback log events on `ai_api_unified.completions.ai_fallback_completions`:
+  `failover` (ERROR), `served_by_fallback` (WARNING), `chain_exhausted`
+  (ERROR), `candidate_unbuildable` (ERROR), and `candidate_skipped`
+  (WARNING), each with an `ai_fallback_event` field and the candidates and
+  reason involved.
 - Exports: `AiFallbackCompletions`, `AIFallbackCandidate`,
   `DEFAULT_FALLBACK_REASONS`.
 

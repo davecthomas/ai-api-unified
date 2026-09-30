@@ -12,6 +12,7 @@ production.
 """
 
 import asyncio
+import logging
 import os
 from collections.abc import Iterator
 from typing import Any, Type
@@ -207,6 +208,13 @@ class _FakeEngine(AIBaseCompletions):
         return messages
 
 
+LOGGER_NAME: str = "ai_api_unified.completions.ai_fallback_completions"
+
+
+def _chain_primary_503() -> _FakeEngine:
+    return _FakeEngine("p", fail=_err(R.UNAVAILABLE, 503))
+
+
 def _chain(*engines: _FakeEngine, **kwargs: Any) -> AiFallbackCompletions:
     """Builds a wrapper whose builder hands out the given engines in order."""
     list_rest: list[_FakeEngine] = list(engines[1:])
@@ -324,14 +332,46 @@ class TestFailover:
             wrapper.send_prompt("hi")
         wrapper.builder.assert_not_called()
 
-    def test_all_candidates_failing_raises_the_last_error(self) -> None:
+    def test_all_candidates_failing_raises_the_last_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         wrapper = _chain(
             _FakeEngine("p", fail=_err(R.UNAVAILABLE)),
             _FakeEngine("f", fail=_err(R.QUOTA_EXHAUSTED, 429)),
         )
-        with pytest.raises(AiProviderRequestError) as exc_info:
-            wrapper.send_prompt("hi")
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            with pytest.raises(AiProviderRequestError) as exc_info:
+                wrapper.send_prompt("hi")
         assert exc_info.value.fallback_reason is R.QUOTA_EXHAUSTED
+        list_events = [r.ai_fallback_event for r in caplog.records]
+        assert list_events == ["failover", "chain_exhausted"]
+        assert caplog.records[-1].levelno == logging.ERROR
+
+    def test_failover_and_served_events_are_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        wrapper = _chain(_chain_primary_503(), _FakeEngine("f"))
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            wrapper.send_prompt("hi")
+        dict_by_event = {r.ai_fallback_event: r for r in caplog.records}
+        failover = dict_by_event["failover"]
+        assert failover.levelno == logging.ERROR
+        assert failover.fallback_from == "fake:p"
+        assert failover.fallback_to == "fake:f"
+        assert failover.fallback_reason == "unavailable"
+        assert failover.status_code == 503
+        served = dict_by_event["served_by_fallback"]
+        assert served.levelno == logging.WARNING
+        assert served.fallback_to == "fake:f"
+        assert "FALLBACK SERVED" in served.getMessage()
+
+    def test_primary_success_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        wrapper = _chain(_FakeEngine("p"), _FakeEngine("f"))
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            wrapper.send_prompt("hi")
+        assert caplog.records == []
 
     def test_unbuildable_candidate_is_skipped_and_not_rebuilt(self) -> None:
         third = _FakeEngine("t")

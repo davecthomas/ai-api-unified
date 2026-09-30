@@ -1126,7 +1126,22 @@ and it belongs in your code if you want it.
 
 ### Seeing which model answered
 
-Every failover is logged at warning level. In code:
+Every failover is logged, on the logger
+`ai_api_unified.completions.ai_fallback_completions`, and each record carries
+an `ai_fallback_event` field plus the candidates and reason involved, so a
+log processor can count and alert on them without parsing the message:
+
+| Level | `ai_fallback_event` | When |
+| ----- | ------------------- | ---- |
+| ERROR | `failover` | A candidate failed with a trigger reason and the request is moving to the next one. Fields: `operation`, `fallback_from`, `fallback_to`, `fallback_reason`, `status_code`. |
+| WARNING | `served_by_fallback` | A fallback answered a request the primary could not. Once per request that moved. Fields: `operation`, `fallback_from`, `fallback_to`, `fallback_reason`. |
+| ERROR | `chain_exhausted` | Every candidate failed; the last error is about to be raised. |
+| ERROR | `candidate_unbuildable` | A fallback could not be constructed and is out of the chain for this process. |
+| WARNING | `candidate_skipped` | A fallback lacks a capability the call needs. |
+
+The messages start with `FALLBACK`, `FALLBACK SERVED`, or `FALLBACK
+EXHAUSTED`, so they stand out in plain log output too. A request the primary
+serves logs nothing. In code:
 
 ```python
 turn = client.send_conversation("system", messages, tools=tools)

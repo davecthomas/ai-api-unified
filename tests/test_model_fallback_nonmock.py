@@ -18,6 +18,7 @@ Run with:
 Requires ANTHROPIC_API_KEY and OPENAI_API_KEY in the environment (.env).
 """
 
+import logging
 import os
 import socket
 
@@ -63,8 +64,11 @@ def live_chain_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     _skip_if_dns_unavailable(OPENAI_HOSTNAME)
 
 
+LOGGER_NAME: str = "ai_api_unified.completions.ai_fallback_completions"
+
+
 def test_unknown_primary_model_fails_over_to_openai(
-    live_chain_credentials: None,
+    live_chain_credentials: None, caplog: pytest.LogCaptureFixture
 ) -> None:
     client = AIFactory.get_ai_completions_client(
         model_name=MISSING_MODEL,
@@ -74,13 +78,29 @@ def test_unknown_primary_model_fails_over_to_openai(
     )
     assert isinstance(client, AiFallbackCompletions)
 
-    str_reply: str = client.send_prompt(
-        "Reply with the single word: pong", max_response_tokens=32
-    )
+    with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+        str_reply: str = client.send_prompt(
+            "Reply with the single word: pong", max_response_tokens=32
+        )
 
     assert "pong" in str_reply.lower()
     assert client.last_route.engine == FALLBACK_ENGINE
     assert client.last_route.model == FALLBACK_MODEL
+
+    # The failover must be visible in logs: one ERROR when the primary fails
+    # and the chain moves, one WARNING when the fallback serves the request.
+    list_records = [r for r in caplog.records if hasattr(r, "ai_fallback_event")]
+    assert [r.ai_fallback_event for r in list_records] == [
+        "failover",
+        "served_by_fallback",
+    ]
+    assert list_records[0].levelno == logging.ERROR
+    assert list_records[0].fallback_reason == "model_unavailable"
+    assert list_records[0].status_code == 404
+    assert list_records[1].levelno == logging.WARNING
+    print("\nFallback log events observed during this test:")
+    for record in list_records:
+        print(f"  [{record.levelname}] {record.getMessage()}")
 
 
 def test_unknown_model_is_classified_and_not_a_default_trigger(
