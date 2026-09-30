@@ -659,6 +659,9 @@ class AITurnResult(BaseModel):
         raw_content: Engine-specific content blocks for this turn, replayable
             verbatim as the next assistant message. Opaque to callers.
         usage: Provider-reported token usage for this turn.
+        provider_engine: Engine token that served the turn, set by a fallback
+            client; None when a single engine served it.
+        model_name: Model that served the turn, set alongside provider_engine.
     """
 
     text: str | None = None
@@ -666,6 +669,8 @@ class AITurnResult(BaseModel):
     finish_reason: AIFinishReason
     raw_content: Any = None
     usage: AITokenUsage = Field(default_factory=AITokenUsage)
+    provider_engine: str | None = None
+    model_name: str | None = None
 
 
 class AIStructuredOutputResult(BaseModel):
@@ -679,12 +684,17 @@ class AIStructuredOutputResult(BaseModel):
         finish_reason: Normalized stop reason (see AIFinishReason).
         usage: Provider-reported token usage for the call.
         raw_text: Raw model output text before JSON parsing (empty on refusal).
+        provider_engine: Engine token that served the call, set by a fallback
+            client; None when a single engine served it.
+        model_name: Model that served the call, set alongside provider_engine.
     """
 
     data: dict[str, Any] | None = None
     finish_reason: AIFinishReason
     usage: AITokenUsage = Field(default_factory=AITokenUsage)
     raw_text: str = ""
+    provider_engine: str | None = None
+    model_name: str | None = None
 
 
 class AIEmbeddingsCapabilitiesBase(BaseModel):
@@ -3350,6 +3360,10 @@ class AIBaseCompletions(AIBase):
     # Reserved provider_options key honored by engines that support per-call
     # retry overrides; every other key merges into the provider request.
     PROVIDER_OPTION_RETRY_POLICY: ClassVar[str] = "retry_policy"
+    # Reserved per-call key read by a fallback client ("none" keeps the call
+    # on the primary model). Popped here too, so the key never reaches an
+    # engine's SDK or its unknown-option warning.
+    PROVIDER_OPTION_FALLBACK: ClassVar[str] = "fallback"
 
     def _split_provider_options(
         self, provider_options: dict[str, Any] | None
@@ -3374,6 +3388,7 @@ class AIBaseCompletions(AIBase):
         str_retry_policy: str | None = dict_merge_options.pop(
             self.PROVIDER_OPTION_RETRY_POLICY, None
         )
+        dict_merge_options.pop(self.PROVIDER_OPTION_FALLBACK, None)
         # Normal return with the filtered merge options and the retry override.
         return self._filter_known_provider_options(dict_merge_options), str_retry_policy
 

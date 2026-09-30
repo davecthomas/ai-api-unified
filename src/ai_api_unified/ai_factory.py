@@ -10,14 +10,23 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import logging
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from .ai_base import AIBaseCompletions, AIBaseEmbeddings, AIBaseImages, AIBaseVideos
 from .ai_provider_exceptions import (
+    AiFallbackReason,
     AiProviderCapabilityUnsupportedError,
     AiProviderConfigurationError,
     AiProviderDependencyUnavailableError,
     AiProviderRuntimeError,
+)
+from .completions.ai_fallback_completions import (
+    DEFAULT_FALLBACK_REASONS,
+    AIFallbackCandidate,
+    AiFallbackCompletions,
+    parse_fallback_candidates,
+    parse_fallback_reasons,
 )
 from .ai_provider_loader import load_ai_provider_class
 from .ai_provider_registry import (
@@ -42,6 +51,12 @@ DEFAULT_VIDEO_ENGINE: str = ""
 DEFAULT_EMBEDDING_DIMENSIONS: str = "0"
 COMPLETIONS_MODEL_NAME_KEY: str = "COMPLETIONS_MODEL_NAME"
 COMPLETIONS_ENGINE_KEY: str = "COMPLETIONS_ENGINE"
+# Ordered engine:model pairs tried after the primary fails; see
+# AiFallbackCompletions. Blank means no fallback.
+COMPLETIONS_FALLBACKS_KEY: str = "COMPLETIONS_FALLBACKS"
+# Comma-separated AiFallbackReason values that move a request to the next
+# candidate. Blank means DEFAULT_FALLBACK_REASONS.
+COMPLETIONS_FALLBACK_ON_KEY: str = "COMPLETIONS_FALLBACK_ON"
 EMBEDDING_MODEL_NAME_KEY: str = "EMBEDDING_MODEL_NAME"
 EMBEDDING_ENGINE_KEY: str = "EMBEDDING_ENGINE"
 EMBEDDING_DIMENSIONS_KEY: str = "EMBEDDING_DIMENSIONS"
@@ -250,18 +265,35 @@ class AIFactory:
         model_name: str | None = None,
         completions_engine: str | None = None,
         base_url: str | None = None,
+        fallbacks: Sequence[AIFallbackCandidate | tuple[str, str]] | None = None,
+        fallback_on: Iterable[AiFallbackReason | str] | None = None,
     ) -> AIBaseCompletions:
         """
         Instantiates the configured completions client.
 
+        With a fallback chain (the `fallbacks` argument, or the
+        COMPLETIONS_FALLBACKS setting when the argument is None), the result
+        is an AiFallbackCompletions that retries a failed request on the
+        next candidate. The primary is built here as usual; each fallback is
+        built the first time a request needs it. An empty `fallbacks` list
+        turns the chain off even when the setting is present.
+
         Args:
             model_name: Optional model override; falls back to environment config.
             completions_engine: Optional engine override; falls back to environment config.
+            base_url: Optional API base-URL override for the primary.
+            fallbacks: Optional ordered candidates, as AIFallbackCandidate or
+                (engine, model) tuples, tried after the primary fails.
+            fallback_on: Optional reasons that trigger the move to the next
+                candidate; defaults to COMPLETIONS_FALLBACK_ON, then to
+                UNAVAILABLE, RATE_LIMITED, and QUOTA_EXHAUSTED.
 
         Returns:
-            Concrete AIBaseCompletions implementation for the requested engine.
-            Raises ValueError for unsupported engines and RuntimeError-derived
-            provider exceptions for dependency/runtime loading failures.
+            Concrete AIBaseCompletions implementation for the requested engine,
+            or an AiFallbackCompletions wrapping it when a chain is configured.
+            Raises ValueError for unsupported engines (including a fallback
+            engine, checked up front) and RuntimeError-derived provider
+            exceptions for dependency/runtime loading failures.
         """
         env_settings: EnvSettings = EnvSettings()
         str_engine: str = AIFactory._resolve_required_engine(
@@ -276,6 +308,119 @@ class AIFactory:
         else:
             str_model_name = model_name
 
+        list_fallbacks: list[AIFallbackCandidate] = AIFactory._resolve_fallback_chain(
+            env_settings=env_settings, fallbacks=fallbacks
+        )
+        # Validate every fallback engine token before building anything, so
+        # a typo fails at startup rather than during an outage.
+        for candidate in list_fallbacks:
+            try:
+                get_ai_provider_spec(
+                    AI_PROVIDER_CAPABILITY_COMPLETIONS, candidate.engine
+                )
+            except AiProviderConfigurationError as exception:
+                raise AIFactory._translate_config_exception(
+                    exception, AI_PROVIDER_CAPABILITY_COMPLETIONS, candidate.engine
+                ) from exception
+        primary: AIBaseCompletions = AIFactory._build_completions_client(
+            str_engine, str_model_name, base_url
+        )
+        if not list_fallbacks:
+            # Early return with the plain engine, as before.
+            return primary
+        # Normal return with the failover wrapper around the primary.
+        return AiFallbackCompletions(
+            primary=primary,
+            primary_candidate=AIFallbackCandidate(
+                engine=str_engine, model=str_model_name, base_url=base_url
+            ),
+            fallback_candidates=list_fallbacks,
+            fallback_on=AIFactory._resolve_fallback_reasons(
+                env_settings=env_settings, fallback_on=fallback_on
+            ),
+            client_builder=lambda candidate: AIFactory._build_completions_client(
+                candidate.engine, candidate.model, candidate.base_url
+            ),
+        )
+
+    @staticmethod
+    def _resolve_fallback_chain(
+        *,
+        env_settings: EnvSettings,
+        fallbacks: Sequence[AIFallbackCandidate | tuple[str, str]] | None,
+    ) -> list[AIFallbackCandidate]:
+        """
+        Resolves the fallback chain from the argument or configuration.
+
+        Args:
+            env_settings: Shared environment/settings accessor.
+            fallbacks: Explicit chain, or None to read COMPLETIONS_FALLBACKS.
+
+        Returns:
+            Candidates in order; empty when no chain is configured.
+        """
+        if fallbacks is None:
+            object_value: object = env_settings.get_setting(
+                COMPLETIONS_FALLBACKS_KEY, ""
+            )
+            # Normal return with the parsed setting.
+            return parse_fallback_candidates(
+                str(object_value) if object_value is not None else ""
+            )
+        # Normal return with the explicit chain, tuples normalized.
+        return [
+            (
+                item
+                if isinstance(item, AIFallbackCandidate)
+                else AIFallbackCandidate(
+                    engine=str(item[0]).strip().lower(), model=str(item[1]).strip()
+                )
+            )
+            for item in fallbacks
+        ]
+
+    @staticmethod
+    def _resolve_fallback_reasons(
+        *,
+        env_settings: EnvSettings,
+        fallback_on: Iterable[AiFallbackReason | str] | None,
+    ) -> frozenset[AiFallbackReason]:
+        """
+        Resolves the reasons that trigger a fallback.
+
+        Args:
+            env_settings: Shared environment/settings accessor.
+            fallback_on: Explicit reasons, or None to read COMPLETIONS_FALLBACK_ON.
+
+        Returns:
+            The reason set; DEFAULT_FALLBACK_REASONS when nothing is configured.
+        """
+        if fallback_on is not None:
+            # Normal return with the explicit reasons.
+            return parse_fallback_reasons(fallback_on)
+        object_value: object = env_settings.get_setting(COMPLETIONS_FALLBACK_ON_KEY, "")
+        str_value: str = str(object_value).strip() if object_value is not None else ""
+        if not str_value:
+            # Early return with the default reasons.
+            return DEFAULT_FALLBACK_REASONS
+        # Normal return with the configured reasons.
+        return parse_fallback_reasons(str_value)
+
+    @staticmethod
+    def _build_completions_client(
+        str_engine: str, str_model_name: str, base_url: str | None
+    ) -> AIBaseCompletions:
+        """
+        Builds one completions engine client.
+
+        Args:
+            str_engine: Normalized engine token.
+            str_model_name: Model name; blank means the engine default.
+            base_url: Optional API base-URL override.
+
+        Returns:
+            Concrete AIBaseCompletions implementation for the engine.
+        """
         try:
             # Resolve provider metadata first so engine-to-module mapping is centralized
             # in the registry and does not require hardcoded imports in the factory.
@@ -302,7 +447,7 @@ class AIFactory:
             completions_client: AIBaseCompletions = class_completions_client(
                 **dict_client_kwargs
             )
-            # Normal return with configured completions provider client.
+            # Normal return with the configured completions provider client.
             return completions_client
         except AiProviderConfigurationError as exception:
             raise AIFactory._translate_config_exception(

@@ -4,6 +4,32 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.32.0
+
+### Added
+
+- Model fallback. `AIFactory.get_ai_completions_client(fallbacks=...)`, or
+  the `COMPLETIONS_FALLBACKS` setting (`engine:model` pairs, in order),
+  returns an `AiFallbackCompletions` that retries a failed request on the
+  next candidate. The primary is built up front as before; each fallback
+  is built the first time a request needs it, and one that cannot be built
+  is logged and skipped. A request moves on only when the engine raises
+  `AiProviderRequestError` with a `fallback_reason` in the configured set:
+  `UNAVAILABLE`, `RATE_LIMITED`, and `QUOTA_EXHAUSTED` by default, set with
+  `fallback_on` or `COMPLETIONS_FALLBACK_ON`. `MODEL_UNAVAILABLE` is off by
+  default. Every other exception propagates. Conversations fail over while
+  the history is provider-neutral and then stay on the engine that served
+  the previous turn; streams fail over only before the first chunk; batches,
+  token counting, and capabilities always use the primary.
+- `AITurnResult` and `AIStructuredOutputResult` gained `provider_engine` and
+  `model_name`, set by a fallback client to the candidate that served the
+  call; `AiFallbackCompletions.last_route` reports it for calls that return
+  a string.
+- `provider_options={"fallback": "none"}` keeps one call on the primary.
+  Every engine drops the reserved key before building its request.
+- Exports: `AiFallbackCompletions`, `AIFallbackCandidate`,
+  `DEFAULT_FALLBACK_REASONS`.
+
 ## 2.31.0
 
 ### Added

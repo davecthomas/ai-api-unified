@@ -64,6 +64,16 @@ COMPLETIONS_MODEL_NAME=gemini-3.7-flash
 # COMPLETIONS_MODEL_NAME=claude-opus-5-5
 # COMPLETIONS_MODEL_NAME=gpt-6-sol
 # COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
+
+# Optional fallback chain: ordered engine:model pairs tried after the primary
+# fails with an unavailable, rate-limited, or quota-exhausted error. Each
+# fallback engine needs its own credentials and extra. The split is on the
+# first colon, so Bedrock ids such as bedrock:amazon.nova-lite-v1:0 work.
+# COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
+# Reasons that trigger a fallback (AiFallbackReason values). Default:
+# unavailable,rate_limited,quota_exhausted. Add model_unavailable to also
+# fail over on an unknown model id.
+# COMPLETIONS_FALLBACK_ON=unavailable,rate_limited,quota_exhausted
 # Embedding dimensions (1536 for OpenAI | 1024 for Titan | 3072 default for Gemini)
 # Leave unset to use the provider default for the selected engine.
 # EMBEDDING_DIMENSIONS=1024

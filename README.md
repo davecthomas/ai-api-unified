@@ -1,4 +1,4 @@
-# ai-api-unified 2.31.0
+# ai-api-unified 2.32.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -622,6 +622,67 @@ except AiProviderRequestError as error:
         raise
 ```
 
+### Model fallback
+
+A fallback chain retries a failed request on another model, on the same
+engine or a different one. Configure it once and the factory returns an
+`AiFallbackCompletions` with the same interface as a single engine:
+
+```python
+from ai_api_unified import AIFactory, AiFallbackReason
+
+# From configuration: COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
+client = AIFactory.get_ai_completions_client()
+
+# Or in code, with an explicit reason set
+client = AIFactory.get_ai_completions_client(
+    fallbacks=[("openai", "gpt-5.6-luna"), ("google-gemini", "gemini-3.7-flash")],
+    fallback_on={AiFallbackReason.UNAVAILABLE, AiFallbackReason.QUOTA_EXHAUSTED},
+)
+
+turn = client.send_conversation("system", messages, tools=tools)
+turn.provider_engine, turn.model_name   # which candidate served the turn
+client.last_route                       # the same, for calls that return str
+```
+
+The primary is the engine and model you configured already; it is built up
+front as usual. Each fallback is built the first time a request needs it, so
+a fallback whose optional extra is missing cannot break startup; it is logged
+and skipped instead. Every fallback engine token is validated up front, so a
+typo fails at startup rather than during an outage.
+
+A request moves to the next candidate only when the engine raises
+`AiProviderRequestError` with a `fallback_reason` in the configured set. The
+default set is `UNAVAILABLE`, `RATE_LIMITED`, and `QUOTA_EXHAUSTED`.
+`MODEL_UNAVAILABLE` is off by default, since an unknown model usually means a
+configuration typo that a working fallback would hide; add it through
+`COMPLETIONS_FALLBACK_ON` or `fallback_on` if you want it. Every other
+exception propagates: validation errors, capability errors, a refusal, or a
+client-side timeout would not go better on a different model. The engine's
+own retry schedule runs first on every candidate, so a rate limit fails over
+only after backoff is exhausted.
+
+Three limits follow from how engines shape requests:
+
+- **Conversations.** A history that already holds engine-shaped entries
+  (replayed `raw_content`, tool results) cannot replay on another engine.
+  Fallback applies while the history is plain user, assistant, and system
+  text, which in practice means the first turn. After that, the turn goes to
+  the engine that served the previous one, and `build_tool_result_message`
+  and `extend_messages_with_turn` produce that engine's shapes. A failure
+  mid-conversation propagates.
+- **Streaming.** A stream fails over only if the error arrives before the
+  first chunk; after that the caller already holds partial output.
+- **Batches, token counting, and capabilities** always go to the primary.
+
+Per call, `provider_options={"fallback": "none"}` keeps a request on the
+primary. A fallback candidate that lacks the capability a call needs
+(structured output, tool use, async, streaming) is skipped with a warning.
+Each failover is logged at warning level with both engines and the reason.
+Cost events are emitted by the engine that served the call, so cost
+attribution follows the actual route with no extra configuration. The
+prompt cache hint is provider-neutral and carries over.
+
 ### Batch completions (Anthropic)
 
 The `claude` engine can process many prompts as one asynchronous batch through
@@ -1004,6 +1065,8 @@ There is no implicit default provider. Set the selector for each capability you 
 | Environment variable        | Notes                                                                                       |
 | --------------------------- | ------------------------------------------------------------------------------------------- |
 | `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
+| `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
+| `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted` |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
 | `VIDEO_MODEL_NAME`          | Optional video model override                                                               |

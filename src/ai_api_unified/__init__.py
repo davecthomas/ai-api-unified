@@ -62,6 +62,11 @@ from .ai_provider_exceptions import (
     AiProviderRequestError,
 )
 from .ai_factory import AIFactory
+from .completions.ai_fallback_completions import (
+    DEFAULT_FALLBACK_REASONS,
+    AIFallbackCandidate,
+    AiFallbackCompletions,
+)
 from .pricing import (
     AIModelInfo,
     AIModelPricing,
@@ -78,6 +83,9 @@ from .voice.audio_models import AudioFormat
 __all__: list[str] = [
     "__version__",
     "AIFactory",
+    "AIFallbackCandidate",
+    "AiFallbackCompletions",
+    "DEFAULT_FALLBACK_REASONS",
     "AIBase",
     "AIBaseEmbeddings",
     "AIBaseCompletions",
