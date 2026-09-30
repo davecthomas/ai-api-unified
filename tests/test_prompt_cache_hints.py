@@ -441,3 +441,47 @@ class TestBlankSystemPrompt:
     def test_bedrock_skips_cache_point_for_blank_system(self) -> None:
         client = _bedrock("us.anthropic.claude-opus-5")
         assert client._build_converse_system("  ", HINT_DEFAULT) == [{"text": "  "}]
+
+
+class TestAnthropicBreakpointLimit:
+    @staticmethod
+    def _messages(int_markers: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"part {index}",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                    for index in range(int_markers)
+                ],
+            }
+        ]
+
+    def _kwargs(self, int_markers: int) -> dict[str, Any]:
+        return _anthropic()._build_conversation_request_kwargs(
+            system_prompt=SYSTEM_PROMPT,
+            messages=self._messages(int_markers),
+            tools=[],
+            tool_choice=None,
+            max_response_tokens=None,
+            dict_merge_options={},
+            prompt_cache=HINT_DEFAULT,
+        )
+
+    def test_two_free_slots_add_both_breakpoints(self) -> None:
+        dict_kwargs = self._kwargs(2)
+        assert "cache_control" in dict_kwargs
+        assert isinstance(dict_kwargs["system"], list)
+
+    def test_one_free_slot_keeps_only_the_system_breakpoint(self) -> None:
+        dict_kwargs = self._kwargs(3)
+        assert "cache_control" not in dict_kwargs
+        assert isinstance(dict_kwargs["system"], list)
+
+    def test_no_free_slots_adds_no_breakpoints(self) -> None:
+        dict_kwargs = self._kwargs(4)
+        assert "cache_control" not in dict_kwargs
+        assert dict_kwargs["system"] == SYSTEM_PROMPT

@@ -131,6 +131,9 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     # The Messages API requires max_tokens on every request. Non-streaming
     # requests stay under SDK HTTP-timeout guards at this size.
     SEND_PROMPT_MAX_TOKENS: ClassVar[int] = 16_000
+    # Messages API limit on cache_control breakpoints per request, counting
+    # the automatic (top-level) one.
+    MAX_CACHE_BREAKPOINTS: ClassVar[int] = 4
     # Streaming has no timeout concern; give the model room.
     STREAMING_MAX_TOKENS: ClassVar[int] = 64_000
     # Anthropic rejects images above 5MB per image, below the library-wide
@@ -221,6 +224,43 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             dict_cache_control["ttl"] = "1h"
         # Normal return with the provider cache_control object.
         return dict_cache_control
+
+    @classmethod
+    def _count_cache_breakpoints(cls, value: Any) -> int:
+        """
+        Counts cache_control markers already present in request content.
+
+        Walks dicts and lists (caller-built content) and reads the
+        cache_control attribute on SDK objects (replayed raw_content).
+
+        Args:
+            value: Any request fragment: messages, content blocks, options.
+
+        Returns:
+            Number of non-null cache_control markers found.
+        """
+        if isinstance(value, dict):
+            int_own: int = 1 if value.get("cache_control") else 0
+            # Normal return with this dict's marker plus its children's.
+            return int_own + sum(
+                cls._count_cache_breakpoints(child)
+                for str_key, child in value.items()
+                if str_key != "cache_control"
+            )
+        if isinstance(value, (list, tuple)):
+            # Normal return with the markers across every element.
+            return sum(cls._count_cache_breakpoints(child) for child in value)
+        if isinstance(value, (str, bytes, int, float, bool)) or value is None:
+            # Early return because scalars carry no markers.
+            return 0
+        # Normal return for SDK objects, which expose the marker as an
+        # attribute (a CacheControlEphemeral model, or a dict).
+        marker: Any = getattr(value, "cache_control", None)
+        return (
+            1
+            if isinstance(marker, dict) or getattr(marker, "type", None) == "ephemeral"
+            else 0
+        )
 
     @classmethod
     def _build_system_param(
@@ -961,14 +1001,27 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         automatic caching, which moves a second breakpoint forward over the
         growing history each turn. Both use the same TTL, which the API
         requires when the automatic breakpoint lands on a marked block.
+
+        Breakpoints the caller already placed in messages or provider_options
+        count against the API's limit of MAX_CACHE_BREAKPOINTS, so the hint
+        adds only as many as still fit (automatic first to go, since the
+        system breakpoint covers the more stable prefix). Exceeding the limit
+        would turn a cost-only hint into a 400.
         """
+        int_free_slots: int = (
+            self.MAX_CACHE_BREAKPOINTS
+            - self._count_cache_breakpoints([messages, dict_merge_options])
+        )
+        prompt_cache_system: AIPromptCacheHint | None = (
+            prompt_cache if int_free_slots >= 1 else None
+        )
         dict_request_kwargs: dict[str, Any] = {
             "model": self.completions_model,
             "max_tokens": max_response_tokens or self.SEND_PROMPT_MAX_TOKENS,
-            "system": self._build_system_param(system_prompt, prompt_cache),
+            "system": self._build_system_param(system_prompt, prompt_cache_system),
             "messages": messages,
         }
-        if prompt_cache is not None:
+        if prompt_cache is not None and int_free_slots >= 2:
             dict_request_kwargs["cache_control"] = self._build_cache_control(
                 prompt_cache
             )
