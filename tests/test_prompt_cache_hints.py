@@ -730,3 +730,37 @@ class TestOpenAIGatewayAndBedrockReconcile:
             "provider_cache_write_5m_tokens": 300,
             "provider_cache_write_1h_tokens": 1200,
         }
+
+
+class TestClaudeGateway:
+    def test_gateway_base_url_turns_the_hint_off(self) -> None:
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            client = AiAnthropicCompletions(
+                model="claude-opus-4-8", base_url="https://litellm.internal.example.com"
+            )
+        client.client = Mock()
+        client.client.messages.create.return_value = Mock(
+            content=[Mock(type="text", text="ok")],
+            stop_reason="end_turn",
+            usage=Mock(input_tokens=10, output_tokens=2, cache_read_input_tokens=None),
+        )
+        assert client.capabilities.supports_prompt_cache_hint is False
+        client.send_prompt("hi", other_params=_params(HINT_DEFAULT))
+        assert client.client.messages.create.call_args.kwargs["system"] == SYSTEM_PROMPT
+        dict_kwargs: dict[str, Any] = client._build_conversation_request_kwargs(
+            system_prompt=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            tool_choice=None,
+            max_response_tokens=None,
+            dict_merge_options={},
+            prompt_cache=HINT_DEFAULT,
+        )
+        assert "cache_control" not in dict_kwargs
+
+    def test_openai_gateway_reports_hint_unsupported(self) -> None:
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            client = AiOpenAICompletions(
+                model="gpt-5.1", base_url="https://litellm.internal.example.com/v1"
+            )
+        assert client.capabilities.supports_prompt_cache_hint is False

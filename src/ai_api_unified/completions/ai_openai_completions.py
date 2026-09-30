@@ -285,8 +285,15 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
 
     def _build_capabilities(self) -> AICompletionsCapabilitiesBase:
         """Resolves capabilities for the configured model."""
+        capabilities: AICompletionsCapabilitiesOpenAI = (
+            AICompletionsCapabilitiesOpenAI.for_model(self.completions_model)
+        )
+        if not self._targets_openai_api():
+            # Early return: a base_url gateway may reject the cache fields,
+            # so the hint is reported, and treated, as unsupported there.
+            return capabilities.model_copy(update={"supports_prompt_cache_hint": False})
         # Normal return with the OpenAI per-model capabilities.
-        return AICompletionsCapabilitiesOpenAI.for_model(self.completions_model)
+        return capabilities
 
     @property
     def capabilities(self) -> AICompletionsCapabilitiesBase:

@@ -22,6 +22,7 @@ import base64
 import copy
 import json
 import logging
+import urllib.parse
 from collections.abc import Iterator
 from typing import Any, ClassVar, Type
 
@@ -171,6 +172,56 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         enforce_model_lifecycle(PROVIDER_ANTHROPIC, self.completions_model)
         self._capabilities: AICompletionsCapabilitiesAnthropic = (
             AICompletionsCapabilitiesAnthropic.for_model(self.completions_model)
+        )
+        if not self._targets_anthropic_api():
+            # A gateway or proxy may reject cache_control fields it does not
+            # know, so the hint is off for any host but Anthropic's own.
+            self._capabilities = self._capabilities.model_copy(
+                update={"supports_prompt_cache_hint": False}
+            )
+
+    def _targets_anthropic_api(self) -> bool:
+        """
+        Reports whether requests go to Anthropic's own API host.
+
+        A base_url override can point this engine at a gateway or proxy that
+        rejects request fields it does not know, such as cache_control.
+
+        Returns:
+            True when base_url's host is api.anthropic.com.
+        """
+        str_host: str = (
+            urllib.parse.urlparse(getattr(self, "base_url", "") or "").hostname or ""
+        ).lower()
+        # Normal return with the host check.
+        return str_host == "api.anthropic.com"
+
+    def _usable_prompt_cache(
+        self, prompt_cache: AIPromptCacheHint | None
+    ) -> AIPromptCacheHint | None:
+        """
+        Returns the hint when this engine can honor it, otherwise None.
+
+        Args:
+            prompt_cache: Optional caller cache hint.
+
+        Returns:
+            The hint, or None when capabilities do not support it (for
+            example behind a base_url gateway).
+        """
+        if not self.capabilities.supports_prompt_cache_hint:
+            # Early return: the hint is ignored here.
+            return None
+        # Normal return with the caller's hint.
+        return prompt_cache
+
+    def _resolve_prompt_cache_hint(  # type: ignore[override]
+        self, other_params: AICompletionsPromptParamsBase | None
+    ) -> AIPromptCacheHint | None:
+        """Resolves other_params.prompt_cache, dropped when unusable here."""
+        # Normal return with the gated hint.
+        return self._usable_prompt_cache(
+            AIBaseCompletions._resolve_prompt_cache_hint(other_params)
         )
 
     @property
@@ -1080,7 +1131,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         provider_options, the hint adds none; see _defer_to_caller_breakpoints.
         """
         prompt_cache = self._defer_to_caller_breakpoints(
-            prompt_cache, messages, dict_merge_options
+            self._usable_prompt_cache(prompt_cache), messages, dict_merge_options
         )
         dict_request_kwargs: dict[str, Any] = {
             "model": self.completions_model,
@@ -1369,7 +1420,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         Builds the Messages API request kwargs for one structured-output call.
         """
         prompt_cache = self._defer_to_caller_breakpoints(
-            prompt_cache, messages, dict_merge_options
+            self._usable_prompt_cache(prompt_cache), messages, dict_merge_options
         )
         str_system_prompt: str = self._resolve_system_prompt(
             system_prompt,
@@ -2241,7 +2292,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 "model": self.completions_model,
                 "max_tokens": item.max_response_tokens or self.SEND_PROMPT_MAX_TOKENS,
                 "system": self._build_system_param(
-                    str_system_prompt, item.prompt_cache
+                    str_system_prompt, self._usable_prompt_cache(item.prompt_cache)
                 ),
                 "messages": [{"role": "user", "content": str_prompt}],
             }
