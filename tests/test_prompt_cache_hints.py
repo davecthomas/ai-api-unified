@@ -703,3 +703,30 @@ class TestAnthropicNestedBreakpoints:
             ]
         }
         assert AiAnthropicCompletions._count_cache_breakpoints([], dict_options) == 1
+
+
+class TestOpenAIGatewayAndBedrockReconcile:
+    def test_base_url_gateway_gets_no_cache_fields(self) -> None:
+        client = _openai()
+        client.base_url = "https://litellm.internal.example.com/v1"
+        assert client._build_prompt_cache_kwargs(HINT_EXTENDED) == {}
+
+    def test_regional_openai_host_keeps_cache_fields(self) -> None:
+        client = _openai()
+        client.base_url = "https://us.api.openai.com/v1"
+        assert client._build_prompt_cache_kwargs(HINT_EXTENDED)["prompt_cache_key"] == (
+            "tenant-42"
+        )
+
+    def test_bedrock_unsplit_remainder_bills_at_five_minutes(self) -> None:
+        assert AiBedrockCompletions._cache_write_kwargs(
+            {
+                "usage": {
+                    "cacheWriteInputTokens": 1500,
+                    "cacheDetails": [{"ttl": "1h", "inputTokens": 1200}],
+                }
+            }
+        ) == {
+            "provider_cache_write_5m_tokens": 300,
+            "provider_cache_write_1h_tokens": 1200,
+        }

@@ -1031,7 +1031,8 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         `{"ttl": "5m" | "1h", "inputTokens": n}`), which matters once a request
         asks for the 1-hour cachePoint TTL: those writes bill at a higher rate.
         When the split is absent, the aggregate `cacheWriteInputTokens` is
-        attributed to the 5-minute tier, the default cache lifetime.
+        attributed to the 5-minute tier, the default cache lifetime; so is
+        any part of the aggregate the split does not cover.
 
         Args:
             response: Bedrock converse response dictionary.
@@ -1051,6 +1052,11 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     int_1h += int_tokens
                 else:
                     int_5m += int_tokens
+            # Any aggregate the split does not cover bills at the default
+            # 5-minute rate, as the Anthropic engine does, so no write tokens
+            # drop out of cost tracking.
+            int_aggregate: int = int(usage.get("cacheWriteInputTokens") or 0)
+            int_5m += max(int_aggregate - int_5m - int_1h, 0)
             # Early return with the provider-reported per-TTL split.
             return {
                 "provider_cache_write_5m_tokens": int_5m or None,

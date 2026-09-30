@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+import urllib.parse
 from collections.abc import Iterator
 from datetime import date
 from typing import Any, ClassVar, Type
@@ -1758,6 +1759,23 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         }
     )
 
+    def _targets_openai_api(self) -> bool:
+        """
+        Reports whether requests go to OpenAI's own API host.
+
+        A base_url override can point this engine at a gateway or proxy
+        (Azure OpenAI, LiteLLM, a corporate gateway) that rejects fields it
+        does not know, so the cache hint only adds fields for OpenAI hosts.
+
+        Returns:
+            True for api.openai.com and its regional subdomains.
+        """
+        str_host: str = (
+            urllib.parse.urlparse(getattr(self, "base_url", "") or "").hostname or ""
+        ).lower()
+        # Normal return with the host check.
+        return str_host == "api.openai.com" or str_host.endswith(".api.openai.com")
+
     def _build_prompt_cache_kwargs(
         self, prompt_cache: AIPromptCacheHint | None
     ) -> dict[str, Any]:
@@ -1778,8 +1796,14 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         Returns:
             Request kwargs to merge; empty when there is nothing to send.
         """
-        if prompt_cache is None or not self.capabilities.supports_prompt_cache_hint:
-            # Early return because caching was not requested or not supported.
+        if (
+            prompt_cache is None
+            or not self.capabilities.supports_prompt_cache_hint
+            or not self._targets_openai_api()
+        ):
+            # Early return because caching was not requested, is not
+            # supported, or a base_url override points at a gateway that may
+            # reject the fields.
             return {}
         dict_kwargs: dict[str, Any] = {}
         if prompt_cache.key:
