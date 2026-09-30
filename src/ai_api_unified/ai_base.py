@@ -93,8 +93,8 @@ class AIPromptCacheHint(BaseModel):
     that cannot honor the hint ignores it. Engines map it to their native
     mechanism: Anthropic cache_control, Bedrock cachePoint blocks, OpenAI
     prompt_cache_key and prompt_cache_retention. Gemini caches repeated
-    prefixes implicitly (durable, up to 24 hours on Gemini 3.x), so it needs
-    no request change. On conversation turns, Anthropic also caches the
+    prefixes implicitly (durable, up to 24 hours on Gemini 3.x from
+    2026-10-15), so it needs no request change. On conversation turns, Anthropic also caches the
     growing message history.
 
     A cache hit needs a byte-identical prefix: keep timestamps, request IDs,

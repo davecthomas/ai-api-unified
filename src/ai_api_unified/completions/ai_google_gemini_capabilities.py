@@ -49,9 +49,9 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
                     "knowledge_cutoff_date": date(2025, 1, 1),  # Approximate
                     "reasoning": True,  # Gemini 3.x supports reasoning
                     # Gemini 2.5 and later cache repeated prompt prefixes
-                    # implicitly; on Gemini 3.x the cache is durable (up to
-                    # 24 hours, no storage fee). A cache hint has nothing to
-                    # add, so the engine ignores it.
+                    # implicitly; from 2026-10-15 the Gemini 3.x cache is
+                    # durable (up to 24 hours, no storage fee). A cache hint
+                    # has nothing to add, so the engine ignores it.
                     "implicit_prompt_caching": True,
                 }
             )
