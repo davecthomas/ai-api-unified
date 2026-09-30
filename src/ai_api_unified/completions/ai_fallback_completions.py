@@ -101,8 +101,9 @@ FROZENSET_OPENAI_ASSISTANT_KEYS: frozenset[str] = frozenset(
     {"tool_calls", "function_call", "annotations", "refusal", "audio"}
 )
 
-# Keys a provider-neutral message may carry.
-FROZENSET_NEUTRAL_MESSAGE_KEYS: frozenset[str] = frozenset({"role", "content", "name"})
+# Keys a provider-neutral message may carry. Exactly these two: OpenAI also
+# accepts "name", but Anthropic and Bedrock reject it as an unknown key.
+FROZENSET_NEUTRAL_MESSAGE_KEYS: frozenset[str] = frozenset({"role", "content"})
 
 # Content-block keys Converse uses; a block with one of these and no "type"
 # is Bedrock-shaped.
@@ -478,12 +479,21 @@ class AiFallbackCompletions(AIBaseCompletions):
         Returns:
             None when the history is provider-neutral (any candidate will
             do), otherwise the first built candidate of the family that
-            shaped it. Only a built candidate can have produced history.
+            shaped it. Only a built candidate can have produced history. A
+            history that is not neutral but matches no known family (a key
+            a provider's SDK added that this module does not list) pins to
+            the candidate that served the most recent call, since that is
+            the engine most likely to have produced it; guessing the primary
+            would replay a foreign shape there.
         """
-        str_family: str | None = history_family_of(messages)
-        if str_family is None:
+        if self._history_is_engine_neutral(messages):
             # Early return: neutral history.
             return None
+        str_family: str | None = history_family_of(messages)
+        if str_family is None:
+            # Early return: engine-shaped but unrecognized; stay where the
+            # last call was served.
+            return self._last_route_index
         # Loop over built candidates for one of the shaping family.
         for int_index, client in self._built_clients():
             if engine_family_of(client) == str_family:
