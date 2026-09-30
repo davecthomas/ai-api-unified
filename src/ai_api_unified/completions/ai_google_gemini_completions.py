@@ -44,7 +44,10 @@ import ai_api_unified.ai_google_base as ai_google_base_module
 from ai_api_unified.ai_completions_exceptions import (
     StructuredResponseTokenLimitError,
 )
-from ai_api_unified.ai_google_base import AIGoogleBase
+from ai_api_unified.ai_google_base import (
+    AIGoogleBase,
+    classify_gemini_fallback_reason,
+)
 
 from ..ai_base import (
     AIBaseCompletions,
@@ -1091,10 +1094,14 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 continue
             str_module: str = type(candidate).__module__ or ""
             if str_module.startswith("google"):
+                int_status: int | None = _probe_status_code(candidate)
                 raise AiProviderRequestError(
                     f"Google Gemini request failed: {candidate}",
-                    status_code=_probe_status_code(candidate),
+                    status_code=int_status,
                     provider_engine=self.PROVIDER_ENGINE_TOKEN,
+                    fallback_reason=classify_gemini_fallback_reason(
+                        int_status, str(candidate)
+                    ),
                 ) from exception
         # Normal return so non-Google exceptions propagate unchanged.
         return None

@@ -29,8 +29,12 @@ from ..ai_base import (
     normalize_retry_policy,
     resolve_retry_policy,
 )
+from botocore.exceptions import ReadTimeoutError
+
 from ..ai_bedrock_base import AIBedrockBase, BotoCoreError, ClientError
 from ..ai_provider_exceptions import (
+    AiFallbackReason,
+    classify_fallback_reason_by_status,
     AiProviderCapabilityUnsupportedError,
     AiProviderRequestError,
 )
@@ -645,9 +649,13 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     ) from model_error
 
                 except ClientError as client_error:
-                    if attempt < len(self.backoff_delays):
+                    if attempt < len(
+                        self.backoff_delays
+                    ) and self._is_retryable_client_error(client_error):
                         self._sleep_with_backoff(delay)
                         continue
+                    # Exhausted, or the same model cannot clear this error.
+                    self._raise_bedrock_request_error(client_error)
                     raise RuntimeError(
                         f"Bedrock error after {attempt} tries: {client_error}"
                     ) from client_error
@@ -765,7 +773,15 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     # Normal return with raw Bedrock text output and provider usage metadata.
                     return observed_result
                 except Exception as exception:
-                    if attempt == len(self.backoff_delays):
+                    if attempt == len(self.backoff_delays) or (
+                        isinstance(exception, ClientError)
+                        and not self._is_retryable_client_error(exception)
+                    ):
+                        # Exhausted, or the same model cannot clear this
+                        # error: raise the typed error without sleeping
+                        # through the rest of the schedule. Other exception
+                        # types keep the historical retry.
+                        self._raise_bedrock_request_error(exception)
                         raise RuntimeError(
                             f"Bedrock converse failed: {exception}"
                             f"{self._region_hint(exception)}"
@@ -1309,10 +1325,12 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         if isinstance(exception, ClientError):
             dict_response: dict[str, Any] = getattr(exception, "response", None) or {}
             raw_status = dict_response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            int_status: int | None = raw_status if isinstance(raw_status, int) else None
             raise AiProviderRequestError(
                 f"Bedrock request failed: {exception}{self._region_hint(exception)}",
-                status_code=raw_status if isinstance(raw_status, int) else None,
+                status_code=int_status,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
+                fallback_reason=self._classify_fallback_reason(exception, int_status),
             ) from exception
         if isinstance(exception, BotoCoreError):
             raise AiProviderRequestError(
@@ -1320,9 +1338,69 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 f"{exception}",
                 status_code=None,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
+                # A read timeout is the caller's own limit, so it is no reason
+                # to change model; any other transport failure means the
+                # endpoint is unreachable.
+                fallback_reason=(
+                    None
+                    if isinstance(exception, ReadTimeoutError)
+                    else AiFallbackReason.UNAVAILABLE
+                ),
             ) from exception
         # Normal return so non-transport exceptions propagate unchanged.
         return None
+
+    # Converse error codes by fallback reason; see
+    # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html#API_runtime_Converse_Errors
+    DICT_FALLBACK_REASON_BY_ERROR_CODE: ClassVar[dict[str, AiFallbackReason]] = {
+        "ThrottlingException": AiFallbackReason.RATE_LIMITED,
+        "ServiceUnavailableException": AiFallbackReason.UNAVAILABLE,
+        "InternalServerException": AiFallbackReason.UNAVAILABLE,
+        "ModelNotReadyException": AiFallbackReason.UNAVAILABLE,
+        "ModelErrorException": AiFallbackReason.UNAVAILABLE,
+        "ModelTimeoutException": AiFallbackReason.UNAVAILABLE,
+        "ServiceQuotaExceededException": AiFallbackReason.QUOTA_EXHAUSTED,
+        "ResourceNotFoundException": AiFallbackReason.MODEL_UNAVAILABLE,
+    }
+
+    @classmethod
+    def _classify_fallback_reason(
+        cls, exception: ClientError, status_code: int | None
+    ) -> AiFallbackReason | None:
+        """
+        Maps one botocore ClientError to a fallback reason.
+
+        Reads the Converse error code, because Bedrock reports throttling,
+        quota, and model availability under distinct codes that share HTTP
+        statuses. A ValidationException that names an invalid model id is a
+        configuration error and maps to MODEL_UNAVAILABLE.
+
+        Args:
+            exception: botocore ClientError.
+            status_code: HTTP status from the response metadata, if any.
+
+        Returns:
+            The fallback reason, or None when another model would not help.
+        """
+        dict_error: dict[str, Any] = (getattr(exception, "response", None) or {}).get(
+            "Error"
+        ) or {}
+        str_code: str = str(dict_error.get("Code") or "")
+        if str_code in cls.DICT_FALLBACK_REASON_BY_ERROR_CODE:
+            # Early return with the code-specific reason.
+            return cls.DICT_FALLBACK_REASON_BY_ERROR_CODE[str_code]
+        if str_code == "ValidationException" and (
+            "model identifier is invalid"
+            in str(dict_error.get("Message") or "").lower()
+        ):
+            # Early return: the model id is unknown here (often the region).
+            return AiFallbackReason.MODEL_UNAVAILABLE
+        if str_code:
+            # Early return: every other Converse code is a request problem
+            # (validation, access denied, unsupported media).
+            return None
+        # Normal return with the status-only classification.
+        return classify_fallback_reason_by_status(status_code)
 
     def _region_hint(self, exception: Exception) -> str:
         """

@@ -58,6 +58,7 @@ from .ai_base import (
 from .ai_completions_exceptions import StructuredResponseTokenLimitError
 from .ai_provider_exceptions import (
     AiProviderCapabilityUnsupportedError,
+    AiFallbackReason,
     AiProviderRequestError,
 )
 from .ai_factory import AIFactory
@@ -111,6 +112,7 @@ __all__: list[str] = [
     "AIToolCall",
     "AITurnResult",
     "AiProviderCapabilityUnsupportedError",
+    "AiFallbackReason",
     "AiProviderRequestError",
     "RETRY_POLICY_DEFAULT",
     "RETRY_POLICY_NONE",

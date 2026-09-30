@@ -52,7 +52,11 @@ from ..ai_base import (
     RETRY_POLICY_NONE,
     SupportedDataType,
 )
-from ..ai_provider_exceptions import AiProviderRequestError
+from ..ai_provider_exceptions import (
+    AiFallbackReason,
+    AiProviderRequestError,
+    classify_fallback_reason_by_status,
+)
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
@@ -710,6 +714,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 f"{exception.status_code}: {exception.message}",
                 status_code=exception.status_code,
                 provider_engine=self.PROVIDER_ENGINE_CLAUDE,
+                fallback_reason=self._classify_fallback_reason(exception),
             ) from exception
         if isinstance(exception, (APITimeoutError, APIConnectionError)):
             raise AiProviderRequestError(
@@ -717,9 +722,56 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 f"{exception}",
                 status_code=None,
                 provider_engine=self.PROVIDER_ENGINE_CLAUDE,
+                # A timeout is the caller's own limit, so it is no reason to
+                # change model; a failed connection means the host is down.
+                fallback_reason=(
+                    None
+                    if isinstance(exception, APITimeoutError)
+                    else AiFallbackReason.UNAVAILABLE
+                ),
             ) from exception
         # Normal return so non-transport exceptions propagate unchanged.
         return None
+
+    @staticmethod
+    def _classify_fallback_reason(
+        exception: APIStatusError,
+    ) -> AiFallbackReason | None:
+        """
+        Maps one Anthropic status error to a fallback reason.
+
+        Reads the error type and message from the response body, because
+        Anthropic reports an exhausted credit balance as a 400 and the
+        status alone would miss it.
+
+        Args:
+            exception: Anthropic SDK status error.
+
+        Returns:
+            The fallback reason, or None when another model would not help.
+        """
+        dict_body: Any = getattr(exception, "body", None)
+        dict_error: dict[str, Any] = (
+            dict_body.get("error") or {} if isinstance(dict_body, dict) else {}
+        )
+        str_type: str = str(dict_error.get("type") or "")
+        str_message: str = str(
+            dict_error.get("message") or getattr(exception, "message", "") or ""
+        ).lower()
+        if str_type == "overloaded_error":
+            # Early return: 529, the model is overloaded.
+            return AiFallbackReason.UNAVAILABLE
+        if str_type == "rate_limit_error":
+            # Early return for a rate limit.
+            return AiFallbackReason.RATE_LIMITED
+        if str_type == "not_found_error":
+            # Early return for an unknown model.
+            return AiFallbackReason.MODEL_UNAVAILABLE
+        if "credit balance" in str_message or "billing" in str_message:
+            # Early return: the account cannot pay for the request.
+            return AiFallbackReason.QUOTA_EXHAUSTED
+        # Normal return with the status-only classification.
+        return classify_fallback_reason_by_status(exception.status_code)
 
     @staticmethod
     def _serialize_content_block(block: Any) -> dict[str, Any]:

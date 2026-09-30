@@ -384,6 +384,9 @@ DICT_REVIEWED_OPENAI_METHODS: dict[str, str] = {
     # Returns {} unless capabilities declare hint support, which the
     # compatible engine's capabilities never do.
     "_build_prompt_cache_kwargs": "shared",
+    # OpenAI-protocol error codes; compatible servers speak the same shape.
+    "_classify_fallback_reason": "shared",
+    "_is_worth_retrying": "shared",
     # False for any vendor base URL, which is the right answer there too.
     "_targets_openai_api": "shared",
     # Only reached through _build_prompt_cache_kwargs, which returns early

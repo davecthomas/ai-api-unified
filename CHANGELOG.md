@@ -4,6 +4,32 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.31.0
+
+### Added
+
+- `AiFallbackReason` and `AiProviderRequestError.fallback_reason`: a
+  provider-neutral signal that says whether a different model might serve
+  a failed request. Values are `UNAVAILABLE` (5xx, overloaded, model not
+  ready, failed connection), `RATE_LIMITED` (transient 429),
+  `QUOTA_EXHAUSTED` (billing, credit, or quota used up), and
+  `MODEL_UNAVAILABLE` (unknown, retired, or out-of-region model). Each
+  engine sets it from the provider's own error codes: Anthropic error
+  types, OpenAI error codes, Bedrock Converse codes, and Gemini messages.
+  Validation and authentication errors, client-side timeouts, and refusals
+  carry `None`. `is_transient` reports whether the same model may recover.
+  This is the signal a fallback layer acts on; the layer itself ships
+  separately.
+
+### Changed
+
+- Engines that run their own retry schedule (Bedrock `send_prompt` and
+  `strict_schema_prompt`, the Gemini backoff loop, and the OpenAI
+  `strict_schema_prompt` loop) stop retrying as soon as an error classifies
+  as `QUOTA_EXHAUSTED` or `MODEL_UNAVAILABLE`, and raise
+  `AiProviderRequestError` (a `RuntimeError` subclass, as before) instead
+  of a plain `RuntimeError` when a transport error exhausts the schedule.
+
 ## 2.30.0
 
 ### Added

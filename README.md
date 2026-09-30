@@ -1,4 +1,4 @@
-# ai-api-unified 2.30.0
+# ai-api-unified 2.31.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -584,14 +584,40 @@ classify 429/5xx/529 uniformly across engines; it is `None` when the failure
 happened before a status was available (connection error or client-side
 timeout).
 
+The error also carries `fallback_reason`, an `AiFallbackReason` that says
+whether a different model might serve the request. Each engine sets it from
+the provider's own error codes, since a status alone cannot separate a rate
+limit from an exhausted quota (OpenAI returns 429 for both, and Anthropic
+reports a low credit balance as a 400):
+
+| Reason | Meaning | Examples |
+| ------ | ------- | -------- |
+| `UNAVAILABLE` | The provider or model cannot serve right now | 5xx, Anthropic 529 overloaded, Bedrock `ServiceUnavailableException` / `ModelNotReadyException`, a failed connection |
+| `RATE_LIMITED` | A transient 429; the engine's own backoff ran first | OpenAI `rate_limit_exceeded`, Bedrock `ThrottlingException`, Gemini per-minute quota |
+| `QUOTA_EXHAUSTED` | Billing, credit, or quota is used up; retrying the same model is pointless | OpenAI `insufficient_quota`, Anthropic "credit balance is too low", Bedrock `ServiceQuotaExceededException`, Gemini plan or daily quota |
+| `MODEL_UNAVAILABLE` | The model id is unknown, retired, or not offered in the region | 404, Bedrock `ResourceNotFoundException` or an invalid model identifier |
+| `None` | Another model would not help | Validation errors, authentication, a client-side timeout, a refusal |
+
+`is_transient` is True for `UNAVAILABLE` and `RATE_LIMITED`. Engines that run
+their own retry schedule (Bedrock, Gemini, and the OpenAI `strict_schema_prompt`
+loop) stop retrying as soon as an error classifies as `QUOTA_EXHAUSTED` or
+`MODEL_UNAVAILABLE`, instead of sleeping through the schedule.
+
 ```python
-from ai_api_unified import AiProviderRequestError
+from ai_api_unified import AiFallbackReason, AiProviderRequestError
 
 try:
     turn = client.send_conversation("system", messages, tools=tools)
 except AiProviderRequestError as error:
-    if error.status_code in (429, 529):
+    if error.fallback_reason in (
+        AiFallbackReason.UNAVAILABLE,
+        AiFallbackReason.QUOTA_EXHAUSTED,
+    ):
+        turn = backup_client.send_conversation("system", messages, tools=tools)
+    elif error.is_transient:
         backoff_and_retry()
+    else:
+        raise
 ```
 
 ### Batch completions (Anthropic)

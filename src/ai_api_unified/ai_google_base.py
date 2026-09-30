@@ -21,6 +21,10 @@ from google.auth.exceptions import DefaultCredentialsError
 from google.genai import errors as gerr
 from google.genai import pagers
 
+from ai_api_unified.ai_provider_exceptions import (
+    AiFallbackReason,
+    classify_fallback_reason_by_status,
+)
 from ai_api_unified.util.env_settings import EnvSettings
 
 GOOGLE_BASE_URL_OVERRIDE_SETTING: str = "GOOGLE_GEMINI_BASE_URL_OVERRIDE"
@@ -28,6 +32,48 @@ GOOGLE_BASE_URL_OVERRIDE_SETTING: str = "GOOGLE_GEMINI_BASE_URL_OVERRIDE"
 T = TypeVar("T")
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+
+# Message fragments that mark a Gemini 429 as an exhausted quota rather than
+# a per-minute rate limit. Google reports both as RESOURCE_EXHAUSTED.
+TUPLE_GEMINI_HARD_QUOTA_HINTS: tuple[str, ...] = (
+    "billing",
+    "check your plan",
+    "per day",
+    "per_day",
+    "perday",
+    "daily",
+)
+
+
+def classify_gemini_fallback_reason(
+    status_code: int | None, message: str
+) -> AiFallbackReason | None:
+    """
+    Maps one Google API error to a fallback reason.
+
+    Args:
+        status_code: HTTP status probed from the error, if any.
+        message: The error's message text.
+
+    Returns:
+        The fallback reason, or None when another model would not help.
+    """
+    str_lower: str = message.lower()
+    if status_code == 429 and any(
+        hint in str_lower for hint in TUPLE_GEMINI_HARD_QUOTA_HINTS
+    ):
+        # Early return: a plan or daily quota, which backoff cannot clear.
+        return AiFallbackReason.QUOTA_EXHAUSTED
+    if (
+        status_code in (400, 403)
+        and "not supported" in str_lower
+        and ("model" in str_lower)
+    ):
+        # Early return: Gemini reports a retired model as a 400/403.
+        return AiFallbackReason.MODEL_UNAVAILABLE
+    # Normal return with the status-only classification.
+    return classify_fallback_reason_by_status(status_code)
 
 
 class AIGoogleBase:
@@ -347,6 +393,15 @@ class AIGoogleBase:
 
             return status_code
 
+        def _cannot_recover(status_code: int | None, message_text: str) -> bool:
+            reason: AiFallbackReason | None = classify_gemini_fallback_reason(
+                status_code, message_text
+            )
+            return reason in (
+                AiFallbackReason.QUOTA_EXHAUSTED,
+                AiFallbackReason.MODEL_UNAVAILABLE,
+            )
+
         def _should_retry_message(message_text: str) -> bool:
             lower_text: str = message_text.lower()
             return any(hint in lower_text for hint in self.retryable_message_hints)
@@ -478,6 +533,9 @@ class AIGoogleBase:
                     ) from gemini_error
 
                 message_text_gemini: str = str(gemini_error)
+                if _cannot_recover(status_code, message_text_gemini):
+                    # Early exit: quota or model gone, so backoff is wasted.
+                    raise gemini_error
                 if (
                     status_code in self.retryable_http_status_codes
                     or _should_retry_message(message_text_gemini)
@@ -502,6 +560,9 @@ class AIGoogleBase:
                 status_code_api: int | None = _extract_status_code(gemini_api_error)
                 message_text_api: str = str(gemini_api_error)
 
+                if _cannot_recover(status_code_api, message_text_api):
+                    # Early exit: quota or model gone, so backoff is wasted.
+                    raise gemini_api_error
                 if (
                     status_code_api in self.retryable_http_status_codes
                     or _should_retry_message(message_text_api)
