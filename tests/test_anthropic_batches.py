@@ -259,6 +259,37 @@ class TestResults:
         assert by_id["b"].status is AIBatchItemStatus.ERRORED
         assert by_id["b"].error_message == "invalid_request"
 
+    def test_results_report_cache_reads_and_writes(self) -> None:
+        client = _build_client()
+        client.client.messages.batches.results.return_value = iter(
+            [
+                SimpleNamespace(
+                    custom_id="a",
+                    result=SimpleNamespace(
+                        type="succeeded",
+                        message=SimpleNamespace(
+                            content=[SimpleNamespace(type="text", text="Hello")],
+                            usage=SimpleNamespace(
+                                input_tokens=10,
+                                output_tokens=3,
+                                cache_read_input_tokens=400,
+                                cache_creation_input_tokens=2000,
+                                cache_creation=SimpleNamespace(
+                                    ephemeral_5m_input_tokens=0,
+                                    ephemeral_1h_input_tokens=2000,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ]
+        )
+
+        (result,) = client.get_batch_results("claude:msgbatch_123")
+
+        assert result.provider_cached_input_tokens == 400
+        assert result.provider_cache_write_1h_tokens == 2000
+
 
 class TestRunBatch:
     def test_run_batch_submits_polls_and_returns_results(self) -> None:

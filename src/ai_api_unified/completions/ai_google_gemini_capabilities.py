@@ -48,6 +48,11 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
                     "context_window_length": 1048576,
                     "knowledge_cutoff_date": date(2025, 1, 1),  # Approximate
                     "reasoning": True,  # Gemini 3.x supports reasoning
+                    # Gemini 2.5 and later cache repeated prompt prefixes
+                    # implicitly; from 2026-10-15 the Gemini 3.x cache is
+                    # durable (up to 24 hours, no storage fee). A cache hint
+                    # has nothing to add, so the engine ignores it.
+                    "implicit_prompt_caching": True,
                 }
             )
         elif "2.5" in model_name:
@@ -56,6 +61,7 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
                     "context_window_length": 1048576,
                     "knowledge_cutoff_date": date(2024, 10, 1),  # Approximate
                     "reasoning": True,  # Gemini 2.5 supports reasoning
+                    "implicit_prompt_caching": True,
                 }
             )
         elif "2.0" in model_name:

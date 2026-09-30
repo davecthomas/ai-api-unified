@@ -4,6 +4,41 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.30.0
+
+### Added
+
+- `AIPromptCacheHint` and `AIPromptCacheRetention`: one provider-neutral way
+  to ask for prompt caching. The hint marks the system prompt and tool
+  definitions as a stable prefix. Pass it on `other_params.prompt_cache`
+  (`send_prompt`, `asend_prompt`, `send_prompt_streaming`,
+  `strict_schema_prompt`), as `prompt_cache=` on `send_conversation`,
+  `send_structured_output`, and their async variants, or on
+  `AIBatchRequestItem.prompt_cache`. Each engine maps it to its own control:
+  - `claude`: a `cache_control` breakpoint on the system block; conversation
+    turns also turn on automatic caching of the growing history.
+  - Bedrock: a `cachePoint` after the system block on Claude and Nova models.
+  - `openai` and `openai-responses`: `prompt_cache_key`, plus 24-hour
+    retention on the models OpenAI offers it for.
+  - `google-gemini`, `openai-compatible`, and other Bedrock models ignore it,
+    as do `claude` and `openai` when `base_url` points at a gateway rather
+    than the provider's own API host.
+  `EXTENDED` retention asks for the longer cache (1 hour on Anthropic and
+  Bedrock, 24 hours on OpenAI) only on models that accept it.
+- `AICompletionsCapabilitiesBase.implicit_prompt_caching` and
+  `supports_prompt_cache_hint` report, per model, whether the provider
+  caches on its own and whether the engine honors the hint. Gemini 2.5 and
+  3.x report implicit caching; on Gemini 3.x that cache becomes durable (up
+  to 24 hours, no storage fee) on 2026-10-15.
+- `AIBatchResultItem` reports `provider_cached_input_tokens`,
+  `provider_cache_write_5m_tokens`, and `provider_cache_write_1h_tokens`, so
+  cached Anthropic batches show their cache reads and writes.
+
+### Fixed
+
+- Bedrock billed every cache write at the 5-minute rate. It now reads the
+  per-TTL split Converse reports in `usage.cacheDetails`.
+
 ## 2.29.1
 
 ### Fixed

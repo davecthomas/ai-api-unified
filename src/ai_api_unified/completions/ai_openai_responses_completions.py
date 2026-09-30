@@ -30,6 +30,7 @@ from ..ai_base import (
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
+    AIPromptCacheHint,
     AITokenUsage,
     AITool,
     AIToolCall,
@@ -145,6 +146,9 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                     input=prompt,
                     instructions=system_prompt,
                     **dict_token_kwargs,
+                    **self._build_prompt_cache_kwargs(
+                        self._resolve_prompt_cache_hint(other_params)
+                    ),
                 )
             except Exception as exception:
                 self._raise_request_error(exception)
@@ -242,6 +246,9 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 instructions=system_prompt,
                 max_output_tokens=max_response_tokens,
                 text=text_format,
+                **self._build_prompt_cache_kwargs(
+                    self._resolve_prompt_cache_hint(other_params)
+                ),
             )
             raw_output_text: str = response.output_text or ""
             if not raw_output_text:
@@ -335,6 +342,9 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 input=prompt,
                 instructions=system_prompt,
                 stream=True,
+                **self._build_prompt_cache_kwargs(
+                    self._resolve_prompt_cache_hint(other_params)
+                ),
             )
             # Loop through Responses stream events so callers see text as it arrives.
             for event in stream:
@@ -570,6 +580,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         tool_choice: str | None,
         max_response_tokens: int | None,
         dict_merge_options: dict[str, Any],
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> dict[str, Any]:
         """
         Builds the Responses API request kwargs for one conversation turn.
@@ -578,6 +589,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
             "model": self.completions_model,
             "instructions": system_prompt,
             "input": messages,
+            **self._build_prompt_cache_kwargs(prompt_cache),
         }
         if max_response_tokens is not None:
             dict_request_kwargs["max_output_tokens"] = max_response_tokens
@@ -630,6 +642,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Sends one conversation turn to the Responses API.
@@ -649,6 +662,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 tool_choice=tool_choice,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options=dict_merge_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -696,6 +710,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Async twin of _send_conversation_provider using AsyncOpenAI.
@@ -715,6 +730,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 tool_choice=tool_choice,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options=dict_merge_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -795,6 +811,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         messages: list[dict[str, Any]] | None,
         max_response_tokens: int,
         dict_merge_options: dict[str, Any],
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> dict[str, Any]:
         """
         Builds the Responses API request kwargs for one structured call.
@@ -822,6 +839,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 }
             },
         }
+        dict_request_kwargs.update(self._build_prompt_cache_kwargs(prompt_cache))
         dict_request_kwargs.update(dict_merge_options)
         # Normal return with the Responses-shaped structured request.
         return dict_request_kwargs
@@ -872,6 +890,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Generates structured output via the Responses json_schema text format.
@@ -891,6 +910,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 messages=messages,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options=dict_merge_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -938,6 +958,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Async twin of _send_structured_output_provider.
@@ -957,6 +978,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 messages=messages,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options=dict_merge_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -1019,6 +1041,9 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
             "model": self.completions_model,
             "input": str_redacted_prompt,
             "instructions": str_system_prompt,
+            **self._build_prompt_cache_kwargs(
+                self._resolve_prompt_cache_hint(other_params)
+            ),
         }
         if max_response_tokens is not None:
             dict_request_kwargs["max_output_tokens"] = max_response_tokens

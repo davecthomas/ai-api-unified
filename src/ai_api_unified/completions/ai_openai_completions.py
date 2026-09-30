@@ -1,9 +1,12 @@
 # ai_openai_completions.py
 
 import base64
+import hashlib
 import json
 import logging
+import re
 import time
+import urllib.parse
 from collections.abc import Iterator
 from datetime import date
 from typing import Any, ClassVar, Type
@@ -24,6 +27,8 @@ from ..ai_base import (
     AIStructuredPrompt,
     AICompletionsCapabilitiesBase,
     AICompletionsPromptParamsBase,
+    AIPromptCacheHint,
+    AIPromptCacheRetention,
     AITokenUsage,
     AITool,
     AIToolCall,
@@ -69,6 +74,10 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
         "supports_tool_use": True,
         "supports_structured_output": True,
         "supports_async": True,
+        # OpenAI caches prompt prefixes of 1,024+ tokens automatically; the
+        # hint adds prompt_cache_key routing and extended retention.
+        "implicit_prompt_caching": True,
+        "supports_prompt_cache_hint": True,
     }
 
     # Context window sizes (max tokens each model can handle)
@@ -277,8 +286,15 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
 
     def _build_capabilities(self) -> AICompletionsCapabilitiesBase:
         """Resolves capabilities for the configured model."""
+        capabilities: AICompletionsCapabilitiesOpenAI = (
+            AICompletionsCapabilitiesOpenAI.for_model(self.completions_model)
+        )
+        if not self._targets_openai_api():
+            # Early return: a base_url gateway may reject the cache fields,
+            # so the hint is reported, and treated, as unsupported there.
+            return capabilities.model_copy(update={"supports_prompt_cache_hint": False})
         # Normal return with the OpenAI per-model capabilities.
-        return AICompletionsCapabilitiesOpenAI.for_model(self.completions_model)
+        return capabilities
 
     @property
     def capabilities(self) -> AICompletionsCapabilitiesBase:
@@ -560,6 +576,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         tool_choice: str | None,
         max_response_tokens: int | None,
         dict_merge_options: dict[str, Any],
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> dict[str, Any]:
         """
         Builds the Chat Completions request kwargs for one conversation turn.
@@ -567,6 +584,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         dict_request_kwargs: dict[str, Any] = {
             "model": self.completions_model,
             "messages": [{"role": "system", "content": system_prompt}, *messages],
+            **self._build_prompt_cache_kwargs(prompt_cache),
         }
         if max_response_tokens is not None:
             dict_request_kwargs[self.MAX_TOKENS_REQUEST_FIELD] = max_response_tokens
@@ -644,6 +662,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Sends one conversation turn to the Chat Completions API.
@@ -663,6 +682,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 tool_choice=tool_choice,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options=dict_merge_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -710,6 +730,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Async twin of _send_conversation_provider using AsyncOpenAI.
@@ -729,6 +750,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 tool_choice=tool_choice,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options=dict_merge_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -867,6 +889,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Generates structured output via the chat json_schema response format.
@@ -890,6 +913,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 messages=messages,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options=dict_merge_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -937,6 +961,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Async twin of _send_structured_output_provider.
@@ -956,6 +981,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 messages=messages,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options=dict_merge_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -1004,6 +1030,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         messages: list[dict[str, Any]] | None,
         max_response_tokens: int,
         dict_merge_options: dict[str, Any],
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> dict[str, Any]:
         """
         Builds the Chat Completions request kwargs for one structured call.
@@ -1033,6 +1060,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 },
             },
         }
+        dict_request_kwargs.update(self._build_prompt_cache_kwargs(prompt_cache))
         dict_request_kwargs.update(dict_merge_options)
         # Normal return with the chat-shaped structured request.
         return dict_request_kwargs
@@ -1100,6 +1128,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 {"role": "system", "content": str_system_prompt},
                 {"role": "user", "content": user_content},
             ],
+            **self._build_prompt_cache_kwargs(
+                self._resolve_prompt_cache_hint(other_params)
+            ),
         }
         if max_response_tokens is not None:
             dict_request_kwargs[self.MAX_TOKENS_REQUEST_FIELD] = max_response_tokens
@@ -1280,6 +1311,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         functions=functions,
                         function_call={"name": "strict_schema_response"},
                         **{self.MAX_TOKENS_REQUEST_FIELD: max_response_tokens},
+                        **self._build_prompt_cache_kwargs(
+                            self._resolve_prompt_cache_hint(other_params)
+                        ),
                     )
                     str_finish_reason: str = str(completion.choices[0].finish_reason)
                     choice_msg = completion.choices[0].message
@@ -1436,6 +1470,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                             {"role": "user", "content": user_content},
                         ],
                         **dict_token_kwargs,
+                        **self._build_prompt_cache_kwargs(
+                            self._resolve_prompt_cache_hint(other_params)
+                        ),
                     )
                 except Exception as exception:
                     self._raise_request_error(exception)
@@ -1580,6 +1617,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 ],
                 stream=True,
                 stream_options={"include_usage": True},
+                **self._build_prompt_cache_kwargs(
+                    self._resolve_prompt_cache_hint(other_params)
+                ),
             )
             # Loop through provider chunks so callers see text as it arrives.
             for chunk in stream:
@@ -1707,6 +1747,121 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         except AttributeError:
             # Early return because the SDK response did not expose usage metadata as expected.
             return None
+
+    # Models that accept prompt_cache_retention="24h"; see
+    # https://developers.openai.com/api/docs/guides/prompt-caching
+    SET_PROMPT_CACHE_24H_MODELS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "gpt-5.5",
+            "gpt-5.5-pro",
+            "gpt-5.4",
+            "gpt-5.2",
+            "gpt-5.1",
+            "gpt-5.1-chat-latest",
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-mini",
+            "gpt-5",
+            "gpt-5-codex",
+            "gpt-4.1",
+        }
+    )
+
+    def _targets_openai_api(self) -> bool:
+        """
+        Reports whether requests go to OpenAI's own API host.
+
+        A base_url override can point this engine at a gateway or proxy
+        (Azure OpenAI, LiteLLM, a corporate gateway) that rejects fields it
+        does not know, so the cache hint only adds fields for OpenAI hosts.
+
+        Returns:
+            True for api.openai.com and its regional subdomains.
+        """
+        str_host: str = (
+            urllib.parse.urlparse(getattr(self, "base_url", "") or "").hostname or ""
+        ).lower()
+        # Normal return with the host check.
+        return str_host == "api.openai.com" or str_host.endswith(".api.openai.com")
+
+    # OpenAI rejects a longer prompt_cache_key with a 400.
+    MAX_PROMPT_CACHE_KEY_CHARS: ClassVar[int] = 64
+
+    @classmethod
+    def _fit_prompt_cache_key(cls, str_key: str) -> str:
+        """
+        Fits a caller's cache key within OpenAI's 64-character limit.
+
+        A longer key is replaced by its SHA-256 hex digest, which is exactly
+        64 characters and deterministic, so requests sharing a long key still
+        share a cache route.
+
+        Args:
+            str_key: The caller's AIPromptCacheHint.key.
+
+        Returns:
+            The key unchanged when it fits, otherwise its SHA-256 hex digest.
+        """
+        if len(str_key) <= cls.MAX_PROMPT_CACHE_KEY_CHARS:
+            # Early return with a key that already fits.
+            return str_key
+        # Normal return with the fixed-length digest.
+        return hashlib.sha256(str_key.encode("utf-8")).hexdigest()
+
+    def _build_prompt_cache_kwargs(
+        self, prompt_cache: AIPromptCacheHint | None
+    ) -> dict[str, Any]:
+        """
+        Maps a prompt cache hint to OpenAI request fields.
+
+        OpenAI caches long prefixes on its own, so the hint only adds
+        prompt_cache_key (routes requests sharing a prefix to the same cache)
+        and, for EXTENDED retention on models that offer it, 24-hour
+        retention. Engines whose capabilities do not declare hint support
+        (OpenAI-compatible vendors) send nothing, since those servers may
+        reject the fields. Fields the installed SDK does not accept are
+        dropped as well.
+
+        Args:
+            prompt_cache: Optional caller cache hint.
+
+        Returns:
+            Request kwargs to merge; empty when there is nothing to send.
+        """
+        if (
+            prompt_cache is None
+            or not self.capabilities.supports_prompt_cache_hint
+            or not self._targets_openai_api()
+        ):
+            # Early return because caching was not requested, is not
+            # supported, or a base_url override points at a gateway that may
+            # reject the fields.
+            return {}
+        dict_kwargs: dict[str, Any] = {}
+        if prompt_cache.key:
+            dict_kwargs["prompt_cache_key"] = self._fit_prompt_cache_key(
+                prompt_cache.key
+            )
+        # Dated snapshots (gpt-4.1-2025-04-14) share their family's retention.
+        str_base_model: str = re.sub(
+            r"-\d{4}-\d{2}-\d{2}$", "", self.completions_model.strip().lower()
+        )
+        if (
+            prompt_cache.retention is AIPromptCacheRetention.EXTENDED
+            and str_base_model in self.SET_PROMPT_CACHE_24H_MODELS
+        ):
+            dict_kwargs["prompt_cache_retention"] = "24h"
+        set_known: frozenset[str] | None = self._known_provider_option_keys()
+        if set_known is not None:
+            # An older SDK raises TypeError on keyword arguments it predates,
+            # which would turn a cost-only hint into a failed request.
+            dict_kwargs = {
+                str_key: value
+                for str_key, value in dict_kwargs.items()
+                if str_key in set_known
+            }
+        # Normal return with the cache fields this model and SDK accept.
+        return dict_kwargs
 
     @staticmethod
     def _extract_openai_cached_tokens(completion: Any) -> int | None:

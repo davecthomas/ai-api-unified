@@ -53,6 +53,7 @@ from ..ai_base import (
     AIStructuredOutputResult,
     AIStructuredPrompt,
     AICompletionsPromptParamsBase,
+    AIPromptCacheHint,
     AITokenUsage,
     AITool,
     AIToolCall,
@@ -1400,6 +1401,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Sends one conversation turn via generate_content with function tools.
@@ -1471,6 +1473,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         max_response_tokens: int | None,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """
         Async twin of _send_conversation_provider via client.aio.
@@ -1698,6 +1701,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Generates structured output via response_json_schema.
@@ -1772,6 +1776,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         max_response_tokens: int,
         request_timeout_seconds: float | None,
         provider_options: dict[str, Any] | None,
+        prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """
         Async twin of _send_structured_output_provider via client.aio.
