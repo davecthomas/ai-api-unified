@@ -28,6 +28,14 @@ version lives in `pyproject.toml` (see the README release section).
   caches on its own and whether the engine honors the hint. Gemini 2.5 and
   3.x report implicit caching; on Gemini 3.x that cache becomes durable (up
   to 24 hours, no storage fee) on 2026-10-15.
+- `AIBatchResultItem` reports `provider_cached_input_tokens`,
+  `provider_cache_write_5m_tokens`, and `provider_cache_write_1h_tokens`, so
+  cached Anthropic batches show their cache reads and writes.
+
+### Fixed
+
+- Bedrock billed every cache write at the 5-minute rate. It now reads the
+  per-TTL split Converse reports in `usage.cacheDetails`.
 
 ## 2.29.1
 

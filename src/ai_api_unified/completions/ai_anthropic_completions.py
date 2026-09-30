@@ -2125,6 +2125,8 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         str_error: str | None = None
         int_prompt_tokens: int | None = None
         int_completion_tokens: int | None = None
+        int_cached_tokens: int | None = None
+        dict_cache_write: dict[str, int | None] = {}
         if item_status is AIBatchItemStatus.SUCCEEDED:
             message = getattr(inner, "message", None)
             str_text = self.pii_middleware.process_output(
@@ -2136,6 +2138,8 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             tuple_usage = self._extract_anthropic_usage(message)
             int_prompt_tokens = tuple_usage[0]
             int_completion_tokens = tuple_usage[1]
+            int_cached_tokens = tuple_usage[3]
+            dict_cache_write = self._cache_write_kwargs(message)
         else:
             error = getattr(inner, "error", None)
             if error is not None:
@@ -2148,6 +2152,8 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             error_message=str_error,
             provider_prompt_tokens=int_prompt_tokens,
             provider_completion_tokens=int_completion_tokens,
+            provider_cached_input_tokens=int_cached_tokens,
+            **dict_cache_write,
         )
 
     def _submit_batch_provider(self, requests: list[AIBatchRequestItem]) -> AIBatchJob:

@@ -357,6 +357,11 @@ class AIBatchResultItem(BaseModel):
     error_message: str | None = None
     provider_prompt_tokens: int | None = None
     provider_completion_tokens: int | None = None
+    # Cache reads are a subset of provider_prompt_tokens; cache writes are
+    # counted separately and bill at their TTL's write rate.
+    provider_cached_input_tokens: int | None = None
+    provider_cache_write_5m_tokens: int | None = None
+    provider_cache_write_1h_tokens: int | None = None
     provider_metadata: dict[str, Any] = {}
 
 
