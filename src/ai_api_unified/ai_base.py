@@ -2767,10 +2767,10 @@ class AIBaseCompletions(AIBase):
         """
         Returns the prompt_cache keyword for an overridable hook, or nothing.
 
-        Provider hooks and request builders gained a prompt_cache keyword in
-        2.30.0. Passing it only when a hint is set keeps subclasses that
-        override a hook with the pre-2.30.0 signature working for every call
-        that does not use caching.
+        Provider hooks and request builders gained a prompt_cache keyword
+        with the cache hint. Passing it only when a hint is set keeps
+        subclasses that override a hook with the earlier signature working
+        for every call that does not use caching.
 
         Args:
             prompt_cache: Optional caller cache hint.

@@ -354,7 +354,8 @@ class TestSendConversationThreading:
         mock_hook: Mock = Mock(return_value=Mock(spec=AITurnResult))
         with patch.object(client, "_send_conversation_provider", mock_hook):
             client.send_conversation(SYSTEM_PROMPT, [{"role": "user", "content": "hi"}])
-        # Omitted rather than None, so pre-2.30.0 hook overrides keep working.
+        # Omitted rather than None, so hook overrides written before the
+        # cache hint existed keep working.
         assert "prompt_cache" not in mock_hook.call_args.kwargs
 
     def test_legacy_hook_override_works_without_a_hint(self) -> None:
@@ -764,3 +765,32 @@ class TestClaudeGateway:
                 model="gpt-5.1", base_url="https://litellm.internal.example.com/v1"
             )
         assert client.capabilities.supports_prompt_cache_hint is False
+
+
+class TestRoundFiveFixes:
+    def test_bedrock_messages_override_cache_point_takes_precedence(self) -> None:
+        client = _bedrock("us.anthropic.claude-opus-5")
+        dict_options: dict[str, Any] = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"text": "hi"}, {"cachePoint": {"type": "default"}}],
+                }
+            ]
+        }
+        assert client._build_converse_system(
+            SYSTEM_PROMPT, HINT_DEFAULT, None, dict_options
+        ) == [{"text": SYSTEM_PROMPT}]
+
+    def test_long_openai_cache_key_is_hashed_to_64_chars(self) -> None:
+        client = _openai()
+        str_long_key: str = "tenant-42:" + "x" * 100
+        hint = AIPromptCacheHint(key=str_long_key)
+        str_sent: str = client._build_prompt_cache_kwargs(hint)["prompt_cache_key"]
+        assert len(str_sent) == 64
+        assert str_sent == client._build_prompt_cache_kwargs(hint)["prompt_cache_key"]
+
+    def test_short_openai_cache_key_is_unchanged(self) -> None:
+        assert _openai()._build_prompt_cache_kwargs(HINT_EXTENDED)[
+            "prompt_cache_key"
+        ] == ("tenant-42")

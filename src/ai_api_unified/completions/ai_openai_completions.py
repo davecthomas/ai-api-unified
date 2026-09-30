@@ -1,6 +1,7 @@
 # ai_openai_completions.py
 
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -1783,6 +1784,30 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         # Normal return with the host check.
         return str_host == "api.openai.com" or str_host.endswith(".api.openai.com")
 
+    # OpenAI rejects a longer prompt_cache_key with a 400.
+    MAX_PROMPT_CACHE_KEY_CHARS: ClassVar[int] = 64
+
+    @classmethod
+    def _fit_prompt_cache_key(cls, str_key: str) -> str:
+        """
+        Fits a caller's cache key within OpenAI's 64-character limit.
+
+        A longer key is replaced by its SHA-256 hex digest, which is exactly
+        64 characters and deterministic, so requests sharing a long key still
+        share a cache route.
+
+        Args:
+            str_key: The caller's AIPromptCacheHint.key.
+
+        Returns:
+            The key unchanged when it fits, otherwise its SHA-256 hex digest.
+        """
+        if len(str_key) <= cls.MAX_PROMPT_CACHE_KEY_CHARS:
+            # Early return with a key that already fits.
+            return str_key
+        # Normal return with the fixed-length digest.
+        return hashlib.sha256(str_key.encode("utf-8")).hexdigest()
+
     def _build_prompt_cache_kwargs(
         self, prompt_cache: AIPromptCacheHint | None
     ) -> dict[str, Any]:
@@ -1814,7 +1839,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             return {}
         dict_kwargs: dict[str, Any] = {}
         if prompt_cache.key:
-            dict_kwargs["prompt_cache_key"] = prompt_cache.key
+            dict_kwargs["prompt_cache_key"] = self._fit_prompt_cache_key(
+                prompt_cache.key
+            )
         # Dated snapshots (gpt-4.1-2025-04-14) share their family's retention.
         str_base_model: str = re.sub(
             r"-\d{4}-\d{2}-\d{2}$", "", self.completions_model.strip().lower()

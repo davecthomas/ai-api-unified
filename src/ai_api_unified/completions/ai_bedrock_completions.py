@@ -1,5 +1,6 @@
 # ai_bedrock_completions.py
 
+import itertools
 import json
 import logging
 from collections.abc import Iterator
@@ -1121,8 +1122,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
         Reports whether the caller already placed Converse cachePoint blocks.
 
-        Checks message content blocks and the provider_options fields that
-        accept checkpoints (system blocks and toolConfig.tools).
+        Checks message content blocks, including a messages override in
+        provider_options, and the provider_options fields that accept
+        checkpoints (system blocks and toolConfig.tools).
 
         Args:
             messages: Optional Converse messages.
@@ -1133,18 +1135,27 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
         dict_options: dict[str, Any] = dict_merge_options or {}
         dict_tool_config: Any = dict_options.get("toolConfig")
-        list_blocks: list[Any] = [
-            block
-            for message in messages or []
-            if isinstance(message, dict)
-            for block in (message.get("content") or [])
-        ]
-        list_blocks += list(dict_options.get("system") or [])
-        if isinstance(dict_tool_config, dict):
-            list_blocks += list(dict_tool_config.get("tools") or [])
-        # Normal return after scanning every candidate block.
+        list_override: Any = dict_options.get("messages")
+        iter_messages: Iterator[Any] = itertools.chain(
+            messages or [], list_override if isinstance(list_override, list) else []
+        )
+        iter_blocks: Iterator[Any] = itertools.chain(
+            (
+                block
+                for message in iter_messages
+                if isinstance(message, dict)
+                for block in (message.get("content") or [])
+            ),
+            dict_options.get("system") or [],
+            (
+                dict_tool_config.get("tools") or []
+                if isinstance(dict_tool_config, dict)
+                else []
+            ),
+        )
+        # Normal return; any() stops at the first cachePoint found.
         return any(
-            isinstance(block, dict) and "cachePoint" in block for block in list_blocks
+            isinstance(block, dict) and "cachePoint" in block for block in iter_blocks
         )
 
     def _build_converse_system(

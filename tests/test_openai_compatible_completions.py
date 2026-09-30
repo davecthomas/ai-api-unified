@@ -386,6 +386,9 @@ DICT_REVIEWED_OPENAI_METHODS: dict[str, str] = {
     "_build_prompt_cache_kwargs": "shared",
     # False for any vendor base URL, which is the right answer there too.
     "_targets_openai_api": "shared",
+    # Only reached through _build_prompt_cache_kwargs, which returns early
+    # for compatible vendors.
+    "_fit_prompt_cache_key": "shared",
     "_build_structured_observability_metadata": "shared",
     "_build_structured_output_result_from_parts": "shared",
     "_build_tool_result_message_provider": "shared",
