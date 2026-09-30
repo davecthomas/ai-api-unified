@@ -2794,6 +2794,21 @@ class AIBaseCompletions(AIBase):
         # Normal return with the keyword to splat into the hook call.
         return {"prompt_cache": prompt_cache}
 
+    def _raise_request_error(self, exception: Exception) -> None:
+        """
+        Re-raises one provider SDK transport error as AiProviderRequestError.
+
+        Engines override this with their SDK's error mapping. The base returns
+        without raising, so a caller that needs the typed form (for example a
+        fallback client reading a streaming error) can call it on any engine
+        and re-raise the original when nothing matched.
+
+        Args:
+            exception: Exception raised by the provider SDK.
+        """
+        # Normal return: the base engine maps nothing.
+        return None
+
     @staticmethod
     def _resolve_prompt_cache_hint(
         other_params: AICompletionsPromptParamsBase | None,
@@ -3360,10 +3375,6 @@ class AIBaseCompletions(AIBase):
     # Reserved provider_options key honored by engines that support per-call
     # retry overrides; every other key merges into the provider request.
     PROVIDER_OPTION_RETRY_POLICY: ClassVar[str] = "retry_policy"
-    # Reserved per-call key read by a fallback client ("none" keeps the call
-    # on the primary model). Popped here too, so the key never reaches an
-    # engine's SDK or its unknown-option warning.
-    PROVIDER_OPTION_FALLBACK: ClassVar[str] = "fallback"
 
     def _split_provider_options(
         self, provider_options: dict[str, Any] | None
@@ -3388,7 +3399,6 @@ class AIBaseCompletions(AIBase):
         str_retry_policy: str | None = dict_merge_options.pop(
             self.PROVIDER_OPTION_RETRY_POLICY, None
         )
-        dict_merge_options.pop(self.PROVIDER_OPTION_FALLBACK, None)
         # Normal return with the filtered merge options and the retry override.
         return self._filter_known_provider_options(dict_merge_options), str_retry_policy
 

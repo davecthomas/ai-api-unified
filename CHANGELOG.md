@@ -18,15 +18,22 @@ version lives in `pyproject.toml` (see the README release section).
   `UNAVAILABLE`, `RATE_LIMITED`, and `QUOTA_EXHAUSTED` by default, set with
   `fallback_on` or `COMPLETIONS_FALLBACK_ON`. `MODEL_UNAVAILABLE` is off by
   default. Every other exception propagates. Conversations fail over while
-  the history is provider-neutral and then stay on the engine that served
-  the previous turn; streams fail over only before the first chunk; batches,
-  token counting, and capabilities always use the primary.
+  the history is provider-neutral; after that the turn goes to a candidate
+  of the engine family that shaped the history, so one client can serve
+  conversations on different engines. Streams fail over only before the
+  first chunk; batches, token counting, and capabilities always use the
+  primary; cost helpers price at the candidate that served the last call.
 - `AITurnResult` and `AIStructuredOutputResult` gained `provider_engine` and
   `model_name`, set by a fallback client to the candidate that served the
   call; `AiFallbackCompletions.last_route` reports it for calls that return
   a string.
 - `provider_options={"fallback": "none"}` keeps one call on the primary.
-  Every engine drops the reserved key before building its request.
+  The wrapper removes the key before the options reach an engine.
+- `AiFallbackCompletions.build_tool_result_message` accepts `messages=` so
+  the tool result takes the shape of the engine that produced the history.
+- Every engine implements the `_raise_request_error` hook, so a fallback
+  client can classify the raw SDK error a streaming call raises at its
+  first chunk.
 - Exports: `AiFallbackCompletions`, `AIFallbackCandidate`,
   `DEFAULT_FALLBACK_REASONS`.
 

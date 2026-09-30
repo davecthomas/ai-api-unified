@@ -1089,6 +1089,10 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             self._raise_gemini_request_error(exception)
             raise
 
+    def _raise_request_error(self, exception: Exception) -> None:
+        """Base hook; see _raise_gemini_request_error."""
+        self._raise_gemini_request_error(exception)
+
     def _raise_gemini_request_error(self, exception: Exception) -> None:
         """
         Re-raises one Google SDK transport error as the typed request error.

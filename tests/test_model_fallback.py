@@ -37,7 +37,10 @@ from ai_api_unified.ai_base import (
     AIStructuredPrompt,
     AITurnResult,
 )
-from ai_api_unified.ai_provider_exceptions import AiProviderDependencyUnavailableError
+from ai_api_unified.ai_provider_exceptions import (
+    AiProviderCapabilityUnsupportedError,
+    AiProviderDependencyUnavailableError,
+)
 from ai_api_unified.completions.ai_fallback_completions import (
     parse_fallback_candidates,
     parse_fallback_reasons,
@@ -83,16 +86,23 @@ class _FakeEngine(AIBaseCompletions):
         capabilities: AICompletionsCapabilitiesBase | None = None,
         chunks: list[str] | None = None,
         fail_after_first_chunk: bool = False,
+        family: str = "anthropic",
     ) -> None:
         super().__init__(model=name)
         self.fail = fail
         self._caps = capabilities or _caps()
         self.chunks = chunks if chunks is not None else [f"{name}-1", f"{name}-2"]
         self.fail_after_first_chunk = fail_after_first_chunk
+        # Read by engine_family_of, so fakes can stand in for engine families.
+        self.FALLBACK_ENGINE_FAMILY = family
         self.calls: list[str] = []
+        self.last_kwargs: dict[str, Any] = {}
 
-    def _maybe_fail(self, op: str) -> None:
+    def _maybe_fail(self, op: str, **kwargs: Any) -> None:
         self.calls.append(op)
+        self.last_kwargs = kwargs
+        if op.startswith("a") and not self._caps.supports_async:
+            raise AiProviderCapabilityUnsupportedError(f"{self.model}: no async")
         if self.fail is not None:
             raise self.fail
 
@@ -146,13 +156,13 @@ class _FakeEngine(AIBaseCompletions):
         return response_model(answer=str(self.model))
 
     def send_structured_output(self, prompt: Any = None, **kwargs: Any) -> Any:
-        self._maybe_fail("send_structured_output")
+        self._maybe_fail("send_structured_output", **kwargs)
         return AIStructuredOutputResult(
             data={"answer": str(self.model)}, finish_reason=AIFinishReason.COMPLETE
         )
 
     async def asend_structured_output(self, prompt: Any = None, **kwargs: Any) -> Any:
-        self._maybe_fail("asend_structured_output")
+        self._maybe_fail("asend_structured_output", **kwargs)
         return AIStructuredOutputResult(
             data={"answer": str(self.model)}, finish_reason=AIFinishReason.COMPLETE
         )
@@ -160,7 +170,7 @@ class _FakeEngine(AIBaseCompletions):
     def send_conversation(
         self, system_prompt: str, messages: list[dict[str, Any]], **kwargs: Any
     ) -> AITurnResult:
-        self._maybe_fail("send_conversation")
+        self._maybe_fail("send_conversation", **kwargs)
         return AITurnResult(
             text=f"{self.model}:turn",
             finish_reason=AIFinishReason.COMPLETE,
@@ -170,7 +180,7 @@ class _FakeEngine(AIBaseCompletions):
     async def asend_conversation(
         self, system_prompt: str, messages: list[dict[str, Any]], **kwargs: Any
     ) -> AITurnResult:
-        self._maybe_fail("asend_conversation")
+        self._maybe_fail("asend_conversation", **kwargs)
         return AITurnResult(
             text=f"{self.model}:turn",
             finish_reason=AIFinishReason.COMPLETE,
@@ -178,12 +188,22 @@ class _FakeEngine(AIBaseCompletions):
         )
 
     def build_tool_result_message(self, **kwargs: Any) -> dict[str, Any]:
-        return {"role": "tool", "engine": str(self.model)}
+        if self.FALLBACK_ENGINE_FAMILY == "openai":
+            return {"role": "tool", "tool_call_id": "t", "engine": str(self.model)}
+        return {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t"}],
+            "engine": str(self.model),
+        }
 
     def extend_messages_with_turn(
         self, messages: list[dict[str, Any]], turn: AITurnResult
     ) -> list[dict[str, Any]]:
-        messages.append({"role": "assistant", "content": turn.raw_content})
+        # Append in this family's shape so routing can read it back.
+        if self.FALLBACK_ENGINE_FAMILY == "openai":
+            messages.append({"role": "assistant", "tool_calls": [{"id": "t"}]})
+        else:
+            messages.append({"role": "assistant", "content": turn.raw_content})
         return messages
 
 
@@ -350,6 +370,54 @@ class TestFailover:
         wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("f"))
         assert asyncio.run(wrapper.asend_prompt("hi")) == "f:ok"
 
+    def test_async_structured_output_skips_a_candidate_without_it(self) -> None:
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.UNAVAILABLE)),
+            _FakeEngine("f", capabilities=_caps(supports_structured_output=False)),
+            _FakeEngine("t"),
+        )
+        result = asyncio.run(
+            wrapper.asend_structured_output("hi", response_schema={"type": "object"})
+        )
+        assert result.data == {"answer": "t"}
+
+    def test_any_build_error_skips_the_candidate_once(self) -> None:
+        third = _FakeEngine("t")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("f"), third
+        )
+        dict_map = {"fake:t": third}
+
+        def _build(candidate: AIFallbackCandidate) -> _FakeEngine:
+            if candidate.label in dict_map:
+                return dict_map[candidate.label]
+            raise RuntimeError("constructor exploded")
+
+        wrapper.builder.side_effect = _build
+        assert wrapper.send_prompt("hi") == "t:ok"
+        wrapper.send_prompt("hi")
+        assert wrapper.builder.call_count == 2
+
+    def test_cost_helpers_price_at_the_serving_candidate(self) -> None:
+        fallback = _FakeEngine("f")
+        fallback.compute_completion_cost = Mock(return_value=1.5)  # type: ignore[method-assign]
+        wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), fallback)
+        wrapper.send_prompt("hi")
+        assert wrapper.compute_completion_cost(input_tokens=10, output_tokens=5) == 1.5
+        fallback.compute_completion_cost.assert_called_once_with(
+            input_tokens=10,
+            output_tokens=5,
+            cached_input_tokens=0,
+            cache_write_5m_tokens=0,
+            cache_write_1h_tokens=0,
+        )
+
+    def test_org_info_is_delegated_to_the_primary(self) -> None:
+        primary = _FakeEngine("p")
+        primary.get_org_info = Mock(return_value="org")  # type: ignore[method-assign]
+        wrapper = _chain(primary, _FakeEngine("f"))
+        assert wrapper.get_org_info() == "org"
+
     def test_count_tokens_and_batches_stay_on_the_primary(self) -> None:
         primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
         primary.submit_batch = Mock(return_value="job")  # type: ignore[method-assign]
@@ -373,16 +441,21 @@ class TestPerCallOptOut:
             )
         wrapper.builder.assert_not_called()
 
-    def test_plain_engine_drops_the_reserved_key_silently(self) -> None:
-        pytest.importorskip("anthropic")
-        from ai_api_unified.completions.ai_anthropic_completions import (
-            AiAnthropicCompletions,
+    def test_reserved_key_never_reaches_the_engine(self) -> None:
+        primary = _FakeEngine("p")
+        wrapper = _chain(primary, _FakeEngine("f"))
+        wrapper.send_conversation(
+            "sys",
+            [{"role": "user", "content": "hi"}],
+            provider_options={"fallback": "none", "temperature": 0.1},
         )
-
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-            client = AiAnthropicCompletions(model="claude-opus-4-8")
-        dict_merge, _ = client._split_provider_options({"fallback": "none"})
-        assert dict_merge == {}
+        assert primary.last_kwargs["provider_options"] == {"temperature": 0.1}
+        wrapper.send_conversation(
+            "sys",
+            [{"role": "user", "content": "hi"}],
+            provider_options={"fallback": "none"},
+        )
+        assert primary.last_kwargs["provider_options"] is None
 
 
 # ── Conversations ───────────────────────────────────────────────────────────
@@ -396,22 +469,88 @@ class TestConversations:
         assert turn.provider_engine == "fake"
         assert turn.model_name == "f"
 
-    def test_engine_shaped_history_sticks_to_the_serving_engine(self) -> None:
-        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
-        fallback = _FakeEngine("f")
+    def test_engine_shaped_history_routes_to_its_family(self) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE), family="anthropic")
+        fallback = _FakeEngine("f", family="openai")
         wrapper = _chain(primary, fallback)
         list_messages: list[dict[str, Any]] = [{"role": "user", "content": "hi"}]
         turn = wrapper.send_conversation("sys", list_messages)
         wrapper.extend_messages_with_turn(list_messages, turn)
         list_messages.append(
-            wrapper.build_tool_result_message(tool_call_id="t", result={})
+            wrapper.build_tool_result_message(
+                tool_call_id="t", result={}, messages=list_messages
+            )
         )
         assert list_messages[-1]["engine"] == "f"
-        # The primary recovers, but the history is now shaped for "f".
+        # The primary recovers, but the history is OpenAI-shaped, so it
+        # stays on "f" with fallback off.
         primary.fail = None
         turn2 = wrapper.send_conversation("sys", list_messages)
         assert turn2.text == "f:turn"
         assert primary.calls.count("send_conversation") == 1
+
+    def test_one_client_serves_conversations_on_different_engines(self) -> None:
+        primary = _FakeEngine("p", family="anthropic")
+        fallback = _FakeEngine("f", family="openai")
+        wrapper = _chain(primary, fallback)
+        # Conversation A fails over to "f" on its first turn.
+        primary.fail = _err(R.UNAVAILABLE)
+        list_a: list[dict[str, Any]] = [{"role": "user", "content": "a"}]
+        wrapper.extend_messages_with_turn(
+            list_a, wrapper.send_conversation("sys", list_a)
+        )
+        # Conversation B starts on a recovered "p".
+        primary.fail = None
+        list_b: list[dict[str, Any]] = [{"role": "user", "content": "b"}]
+        wrapper.extend_messages_with_turn(
+            list_b, wrapper.send_conversation("sys", list_b)
+        )
+        # Interleaved second turns each go to the engine that shaped them.
+        assert wrapper.send_conversation("sys", list_a).text == "f:turn"
+        assert wrapper.send_conversation("sys", list_b).text == "p:turn"
+        assert (
+            wrapper.build_tool_result_message(
+                tool_call_id="t", result={}, messages=list_a
+            )["engine"]
+            == "f"
+        )
+        assert (
+            wrapper.build_tool_result_message(
+                tool_call_id="t", result={}, messages=list_b
+            )["engine"]
+            == "p"
+        )
+
+    def test_structured_output_routes_by_history_shape(self) -> None:
+        primary = _FakeEngine("p", family="anthropic")
+        fallback = _FakeEngine("f", family="openai")
+        wrapper = _chain(primary, fallback)
+        primary.fail = _err(R.UNAVAILABLE)
+        list_messages: list[dict[str, Any]] = [{"role": "user", "content": "hi"}]
+        wrapper.extend_messages_with_turn(
+            list_messages, wrapper.send_conversation("sys", list_messages)
+        )
+        primary.fail = None
+        result = wrapper.send_structured_output(
+            "summarize", response_schema={"type": "object"}, messages=list_messages
+        )
+        assert result.data == {"answer": "f"}
+        assert "send_structured_output" not in primary.calls
+
+    def test_pinned_candidate_without_async_raises_its_own_capability_error(
+        self,
+    ) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE), family="anthropic")
+        fallback = _FakeEngine(
+            "f", family="openai", capabilities=_caps(supports_async=False)
+        )
+        wrapper = _chain(primary, fallback)
+        list_messages: list[dict[str, Any]] = [{"role": "user", "content": "hi"}]
+        wrapper.extend_messages_with_turn(
+            list_messages, wrapper.send_conversation("sys", list_messages)
+        )
+        with pytest.raises(AiProviderCapabilityUnsupportedError):
+            asyncio.run(wrapper.asend_conversation("sys", list_messages))
 
     def test_engine_shaped_history_does_not_fail_over(self) -> None:
         wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("f"))
@@ -451,6 +590,31 @@ class TestStreaming:
         with pytest.raises(AiProviderRequestError):
             next(iterator)
         wrapper.builder.assert_not_called()
+
+    def test_real_openai_stream_error_fails_over(self) -> None:
+        openai = pytest.importorskip("openai")
+        from ai_api_unified.completions.ai_openai_completions import (
+            AiOpenAICompletions,
+        )
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            primary = AiOpenAICompletions(model="gpt-5.1")
+        primary.client = Mock()
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        primary.client.chat.completions.create.side_effect = openai.APIStatusError(
+            "overloaded",
+            response=httpx.Response(503, request=request),
+            body={"error": {"code": None, "message": "overloaded"}},
+        )
+        fallback = _FakeEngine("f")
+        wrapper = AiFallbackCompletions(
+            primary=primary,
+            primary_candidate=AIFallbackCandidate(engine="openai", model="gpt-5.1"),
+            fallback_candidates=[AIFallbackCandidate(engine="fake", model="f")],
+            client_builder=lambda candidate: fallback,
+        )
+        assert list(wrapper.send_prompt_streaming("hi")) == ["f-1", "f-2"]
+        assert wrapper.last_route.engine == "fake"
 
 
 # ── Factory ─────────────────────────────────────────────────────────────────

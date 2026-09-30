@@ -667,16 +667,21 @@ Three limits follow from how engines shape requests:
 - **Conversations.** A history that already holds engine-shaped entries
   (replayed `raw_content`, tool results) cannot replay on another engine.
   Fallback applies while the history is plain user, assistant, and system
-  text, which in practice means the first turn. After that, the turn goes to
-  the engine that served the previous one, and `build_tool_result_message`
-  and `extend_messages_with_turn` produce that engine's shapes. A failure
-  mid-conversation propagates.
+  text, which in practice means the first turn. After that, the wrapper
+  reads which engine family shaped the history and sends the turn to a
+  candidate of that family, with fallback off, so one client can serve
+  conversations on different engines at once. `extend_messages_with_turn`
+  uses the engine named on the turn; pass `messages=` to
+  `build_tool_result_message` so it can read the history's shape too. A
+  failure mid-conversation propagates.
 - **Streaming.** A stream fails over only if the error arrives before the
   first chunk; after that the caller already holds partial output.
 - **Batches, token counting, and capabilities** always go to the primary.
+  `compute_completion_cost` and `price_per_1k_tokens` price at the candidate
+  that served the most recent call.
 
 Per call, `provider_options={"fallback": "none"}` keeps a request on the
-primary. A fallback candidate that lacks the capability a call needs
+primary; the wrapper removes the key before the options reach an engine. A fallback candidate that lacks the capability a call needs
 (structured output, tool use, async, streaming) is skipped with a warning.
 Each failover is logged at warning level with both engines and the reason.
 Cost events are emitted by the engine that served the call, so cost
