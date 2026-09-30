@@ -131,9 +131,6 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     # The Messages API requires max_tokens on every request. Non-streaming
     # requests stay under SDK HTTP-timeout guards at this size.
     SEND_PROMPT_MAX_TOKENS: ClassVar[int] = 16_000
-    # Messages API limit on cache_control breakpoints per request, counting
-    # the automatic (top-level) one.
-    MAX_CACHE_BREAKPOINTS: ClassVar[int] = 4
     # Streaming has no timeout concern; give the model room.
     STREAMING_MAX_TOKENS: ClassVar[int] = 64_000
     # Anthropic rejects images above 5MB per image, below the library-wide
@@ -224,6 +221,34 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             dict_cache_control["ttl"] = "1h"
         # Normal return with the provider cache_control object.
         return dict_cache_control
+
+    @classmethod
+    def _defer_to_caller_breakpoints(
+        cls,
+        prompt_cache: AIPromptCacheHint | None,
+        request_fragments: list[Any],
+    ) -> AIPromptCacheHint | None:
+        """
+        Drops the hint when the caller already placed cache breakpoints.
+
+        A caller who marks cache_control in messages or provider_options is
+        managing caching directly. Adding the hint's breakpoints on top can
+        exceed the API's limit of 4 per request, or put a 5-minute breakpoint
+        before a 1-hour one (longer TTLs must come first). Either returns a
+        400, which a cost-only hint must never cause.
+
+        Args:
+            prompt_cache: Optional caller cache hint.
+            request_fragments: Caller-supplied request parts to inspect.
+
+        Returns:
+            The hint unchanged, or None when caller breakpoints are present.
+        """
+        if prompt_cache is None or cls._count_cache_breakpoints(request_fragments) == 0:
+            # Early return: nothing to defer to.
+            return prompt_cache
+        # Normal return: the caller's own breakpoints take precedence.
+        return None
 
     @classmethod
     def _count_cache_breakpoints(cls, value: Any) -> int:
@@ -1002,26 +1027,19 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         growing history each turn. Both use the same TTL, which the API
         requires when the automatic breakpoint lands on a marked block.
 
-        Breakpoints the caller already placed in messages or provider_options
-        count against the API's limit of MAX_CACHE_BREAKPOINTS, so the hint
-        adds only as many as still fit (automatic first to go, since the
-        system breakpoint covers the more stable prefix). Exceeding the limit
-        would turn a cost-only hint into a 400.
+        When the caller already placed breakpoints in messages or
+        provider_options, the hint adds none; see _defer_to_caller_breakpoints.
         """
-        int_free_slots: int = (
-            self.MAX_CACHE_BREAKPOINTS
-            - self._count_cache_breakpoints([messages, dict_merge_options])
-        )
-        prompt_cache_system: AIPromptCacheHint | None = (
-            prompt_cache if int_free_slots >= 1 else None
+        prompt_cache = self._defer_to_caller_breakpoints(
+            prompt_cache, [messages, dict_merge_options]
         )
         dict_request_kwargs: dict[str, Any] = {
             "model": self.completions_model,
             "max_tokens": max_response_tokens or self.SEND_PROMPT_MAX_TOKENS,
-            "system": self._build_system_param(system_prompt, prompt_cache_system),
+            "system": self._build_system_param(system_prompt, prompt_cache),
             "messages": messages,
         }
-        if prompt_cache is not None and int_free_slots >= 2:
+        if prompt_cache is not None:
             dict_request_kwargs["cache_control"] = self._build_cache_control(
                 prompt_cache
             )
@@ -1301,6 +1319,9 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         """
         Builds the Messages API request kwargs for one structured-output call.
         """
+        prompt_cache = self._defer_to_caller_breakpoints(
+            prompt_cache, [messages, dict_merge_options]
+        )
         str_system_prompt: str = self._resolve_system_prompt(
             system_prompt,
             None,

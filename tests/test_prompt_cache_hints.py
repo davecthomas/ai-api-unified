@@ -471,19 +471,26 @@ class TestAnthropicBreakpointLimit:
             prompt_cache=HINT_DEFAULT,
         )
 
-    def test_two_free_slots_add_both_breakpoints(self) -> None:
-        dict_kwargs = self._kwargs(2)
+    def test_no_caller_breakpoints_adds_both(self) -> None:
+        dict_kwargs = self._kwargs(0)
         assert "cache_control" in dict_kwargs
         assert isinstance(dict_kwargs["system"], list)
 
-    def test_one_free_slot_keeps_only_the_system_breakpoint(self) -> None:
-        dict_kwargs = self._kwargs(3)
+    def test_caller_breakpoints_take_precedence(self) -> None:
+        dict_kwargs = self._kwargs(1)
         assert "cache_control" not in dict_kwargs
-        assert isinstance(dict_kwargs["system"], list)
+        assert dict_kwargs["system"] == SYSTEM_PROMPT
 
-    def test_no_free_slots_adds_no_breakpoints(self) -> None:
-        dict_kwargs = self._kwargs(4)
-        assert "cache_control" not in dict_kwargs
+    def test_structured_output_defers_to_caller_breakpoints(self) -> None:
+        dict_kwargs = _anthropic()._build_structured_request_kwargs(
+            response_schema={"type": "object"},
+            system_prompt=SYSTEM_PROMPT,
+            prompt=None,
+            messages=self._messages(4),
+            max_response_tokens=1024,
+            dict_merge_options={},
+            prompt_cache=HINT_DEFAULT,
+        )
         assert dict_kwargs["system"] == SYSTEM_PROMPT
 
 
