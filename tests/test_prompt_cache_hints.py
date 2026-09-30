@@ -520,3 +520,12 @@ class TestOlderSdkGating:
             assert client._build_converse_system(SYSTEM_PROMPT, HINT_EXTENDED) == [
                 {"text": SYSTEM_PROMPT}
             ]
+
+
+class TestOpenAIDatedSnapshots:
+    def test_dated_snapshot_gets_extended_retention(self) -> None:
+        client = _openai(model="gpt-4.1-2025-04-14")
+        assert (
+            client._build_prompt_cache_kwargs(HINT_EXTENDED)["prompt_cache_retention"]
+            == "24h"
+        )

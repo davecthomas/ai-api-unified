@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+import re
 import time
 from collections.abc import Iterator
 from datetime import date
@@ -1783,9 +1784,13 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         dict_kwargs: dict[str, Any] = {}
         if prompt_cache.key:
             dict_kwargs["prompt_cache_key"] = prompt_cache.key
+        # Dated snapshots (gpt-4.1-2025-04-14) share their family's retention.
+        str_base_model: str = re.sub(
+            r"-\d{4}-\d{2}-\d{2}$", "", self.completions_model.strip().lower()
+        )
         if (
             prompt_cache.retention is AIPromptCacheRetention.EXTENDED
-            and self.completions_model in self.SET_PROMPT_CACHE_24H_MODELS
+            and str_base_model in self.SET_PROMPT_CACHE_24H_MODELS
         ):
             dict_kwargs["prompt_cache_retention"] = "24h"
         set_known: frozenset[str] | None = self._known_provider_option_keys()
