@@ -1,4 +1,4 @@
-# ai-api-unified 2.31.0
+# ai-api-unified 2.32.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -6,6 +6,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 `ai-api-unified` is a unified Python library for AI completions, embeddings, image generation, video generation, and voice. Application code targets stable base interfaces and factory entry points while environment configuration selects the concrete providers at runtime.
+
+Because every provider sits behind the same interface, the library can also
+keep your application running when a provider cannot: configure a
+[fallback chain](#model-fallback) and a request that fails because a model is
+overloaded, rate limited, or out of quota is retried on the next model you
+listed, on the same provider or a different one, with no change to the
+calling code.
 
 **Production status.** This library is in production use, serving live traffic
 across several systems. It is published on PyPI on a regular release cadence,
@@ -81,6 +88,14 @@ Use this library when you want one consistent interface across multiple AI provi
 - image generation
 - video generation
 - text-to-speech and selected speech-to-text flows
+
+Across those capabilities the library gives you:
+
+- one interface per capability, so swapping providers is a configuration change
+- automatic [model fallback](#model-fallback) for completions, so an outage,
+  rate limit, or exhausted quota on one model is served by the next
+- cost tracking, prompt caching, PII redaction, and observability middleware
+  that work the same way on every engine
 
 The public entry points are the stable base interfaces and factories:
 
@@ -236,6 +251,30 @@ client: AIBaseCompletions = AIFactory.get_ai_completions_client()
 response: str = client.send_prompt("Say hello in one short sentence.")
 print(response)
 ```
+
+### Completions with automatic fallback
+
+Add one setting and the same client keeps serving when the primary model
+cannot. The chain below runs Claude first, then OpenAI, then Gemini:
+
+```bash
+COMPLETIONS_ENGINE=claude
+COMPLETIONS_MODEL_NAME=claude-opus-5
+COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
+```
+
+```python
+from ai_api_unified import AIFactory
+
+client = AIFactory.get_ai_completions_client()   # an AiFallbackCompletions
+response: str = client.send_prompt("Say hello in one short sentence.")
+print(response, "served by", client.last_route.label)
+```
+
+Nothing else changes: `send_prompt`, `send_conversation`,
+`send_structured_output`, streaming, and the async variants all work as
+before. See [Model fallback](#model-fallback) for what triggers a failover,
+what does not, and how to see which model answered.
 
 ### Streaming Completions
 
@@ -622,6 +661,9 @@ except AiProviderRequestError as error:
         raise
 ```
 
+You do not have to write that loop yourself: a [fallback chain](#model-fallback)
+does it inside the client.
+
 ### Batch completions (Anthropic)
 
 The `claude` engine can process many prompts as one asynchronous batch through
@@ -985,6 +1027,215 @@ than ignoring them.
 A blank retry-policy setting (`COMPLETIONS_RETRY_POLICY=`) is treated as
 unconfigured and falls back to `default` across every OpenAI-backed capability.
 
+## Model fallback
+
+A fallback chain keeps completions flowing when a model cannot serve a
+request. You list the models to try, in order; the factory returns a client
+with the same interface as a single engine; and a request that fails on one
+candidate because that model is overloaded, rate limited, or out of quota is
+retried on the next. The candidates can be on the same provider
+(`claude-opus-5` then `claude-sonnet-5`) or on different ones
+(`claude` then `openai` then `google-gemini`).
+
+### Why it exists
+
+Provider incidents, per-minute rate limits, and exhausted monthly quotas all
+look the same to an application: a request that raises. Before this feature
+you caught `AiProviderRequestError`, built a second client, and re-sent the
+request by hand, in every code path. The chain moves that logic into the
+client, and it uses the classification every engine already puts on the
+error (`fallback_reason`, see
+[Retry policy and typed request errors](#retry-policy-and-typed-request-errors))
+so it acts only on failures another model could serve.
+
+### Setting up a chain
+
+From configuration, which is the usual way:
+
+```bash
+# The primary stays where it always was.
+COMPLETIONS_ENGINE=claude
+COMPLETIONS_MODEL_NAME=claude-opus-5
+
+# Ordered engine:model pairs to try after the primary fails.
+COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
+
+# Optional. Which failures trigger a move; this is the default.
+COMPLETIONS_FALLBACK_ON=unavailable,rate_limited,quota_exhausted
+```
+
+Or in code, which overrides the settings:
+
+```python
+from ai_api_unified import AIFactory, AIFallbackCandidate, AiFallbackReason
+
+client = AIFactory.get_ai_completions_client(
+    completions_engine="claude",
+    model_name="claude-opus-5",
+    fallbacks=[
+        ("openai", "gpt-5.6-luna"),
+        AIFallbackCandidate(engine="google-gemini", model="gemini-3.7-flash"),
+    ],
+    fallback_on={AiFallbackReason.UNAVAILABLE, AiFallbackReason.QUOTA_EXHAUSTED},
+)
+```
+
+Rules for the chain:
+
+- The split in `COMPLETIONS_FALLBACKS` is on the first colon only, so Bedrock
+  ids keep theirs: `bedrock:amazon.nova-lite-v1:0`. A pair with no model
+  (`google-gemini`) uses that engine's default model.
+- Each fallback engine needs its own credentials and optional extra, exactly
+  as it would if it were the primary.
+- The factory checks every fallback engine token against the provider
+  registry when it builds the client, so a typo fails at startup, long
+  before any outage.
+- Passing `fallbacks=[]` in code turns the chain off even when the setting
+  is present.
+
+### What happens on a request
+
+1. The request goes to the primary. The engine's own retry schedule runs
+   first, so a rate limit fails over only after backoff runs out.
+2. If the engine raises `AiProviderRequestError` with a `fallback_reason` in
+   the configured set, the client logs a warning naming both candidates and
+   the reason, and sends the request to the next candidate.
+3. The client builds a fallback the first time a request needs it. When a
+   build fails (missing extra, bad credentials, unsupported option), the
+   client logs it once and skips that candidate for the rest of the
+   process, so a broken fallback never breaks startup or blocks the rest
+   of the chain.
+4. The client skips, with a warning, a fallback that lacks a capability the
+   call needs (structured output, tool use, async, streaming).
+5. When every candidate has failed, the client raises the last failure.
+
+| Reason | Fails over by default | Typical causes |
+| ------ | --------------------- | -------------- |
+| `UNAVAILABLE` | yes | 5xx, Anthropic 529 overloaded, Bedrock `ServiceUnavailableException`, a failed connection |
+| `RATE_LIMITED` | yes | 429 after the engine's backoff is exhausted |
+| `QUOTA_EXHAUSTED` | yes | OpenAI `insufficient_quota`, Anthropic low credit balance, Bedrock `ServiceQuotaExceededException`, a Gemini daily quota |
+| `MODEL_UNAVAILABLE` | no | 404, an unknown or retired model id, a model not offered in the region |
+| `None` | never | validation errors, authentication, a client-side timeout, a safety refusal |
+
+`MODEL_UNAVAILABLE` is off by default because an unknown model id usually
+means a configuration typo, and a working fallback would hide it. Turn it on
+with `fallback_on` or `COMPLETIONS_FALLBACK_ON` when you want an unknown or
+retired model to fail over. A safety refusal is never a trigger: retrying a
+refused request on another model is a policy decision, not a reliability one,
+and it belongs in your code if you want it.
+
+### Seeing which model answered
+
+Every failover is logged, on the logger
+`ai_api_unified.completions.ai_fallback_completions`, and each record carries
+an `ai_fallback_event` field plus the candidates and reason involved, so a
+log processor can count and alert on them without parsing the message:
+
+| Level | `ai_fallback_event` | When |
+| ----- | ------------------- | ---- |
+| ERROR | `failover` | A candidate failed with a trigger reason and the request is moving to the next one. Fields: `operation`, `fallback_from`, `fallback_to`, `fallback_reason`, `status_code`. |
+| WARNING | `served_by_fallback` | A fallback answered a request the primary could not. Once per request that moved. Fields: `operation`, `fallback_from`, `fallback_to`, `fallback_reason`. |
+| ERROR | `chain_exhausted` | Every candidate failed; the last error is about to be raised. |
+| ERROR | `candidate_unbuildable` | A fallback could not be constructed and is out of the chain for this process. |
+| WARNING | `candidate_skipped` | A fallback lacks a capability the call needs. |
+
+The messages start with `FALLBACK`, `FALLBACK SERVED`, or `FALLBACK
+EXHAUSTED`, so they stand out in plain log output too. A request the primary
+serves logs nothing. In code:
+
+```python
+turn = client.send_conversation("system", messages, tools=tools)
+turn.provider_engine, turn.model_name     # the candidate that served the turn
+
+result = client.send_structured_output(prompt, response_model=Report)
+result.provider_engine, result.model_name
+
+text = client.send_prompt("...")
+client.last_route                          # AIFallbackCandidate for the last call
+client.last_route.label                    # "openai:gpt-5.6-luna"
+```
+
+Cost follows the route with no extra configuration: each engine emits its own
+observability and cost events, so a call served by a fallback is billed to
+that engine and model. `client.compute_completion_cost(...)` and
+`price_per_1k_tokens()` price at the candidate that served the most recent
+call. `client.capabilities` reports the primary's capabilities.
+
+### Conversations, streaming, and batches
+
+The engines shape their requests differently, and three consequences follow.
+
+**Conversations fail over on the first turn, then stay put.** A history that
+holds engine-shaped entries (replayed `raw_content`, tool results) cannot be
+sent to another engine. While the history is plain user, assistant, and
+system text, a turn can fail over. After that the client reads which engine
+family shaped the history and sends the turn to a candidate of that family,
+with fallback off; a failure there propagates. Because routing is read from
+the history, one client can serve conversations on different engines at the
+same time.
+
+```python
+messages = [{"role": "user", "content": "Summarize ticket VL-123."}]
+turn = client.send_conversation("You are a support agent.", messages, tools=tools)
+client.extend_messages_with_turn(messages, turn)          # shape of the engine that answered
+for call in turn.tool_calls:
+    messages.append(
+        client.build_tool_result_message(
+            tool_call_id=call.id,
+            result=run_tool(call),
+            messages=messages,                             # lets it match the history's shape
+        )
+    )
+turn = client.send_conversation("You are a support agent.", messages, tools=tools)
+```
+
+Pass `messages=` to `build_tool_result_message` whenever one client serves
+more than one conversation; without it the result takes the shape of the
+engine that served the most recent call.
+
+**Streams fail over only before the first chunk.** Once a candidate has
+yielded output the caller already holds partial text, so a later error
+propagates instead of restarting on another model.
+
+**Batches and token counts always use the primary.** Batch jobs are
+provider-specific, and token counts are model-specific.
+
+### Per-call control
+
+`provider_options={"fallback": "none"}` keeps one request on the primary,
+for a call where a different model would be the wrong answer even during an
+outage. The client removes the key before the options reach an engine, so
+the same call works on a plain engine client too.
+
+The prompt cache hint (`AIPromptCacheHint`) is provider-neutral and carries
+across the chain.
+
+### Configuration reference
+
+| Setting | Meaning |
+| ------- | ------- |
+| `COMPLETIONS_FALLBACKS` | Ordered `engine:model` pairs tried after the primary fails. Blank or unset means no chain. |
+| `COMPLETIONS_FALLBACK_ON` | Comma-separated `AiFallbackReason` values that trigger a move. Default `unavailable,rate_limited,quota_exhausted`. |
+| `fallbacks=` (factory argument) | Same as the setting, as `(engine, model)` tuples or `AIFallbackCandidate` objects; overrides the setting. `[]` turns the chain off. |
+| `fallback_on=` (factory argument) | Same as the setting, as reasons or their values; overrides the setting. |
+
+Exports: `AiFallbackCompletions`, `AIFallbackCandidate`,
+`DEFAULT_FALLBACK_REASONS`, `AiFallbackReason`.
+
+### Testing a chain against live providers
+
+A live test runs Claude as the primary with an unknown model id and OpenAI
+as the fallback, so a real 404 drives a real second request. It also covers
+a healthy primary that never builds its fallback and a first conversation
+turn that fails over:
+
+```bash
+poetry run pytest -m nonmock tests/test_model_fallback_nonmock.py -q
+```
+
+It needs `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in `.env` and skips without
+them.
+
 ## Configuration
 
 ### Required Engine Selectors
@@ -1004,6 +1255,8 @@ There is no implicit default provider. Set the selector for each capability you 
 | Environment variable        | Notes                                                                                       |
 | --------------------------- | ------------------------------------------------------------------------------------------- |
 | `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
+| `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
+| `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted` |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
 | `VIDEO_MODEL_NAME`          | Optional video model override                                                               |

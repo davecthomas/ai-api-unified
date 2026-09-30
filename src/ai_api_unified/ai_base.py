@@ -659,6 +659,9 @@ class AITurnResult(BaseModel):
         raw_content: Engine-specific content blocks for this turn, replayable
             verbatim as the next assistant message. Opaque to callers.
         usage: Provider-reported token usage for this turn.
+        provider_engine: Engine token that served the turn, set by a fallback
+            client; None when a single engine served it.
+        model_name: Model that served the turn, set alongside provider_engine.
     """
 
     text: str | None = None
@@ -666,6 +669,8 @@ class AITurnResult(BaseModel):
     finish_reason: AIFinishReason
     raw_content: Any = None
     usage: AITokenUsage = Field(default_factory=AITokenUsage)
+    provider_engine: str | None = None
+    model_name: str | None = None
 
 
 class AIStructuredOutputResult(BaseModel):
@@ -679,12 +684,17 @@ class AIStructuredOutputResult(BaseModel):
         finish_reason: Normalized stop reason (see AIFinishReason).
         usage: Provider-reported token usage for the call.
         raw_text: Raw model output text before JSON parsing (empty on refusal).
+        provider_engine: Engine token that served the call, set by a fallback
+            client; None when a single engine served it.
+        model_name: Model that served the call, set alongside provider_engine.
     """
 
     data: dict[str, Any] | None = None
     finish_reason: AIFinishReason
     usage: AITokenUsage = Field(default_factory=AITokenUsage)
     raw_text: str = ""
+    provider_engine: str | None = None
+    model_name: str | None = None
 
 
 class AIEmbeddingsCapabilitiesBase(BaseModel):
@@ -2783,6 +2793,21 @@ class AIBaseCompletions(AIBase):
             return {}
         # Normal return with the keyword to splat into the hook call.
         return {"prompt_cache": prompt_cache}
+
+    def _raise_request_error(self, exception: Exception) -> None:
+        """
+        Re-raises one provider SDK transport error as AiProviderRequestError.
+
+        Engines override this with their SDK's error mapping. The base returns
+        without raising, so a caller that needs the typed form (for example a
+        fallback client reading a streaming error) can call it on any engine
+        and re-raise the original when nothing matched.
+
+        Args:
+            exception: Exception raised by the provider SDK.
+        """
+        # Normal return: the base engine maps nothing.
+        return None
 
     @staticmethod
     def _resolve_prompt_cache_hint(

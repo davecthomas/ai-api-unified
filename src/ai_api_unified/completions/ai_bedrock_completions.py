@@ -1304,6 +1304,10 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             "botocore read_timeout at client construction instead."
         )
 
+    def _raise_request_error(self, exception: Exception) -> None:
+        """Base hook; see _raise_bedrock_request_error."""
+        self._raise_bedrock_request_error(exception)
+
     def _raise_bedrock_request_error(self, exception: Exception) -> None:
         """
         Re-raises one botocore transport error as the typed request error.

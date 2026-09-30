@@ -4,6 +4,44 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.32.0
+
+### Added
+
+- Model fallback. `AIFactory.get_ai_completions_client(fallbacks=...)`, or
+  the `COMPLETIONS_FALLBACKS` setting (`engine:model` pairs, in order),
+  returns an `AiFallbackCompletions` that retries a failed request on the
+  next candidate. The primary is built up front as before; each fallback
+  is built the first time a request needs it, and one that cannot be built
+  is logged and skipped. A request moves on only when the engine raises
+  `AiProviderRequestError` with a `fallback_reason` in the configured set:
+  `UNAVAILABLE`, `RATE_LIMITED`, and `QUOTA_EXHAUSTED` by default, set with
+  `fallback_on` or `COMPLETIONS_FALLBACK_ON`. `MODEL_UNAVAILABLE` is off by
+  default. Every other exception propagates. Conversations fail over while
+  the history is provider-neutral; after that the turn goes to a candidate
+  of the engine family that shaped the history, so one client can serve
+  conversations on different engines. Streams fail over only before the
+  first chunk; batches, token counting, and capabilities always use the
+  primary; cost helpers price at the candidate that served the last call.
+- `AITurnResult` and `AIStructuredOutputResult` gained `provider_engine` and
+  `model_name`, set by a fallback client to the candidate that served the
+  call; `AiFallbackCompletions.last_route` reports it for calls that return
+  a string.
+- `provider_options={"fallback": "none"}` keeps one call on the primary.
+  The wrapper removes the key before the options reach an engine.
+- `AiFallbackCompletions.build_tool_result_message` accepts `messages=` so
+  the tool result takes the shape of the engine that produced the history.
+- Every engine implements the `_raise_request_error` hook, so a fallback
+  client can classify the raw SDK error a streaming call raises at its
+  first chunk.
+- Fallback log events on `ai_api_unified.completions.ai_fallback_completions`:
+  `failover` (ERROR), `served_by_fallback` (WARNING), `chain_exhausted`
+  (ERROR), `candidate_unbuildable` (ERROR), and `candidate_skipped`
+  (WARNING), each with an `ai_fallback_event` field and the candidates and
+  reason involved.
+- Exports: `AiFallbackCompletions`, `AIFallbackCandidate`,
+  `DEFAULT_FALLBACK_REASONS`.
+
 ## 2.31.0
 
 ### Added
