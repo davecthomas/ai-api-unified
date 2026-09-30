@@ -1022,9 +1022,11 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         """
         Returns the cache-write result-summary kwargs for one Bedrock response.
 
-        Converse reports a single `cacheWriteInputTokens` with no TTL breakdown,
-        so the count is attributed to the 5-minute tier — the only cache lifetime
-        Bedrock exposes for the Anthropic models this engine routes to.
+        Converse reports the per-TTL split in `usage.cacheDetails` (entries of
+        `{"ttl": "5m" | "1h", "inputTokens": n}`), which matters once a request
+        asks for the 1-hour cachePoint TTL: those writes bill at a higher rate.
+        When the split is absent, the aggregate `cacheWriteInputTokens` is
+        attributed to the 5-minute tier, the default cache lifetime.
 
         Args:
             response: Bedrock converse response dictionary.
@@ -1033,6 +1035,22 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             Result-summary cache-write fields; both None when unreported.
         """
         usage: dict[str, Any] = response.get("usage", {})
+        list_details: list[dict[str, Any]] = usage.get("cacheDetails") or []
+        if list_details:
+            int_5m: int = 0
+            int_1h: int = 0
+            # Loop over the per-TTL entries so each write bills at its own rate.
+            for dict_detail in list_details:
+                int_tokens: int = int(dict_detail.get("inputTokens") or 0)
+                if dict_detail.get("ttl") == "1h":
+                    int_1h += int_tokens
+                else:
+                    int_5m += int_tokens
+            # Early return with the provider-reported per-TTL split.
+            return {
+                "provider_cache_write_5m_tokens": int_5m or None,
+                "provider_cache_write_1h_tokens": int_1h or None,
+            }
         # Normal return with cache-write usage attributed to the 5-minute tier.
         return {
             "provider_cache_write_5m_tokens": usage.get("cacheWriteInputTokens"),

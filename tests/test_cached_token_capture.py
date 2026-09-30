@@ -240,6 +240,28 @@ class TestBedrockCacheWriteCapture:
             "provider_cache_write_1h_tokens": None,
         }
 
+    def test_splits_converse_writes_by_cache_details_ttl(self) -> None:
+        pytest.importorskip("boto3")
+        from ai_api_unified.completions.ai_bedrock_completions import (
+            AiBedrockCompletions,
+        )
+
+        assert AiBedrockCompletions._cache_write_kwargs(
+            {
+                "usage": {
+                    "inputTokens": 600,
+                    "cacheWriteInputTokens": 1500,
+                    "cacheDetails": [
+                        {"ttl": "1h", "inputTokens": 1200},
+                        {"ttl": "5m", "inputTokens": 300},
+                    ],
+                }
+            }
+        ) == {
+            "provider_cache_write_5m_tokens": 300,
+            "provider_cache_write_1h_tokens": 1200,
+        }
+
     def test_absent_cache_write_usage_reports_none(self) -> None:
         pytest.importorskip("boto3")
         from ai_api_unified.completions.ai_bedrock_completions import (
