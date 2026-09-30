@@ -641,3 +641,43 @@ class TestBedrockProviderOptionsPrecedence:
         assert client._build_converse_system(
             SYSTEM_PROMPT, HINT_EXTENDED, None, dict_options
         ) == [{"text": SYSTEM_PROMPT}]
+
+
+class TestAnthropicNestedBreakpoints:
+    def test_cache_control_inside_tool_result_content_is_counted(self) -> None:
+        list_messages: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "result",
+                                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        assert AiAnthropicCompletions._count_cache_breakpoints(list_messages, {}) == 1
+
+    def test_messages_override_in_provider_options_is_counted(self) -> None:
+        dict_options: dict[str, Any] = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "x",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ]
+        }
+        assert AiAnthropicCompletions._count_cache_breakpoints([], dict_options) == 1

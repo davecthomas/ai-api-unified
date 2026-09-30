@@ -274,6 +274,22 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         # Normal return for SDK objects.
         return isinstance(marker, dict) or getattr(marker, "type", None) == "ephemeral"
 
+    @staticmethod
+    def _block_field(block: Any, str_field: str) -> Any:
+        """Reads one field from a dict block or an SDK object block."""
+        if isinstance(block, dict):
+            # Early return for caller-built blocks.
+            return block.get(str_field)
+        # Normal return for SDK objects.
+        return getattr(block, str_field, None)
+
+    @classmethod
+    def _content_blocks(cls, container: Any) -> list[Any]:
+        """Returns a message's or tool_result's content as a block list."""
+        content: Any = cls._block_field(container, "content")
+        # Normal return: string content holds no blocks.
+        return content if isinstance(content, list) else []
+
     @classmethod
     def _count_cache_breakpoints(
         cls,
@@ -283,12 +299,12 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         """
         Counts cache_control markers where the Messages API accepts them.
 
-        Looks only at the positions a breakpoint can occupy: each message and
-        its content blocks, and the system and tools blocks and top-level
+        Looks only at the positions a breakpoint can occupy: each message, its
+        content blocks, and the content blocks nested in a tool_result; plus
+        the system and tools blocks, a messages override, and top-level
         cache_control in provider_options. It never descends into tool_use
-        inputs or tool_result payloads, where a key named cache_control is
-        user data rather than a breakpoint, so the scan stays linear in the
-        number of blocks.
+        inputs, where a key named cache_control is user data rather than a
+        breakpoint, so the scan stays linear in the number of blocks.
 
         Args:
             messages: Caller-supplied message history.
@@ -298,18 +314,19 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             Number of breakpoints found.
         """
         int_count: int = 0
-        # Loop over each message and its content blocks.
-        for message in messages:
+        list_messages: list[Any] = list(messages)
+        if isinstance(dict_merge_options.get("messages"), list):
+            list_messages += dict_merge_options["messages"]
+        # Loop over each message, its content blocks, and tool_result content.
+        for message in list_messages:
             int_count += int(cls._has_cache_control(message))
-            content: Any = (
-                message.get("content")
-                if isinstance(message, dict)
-                else getattr(message, "content", None)
-            )
-            if isinstance(content, list):
-                int_count += sum(
-                    int(cls._has_cache_control(block)) for block in content
-                )
+            for block in cls._content_blocks(message):
+                int_count += int(cls._has_cache_control(block))
+                if cls._block_field(block, "type") == "tool_result":
+                    int_count += sum(
+                        int(cls._has_cache_control(inner))
+                        for inner in cls._content_blocks(block)
+                    )
         int_count += int(bool(dict_merge_options.get("cache_control")))
         # Loop over the provider_options fields that hold block lists.
         for str_key in ("system", "tools"):
