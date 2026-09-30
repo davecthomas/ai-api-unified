@@ -36,7 +36,13 @@ from ..ai_base import (
     RETRY_POLICY_NONE,
     SupportedDataType,
 )
-from ..ai_provider_exceptions import AiProviderRequestError
+from ..ai_provider_exceptions import (
+    FROZENSET_TRANSIENT_FALLBACK_REASONS,
+    AiFallbackReason,
+    AiProviderRequestError,
+    classify_fallback_reason_by_status,
+    classify_transport_fallback_reason,
+)
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
@@ -417,6 +423,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 f"{exception.status_code}: {exception.message}",
                 status_code=exception.status_code,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
+                fallback_reason=self._classify_fallback_reason(exception),
             ) from exception
         if isinstance(exception, (APITimeoutError, APIConnectionError)):
             raise AiProviderRequestError(
@@ -424,9 +431,60 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 f"was available: {exception}",
                 status_code=None,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
+                fallback_reason=classify_transport_fallback_reason(
+                    isinstance(exception, APITimeoutError)
+                ),
             ) from exception
         # Normal return so non-transport exceptions propagate unchanged.
         return None
+
+    @staticmethod
+    def _classify_fallback_reason(
+        exception: APIStatusError,
+    ) -> AiFallbackReason | None:
+        """
+        Maps one OpenAI status error to a fallback reason.
+
+        Reads the error code, because OpenAI returns 429 both for a rate
+        limit and for an exhausted quota (`insufficient_quota`).
+
+        Args:
+            exception: OpenAI SDK status error.
+
+        Returns:
+            The fallback reason, or None when another model would not help.
+        """
+        str_code: str = str(getattr(exception, "code", None) or "")
+        if str_code == "insufficient_quota":
+            # Early return: the account cannot pay for the request.
+            return AiFallbackReason.QUOTA_EXHAUSTED
+        if str_code == "model_not_found":
+            # Early return for an unknown model.
+            return AiFallbackReason.MODEL_UNAVAILABLE
+        if str_code == "rate_limit_exceeded":
+            # Early return for a rate limit.
+            return AiFallbackReason.RATE_LIMITED
+        # Normal return with the status-only classification.
+        return classify_fallback_reason_by_status(exception.status_code)
+
+    @classmethod
+    def _is_worth_retrying(cls, exception: Exception) -> bool:
+        """
+        Reports whether the same model might clear this error on retry.
+
+        Args:
+            exception: Exception raised by an SDK call.
+
+        Returns:
+            False for a status error whose fallback reason is not transient
+            (quota exhausted, unknown model); True otherwise.
+        """
+        if not isinstance(exception, APIStatusError):
+            # Early return: non-status errors keep the historical retry.
+            return True
+        reason: AiFallbackReason | None = cls._classify_fallback_reason(exception)
+        # Normal return: retry unless the reason says the model cannot recover.
+        return reason is None or reason in FROZENSET_TRANSIENT_FALLBACK_REASONS
 
     @staticmethod
     def _build_chat_provider_tools(list_tools: list[AITool]) -> list[dict[str, Any]]:
@@ -1378,7 +1436,13 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                             self.completions_model,
                             max_response_tokens,
                         )
-                    if attempt < max_retries - 1:
+                    bool_last_attempt: bool = attempt >= max_retries - 1
+                    if bool_last_attempt or not self._is_worth_retrying(exception):
+                        # Exhausted, or the same model cannot clear this
+                        # error (quota, unknown model): raise the typed error
+                        # rather than sleeping through the schedule.
+                        self._raise_request_error(exception)
+                    if not bool_last_attempt:
                         time.sleep(current_retry_delay)
                         current_retry_delay *= 2
                         continue

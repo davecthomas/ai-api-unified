@@ -44,7 +44,10 @@ import ai_api_unified.ai_google_base as ai_google_base_module
 from ai_api_unified.ai_completions_exceptions import (
     StructuredResponseTokenLimitError,
 )
-from ai_api_unified.ai_google_base import AIGoogleBase
+from ai_api_unified.ai_google_base import (
+    AIGoogleBase,
+    classify_gemini_fallback_reason,
+)
 
 from ..ai_base import (
     AIBaseCompletions,
@@ -490,9 +493,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 capability=self.CLIENT_TYPE_COMPLETIONS,
                 operation="send_prompt",
                 dict_input_metadata=dict_input_metadata,
-                callable_execute=lambda: self._retry_with_exponential_backoff(
-                    _generate_text,
-                    max_retries=self._effective_max_retries(),
+                callable_execute=lambda: self._run_with_typed_errors(
+                    lambda: self._retry_with_exponential_backoff(
+                        _generate_text,
+                        max_retries=self._effective_max_retries(),
+                    )
                 ),
                 callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
                     observed_result=result,
@@ -771,9 +776,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 capability=self.CLIENT_TYPE_COMPLETIONS,
                 operation="strict_schema_prompt",
                 dict_input_metadata=dict_input_metadata,
-                callable_execute=lambda: self._retry_with_exponential_backoff(
-                    _generate_structured,
-                    max_retries=self._effective_max_retries(),
+                callable_execute=lambda: self._run_with_typed_errors(
+                    lambda: self._retry_with_exponential_backoff(
+                        _generate_structured,
+                        max_retries=self._effective_max_retries(),
+                    )
                 ),
                 callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
                     observed_result=result,
@@ -1061,6 +1068,27 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         # Normal return deferring to the engine default retry budget.
         return None
 
+    def _run_with_typed_errors(self, callable_run: Any) -> Any:
+        """
+        Runs one call and re-raises Google transport errors as the typed error.
+
+        The conversation and structured-output paths already do this inline;
+        send_prompt and strict_schema_prompt route through here so every
+        public method reports fallback_reason the same way.
+
+        Args:
+            callable_run: Zero-argument callable performing the call.
+
+        Returns:
+            Whatever callable_run returns.
+        """
+        try:
+            # Normal return with the call's result.
+            return callable_run()
+        except Exception as exception:
+            self._raise_gemini_request_error(exception)
+            raise
+
     def _raise_gemini_request_error(self, exception: Exception) -> None:
         """
         Re-raises one Google SDK transport error as the typed request error.
@@ -1091,10 +1119,14 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 continue
             str_module: str = type(candidate).__module__ or ""
             if str_module.startswith("google"):
+                int_status: int | None = _probe_status_code(candidate)
                 raise AiProviderRequestError(
                     f"Google Gemini request failed: {candidate}",
-                    status_code=_probe_status_code(candidate),
+                    status_code=int_status,
                     provider_engine=self.PROVIDER_ENGINE_TOKEN,
+                    fallback_reason=classify_gemini_fallback_reason(
+                        int_status, str(candidate)
+                    ),
                 ) from exception
         # Normal return so non-Google exceptions propagate unchanged.
         return None
