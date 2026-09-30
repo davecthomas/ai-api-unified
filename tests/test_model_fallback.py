@@ -701,7 +701,11 @@ class TestFactory:
             client = AIFactory.get_ai_completions_client(
                 fallbacks=[("openai", "gpt-5.1")]
             )
-        assert isinstance(client, AiFallbackCompletions)
+            assert isinstance(client, AiFallbackCompletions)
+            # Build the OpenAI fallback through the factory while the settings
+            # (its API key) are still patched, then mock its SDK.
+            openai_client = client._client_at(1)
+        assert openai_client is not None
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         client.primary.client = Mock()
         client.primary.client.messages.create.side_effect = anthropic.APIStatusError(
@@ -709,9 +713,6 @@ class TestFactory:
             response=httpx.Response(529, request=request),
             body={"error": {"type": "overloaded_error", "message": "Overloaded"}},
         )
-        # Build the OpenAI fallback through the factory, then mock its SDK.
-        openai_client = client._client_at(1)
-        assert openai_client is not None
         message = Mock(spec=["content", "tool_calls", "refusal", "model_dump"])
         message.content = "from openai"
         message.tool_calls = None
