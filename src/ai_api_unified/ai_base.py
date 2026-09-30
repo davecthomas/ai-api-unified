@@ -2761,6 +2761,30 @@ class AIBaseCompletions(AIBase):
         return default_system_prompt
 
     @staticmethod
+    def _prompt_cache_hook_kwargs(
+        prompt_cache: AIPromptCacheHint | None,
+    ) -> dict[str, AIPromptCacheHint]:
+        """
+        Returns the prompt_cache keyword for an overridable hook, or nothing.
+
+        Provider hooks and request builders gained a prompt_cache keyword in
+        2.30.0. Passing it only when a hint is set keeps subclasses that
+        override a hook with the pre-2.30.0 signature working for every call
+        that does not use caching.
+
+        Args:
+            prompt_cache: Optional caller cache hint.
+
+        Returns:
+            {"prompt_cache": hint} when a hint is set, otherwise {}.
+        """
+        if prompt_cache is None:
+            # Early return: omit the keyword entirely.
+            return {}
+        # Normal return with the keyword to splat into the hook call.
+        return {"prompt_cache": prompt_cache}
+
+    @staticmethod
     def _resolve_prompt_cache_hint(
         other_params: AICompletionsPromptParamsBase | None,
     ) -> AIPromptCacheHint | None:
@@ -3078,7 +3102,7 @@ class AIBaseCompletions(AIBase):
                 max_response_tokens=max_response_tokens,
                 request_timeout_seconds=request_timeout_seconds,
                 provider_options=provider_options,
-                prompt_cache=prompt_cache,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         # Normal return after optional pydantic validation of the parsed data.
@@ -3207,7 +3231,7 @@ class AIBaseCompletions(AIBase):
             max_response_tokens=max_response_tokens,
             request_timeout_seconds=request_timeout_seconds,
             provider_options=provider_options,
-            prompt_cache=prompt_cache,
+            **self._prompt_cache_hook_kwargs(prompt_cache),
         )
 
     def _send_conversation_provider(
@@ -3600,7 +3624,7 @@ class AIBaseCompletions(AIBase):
                 max_response_tokens=max_response_tokens,
                 request_timeout_seconds=request_timeout_seconds,
                 provider_options=provider_options,
-                prompt_cache=prompt_cache,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         # Normal return after optional pydantic validation of the parsed data.
@@ -3661,7 +3685,7 @@ class AIBaseCompletions(AIBase):
             max_response_tokens=max_response_tokens,
             request_timeout_seconds=request_timeout_seconds,
             provider_options=provider_options,
-            prompt_cache=prompt_cache,
+            **self._prompt_cache_hook_kwargs(prompt_cache),
         )
 
     async def _asend_conversation_provider(

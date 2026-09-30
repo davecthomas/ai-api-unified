@@ -1213,7 +1213,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             tool_choice=tool_choice,
             max_response_tokens=max_response_tokens,
             dict_merge_options=dict_merge_options,
-            prompt_cache=prompt_cache,
+            **self._prompt_cache_hook_kwargs(prompt_cache),
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_conversation_observability_metadata(
@@ -1279,7 +1279,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             tool_choice=tool_choice,
             max_response_tokens=max_response_tokens,
             dict_merge_options=dict_merge_options,
-            prompt_cache=prompt_cache,
+            **self._prompt_cache_hook_kwargs(prompt_cache),
         )
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_conversation_observability_metadata(
@@ -1662,7 +1662,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             messages=messages,
             max_response_tokens=max_response_tokens,
             dict_merge_options=dict_merge_options,
-            prompt_cache=prompt_cache,
+            **self._prompt_cache_hook_kwargs(prompt_cache),
         )
         bool_stream: bool = max_response_tokens > self.NONSTREAMING_MAX_TOKENS_THRESHOLD
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
@@ -1750,7 +1750,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             messages=messages,
             max_response_tokens=max_response_tokens,
             dict_merge_options=dict_merge_options,
-            prompt_cache=prompt_cache,
+            **self._prompt_cache_hook_kwargs(prompt_cache),
         )
         bool_stream: bool = max_response_tokens > self.NONSTREAMING_MAX_TOKENS_THRESHOLD
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (

@@ -354,7 +354,29 @@ class TestSendConversationThreading:
         mock_hook: Mock = Mock(return_value=Mock(spec=AITurnResult))
         with patch.object(client, "_send_conversation_provider", mock_hook):
             client.send_conversation(SYSTEM_PROMPT, [{"role": "user", "content": "hi"}])
-        assert mock_hook.call_args.kwargs["prompt_cache"] is None
+        # Omitted rather than None, so pre-2.30.0 hook overrides keep working.
+        assert "prompt_cache" not in mock_hook.call_args.kwargs
+
+    def test_legacy_hook_override_works_without_a_hint(self) -> None:
+        client = _anthropic()
+        list_seen: list[dict[str, Any]] = []
+
+        def _legacy_hook(
+            *,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[Any],
+            tool_choice: str | None,
+            max_response_tokens: int | None,
+            request_timeout_seconds: float | None,
+            provider_options: dict[str, Any] | None,
+        ) -> Mock:
+            list_seen.append({"system_prompt": system_prompt})
+            return Mock(spec=AITurnResult)
+
+        with patch.object(client, "_send_conversation_provider", _legacy_hook):
+            client.send_conversation(SYSTEM_PROMPT, [{"role": "user", "content": "hi"}])
+        assert list_seen == [{"system_prompt": SYSTEM_PROMPT}]
 
 
 # ── Structured output and batches ───────────────────────────────────────────

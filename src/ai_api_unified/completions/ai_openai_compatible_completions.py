@@ -336,7 +336,7 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
                 messages=messages,
                 max_response_tokens=max_response_tokens,
                 dict_merge_options={},
-                prompt_cache=prompt_cache,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
             )
         )
         if self.structured_output_mode == STRUCTURED_OUTPUT_MODE_JSON_OBJECT:
