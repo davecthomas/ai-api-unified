@@ -547,7 +547,7 @@ turn = client.send_conversation(
 | Bedrock (Claude, Nova) | Implicit, best effort | `cachePoint` after the system block. EXTENDED = 1-hour TTL on Claude 4.5 and later; Nova stays at 5 minutes |
 | `openai`, `openai-responses` | Implicit on prefixes of 1,024+ tokens | Adds `prompt_cache_key`; EXTENDED sends `prompt_cache_retention="24h"` on models that offer it |
 | `google-gemini` | Implicit on Gemini 2.5+; durable (up to 24 hours, no storage fee) on Gemini 3.x from 2026-10-15 | Ignored, since there is nothing to add |
-| `openai-compatible`, other Bedrock models | Provider dependent | Ignored |
+| `openai-compatible`, other Bedrock models, and `claude` or `openai` behind a `base_url` gateway | Provider dependent | Ignored, since a gateway may reject the fields |
 
 `capabilities.implicit_prompt_caching` and `capabilities.supports_prompt_cache_hint`
 report both columns per model. Caching changes cost and latency but never the

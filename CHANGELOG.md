@@ -20,7 +20,9 @@ version lives in `pyproject.toml` (see the README release section).
   - Bedrock: a `cachePoint` after the system block on Claude and Nova models.
   - `openai` and `openai-responses`: `prompt_cache_key`, plus 24-hour
     retention on the models OpenAI offers it for.
-  - `google-gemini`, `openai-compatible`, and other Bedrock models ignore it.
+  - `google-gemini`, `openai-compatible`, and other Bedrock models ignore it,
+    as do `claude` and `openai` when `base_url` points at a gateway rather
+    than the provider's own API host.
   `EXTENDED` retention asks for the longer cache (1 hour on Anthropic and
   Bedrock, 24 hours on OpenAI) only on models that accept it.
 - `AICompletionsCapabilitiesBase.implicit_prompt_caching` and
