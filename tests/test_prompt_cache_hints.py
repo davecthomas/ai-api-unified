@@ -603,3 +603,30 @@ class TestBedrockPrecedenceAndGating:
                 "hi", _Answer, other_params=_params(HINT_DEFAULT)
             )
         assert mock_structured.call_args.kwargs["prompt_cache"] is HINT_DEFAULT
+
+
+class TestAnthropicBreakpointScan:
+    def test_cache_control_inside_tool_input_is_not_a_breakpoint(self) -> None:
+        list_messages: list[dict[str, Any]] = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "http",
+                        "input": {"headers": {"cache_control": "no-store"}},
+                    }
+                ],
+            }
+        ]
+        assert AiAnthropicCompletions._count_cache_breakpoints(list_messages, {}) == 0
+
+    def test_provider_options_system_and_tools_are_counted(self) -> None:
+        dict_options: dict[str, Any] = {
+            "system": [
+                {"type": "text", "text": "x", "cache_control": {"type": "ephemeral"}}
+            ],
+            "tools": [{"name": "t", "cache_control": {"type": "ephemeral"}}],
+        }
+        assert AiAnthropicCompletions._count_cache_breakpoints([], dict_options) == 2

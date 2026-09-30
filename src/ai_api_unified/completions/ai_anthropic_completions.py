@@ -226,7 +226,8 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     def _defer_to_caller_breakpoints(
         cls,
         prompt_cache: AIPromptCacheHint | None,
-        request_fragments: list[Any],
+        messages: list[Any] | None,
+        dict_merge_options: dict[str, Any],
     ) -> AIPromptCacheHint | None:
         """
         Drops the hint when the caller already placed cache breakpoints.
@@ -239,53 +240,84 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
 
         Args:
             prompt_cache: Optional caller cache hint.
-            request_fragments: Caller-supplied request parts to inspect.
+            messages: Caller-supplied message history.
+            dict_merge_options: Caller provider_options.
 
         Returns:
             The hint unchanged, or None when caller breakpoints are present.
         """
-        if prompt_cache is None or cls._count_cache_breakpoints(request_fragments) == 0:
+        if (
+            prompt_cache is None
+            or cls._count_cache_breakpoints(messages or [], dict_merge_options) == 0
+        ):
             # Early return: nothing to defer to.
             return prompt_cache
         # Normal return: the caller's own breakpoints take precedence.
         return None
 
-    @classmethod
-    def _count_cache_breakpoints(cls, value: Any) -> int:
+    @staticmethod
+    def _has_cache_control(block: Any) -> bool:
         """
-        Counts cache_control markers already present in request content.
-
-        Walks dicts and lists (caller-built content) and reads the
-        cache_control attribute on SDK objects (replayed raw_content).
+        Reports whether one request block carries a cache_control marker.
 
         Args:
-            value: Any request fragment: messages, content blocks, options.
+            block: A dict (caller-built) or SDK object (replayed raw_content).
 
         Returns:
-            Number of non-null cache_control markers found.
+            True for a dict with a truthy cache_control, or an SDK object whose
+            cache_control is a dict or an ephemeral CacheControl model.
         """
-        if isinstance(value, dict):
-            int_own: int = 1 if value.get("cache_control") else 0
-            # Normal return with this dict's marker plus its children's.
-            return int_own + sum(
-                cls._count_cache_breakpoints(child)
-                for str_key, child in value.items()
-                if str_key != "cache_control"
+        if isinstance(block, dict):
+            # Early return for caller-built blocks.
+            return bool(block.get("cache_control"))
+        marker: Any = getattr(block, "cache_control", None)
+        # Normal return for SDK objects.
+        return isinstance(marker, dict) or getattr(marker, "type", None) == "ephemeral"
+
+    @classmethod
+    def _count_cache_breakpoints(
+        cls,
+        messages: list[Any],
+        dict_merge_options: dict[str, Any],
+    ) -> int:
+        """
+        Counts cache_control markers where the Messages API accepts them.
+
+        Looks only at the positions a breakpoint can occupy: each message and
+        its content blocks, and the system and tools blocks and top-level
+        cache_control in provider_options. It never descends into tool_use
+        inputs or tool_result payloads, where a key named cache_control is
+        user data rather than a breakpoint, so the scan stays linear in the
+        number of blocks.
+
+        Args:
+            messages: Caller-supplied message history.
+            dict_merge_options: Caller provider_options merged into the request.
+
+        Returns:
+            Number of breakpoints found.
+        """
+        int_count: int = 0
+        # Loop over each message and its content blocks.
+        for message in messages:
+            int_count += int(cls._has_cache_control(message))
+            content: Any = (
+                message.get("content")
+                if isinstance(message, dict)
+                else getattr(message, "content", None)
             )
-        if isinstance(value, (list, tuple)):
-            # Normal return with the markers across every element.
-            return sum(cls._count_cache_breakpoints(child) for child in value)
-        if isinstance(value, (str, bytes, int, float, bool)) or value is None:
-            # Early return because scalars carry no markers.
-            return 0
-        # Normal return for SDK objects, which expose the marker as an
-        # attribute (a CacheControlEphemeral model, or a dict).
-        marker: Any = getattr(value, "cache_control", None)
-        return (
-            1
-            if isinstance(marker, dict) or getattr(marker, "type", None) == "ephemeral"
-            else 0
-        )
+            if isinstance(content, list):
+                int_count += sum(
+                    int(cls._has_cache_control(block)) for block in content
+                )
+        int_count += int(bool(dict_merge_options.get("cache_control")))
+        # Loop over the provider_options fields that hold block lists.
+        for str_key in ("system", "tools"):
+            value: Any = dict_merge_options.get(str_key)
+            if isinstance(value, list):
+                int_count += sum(int(cls._has_cache_control(block)) for block in value)
+        # Normal return with the total breakpoint count.
+        return int_count
 
     @classmethod
     def _build_system_param(
@@ -1031,7 +1063,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         provider_options, the hint adds none; see _defer_to_caller_breakpoints.
         """
         prompt_cache = self._defer_to_caller_breakpoints(
-            prompt_cache, [messages, dict_merge_options]
+            prompt_cache, messages, dict_merge_options
         )
         dict_request_kwargs: dict[str, Any] = {
             "model": self.completions_model,
@@ -1320,7 +1352,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         Builds the Messages API request kwargs for one structured-output call.
         """
         prompt_cache = self._defer_to_caller_breakpoints(
-            prompt_cache, [messages, dict_merge_options]
+            prompt_cache, messages, dict_merge_options
         )
         str_system_prompt: str = self._resolve_system_prompt(
             system_prompt,
