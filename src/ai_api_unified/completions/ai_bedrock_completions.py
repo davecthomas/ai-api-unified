@@ -1123,8 +1123,13 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             Converse SystemContentBlock list.
         """
         list_system: list[dict[str, Any]] = [{"text": system_prompt}]
-        if prompt_cache is None or not self.capabilities.supports_prompt_cache_hint:
-            # Early return because caching was not requested or not supported.
+        if (
+            prompt_cache is None
+            or not system_prompt.strip()
+            or not self.capabilities.supports_prompt_cache_hint
+        ):
+            # Early return because caching was not requested, there is no
+            # prefix to cache, or the model does not accept checkpoints.
             return list_system
         dict_cache_point: dict[str, str] = {"type": "default"}
         str_model_lower: str = self.model.lower()

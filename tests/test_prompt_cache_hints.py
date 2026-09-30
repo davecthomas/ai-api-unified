@@ -432,3 +432,12 @@ class TestStructuredOutputAndBatch:
             "ttl": "1h",
         }
         assert isinstance(list_requests[1]["params"]["system"], str)
+
+
+class TestBlankSystemPrompt:
+    def test_anthropic_keeps_blank_system_as_string(self) -> None:
+        assert AiAnthropicCompletions._build_system_param("", HINT_DEFAULT) == ""
+
+    def test_bedrock_skips_cache_point_for_blank_system(self) -> None:
+        client = _bedrock("us.anthropic.claude-opus-5")
+        assert client._build_converse_system("  ", HINT_DEFAULT) == [{"text": "  "}]

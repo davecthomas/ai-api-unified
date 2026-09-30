@@ -239,10 +239,13 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             prompt_cache: Optional caller cache hint.
 
         Returns:
-            The plain system string when no hint is set (the historical shape),
-            otherwise one text block carrying cache_control.
+            The plain system string when no hint is set (the historical shape)
+            or the prompt is blank, otherwise one text block carrying
+            cache_control. The Messages API rejects an empty text block, so a
+            blank prompt stays a string rather than turning a cost-only hint
+            into a 400.
         """
-        if prompt_cache is None:
+        if prompt_cache is None or not system_prompt.strip():
             # Early return with the unchanged string form.
             return system_prompt
         # Normal return with a cacheable system text block.
