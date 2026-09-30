@@ -41,6 +41,7 @@ from ..ai_provider_exceptions import (
     AiFallbackReason,
     AiProviderRequestError,
     classify_fallback_reason_by_status,
+    classify_transport_fallback_reason,
 )
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
@@ -430,12 +431,8 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 f"was available: {exception}",
                 status_code=None,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
-                # A timeout is the caller's own limit, so it is no reason to
-                # change model; a failed connection means the host is down.
-                fallback_reason=(
-                    None
-                    if isinstance(exception, APITimeoutError)
-                    else AiFallbackReason.UNAVAILABLE
+                fallback_reason=classify_transport_fallback_reason(
+                    isinstance(exception, APITimeoutError)
                 ),
             ) from exception
         # Normal return so non-transport exceptions propagate unchanged.

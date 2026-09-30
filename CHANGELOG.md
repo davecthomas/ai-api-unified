@@ -29,6 +29,8 @@ version lives in `pyproject.toml` (see the README release section).
   as `QUOTA_EXHAUSTED` or `MODEL_UNAVAILABLE`, and raise
   `AiProviderRequestError` (a `RuntimeError` subclass, as before) instead
   of a plain `RuntimeError` when a transport error exhausts the schedule.
+  Gemini `send_prompt` and `strict_schema_prompt` now raise the typed error
+  too, as the conversation and structured-output paths already did.
 
 ## 2.30.0
 

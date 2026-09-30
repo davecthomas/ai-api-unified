@@ -34,14 +34,15 @@ T = TypeVar("T")
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 
-# Message fragments that mark a Gemini 429 as an exhausted quota rather than
-# a per-minute rate limit. Google reports both as RESOURCE_EXHAUSTED.
+# Message fragments that mark a Gemini 429 as an exhausted daily quota rather
+# than a per-minute rate limit. Google reports both as RESOURCE_EXHAUSTED and
+# both carry the "check your plan and billing details" sentence, so only the
+# quota id (for example GenerateRequestsPerDayPerProjectPerModel) tells them
+# apart.
 TUPLE_GEMINI_HARD_QUOTA_HINTS: tuple[str, ...] = (
-    "billing",
-    "check your plan",
-    "per day",
-    "per_day",
     "perday",
+    "per_day",
+    "per day",
     "daily",
 )
 
@@ -472,6 +473,9 @@ class AIGoogleBase:
                 gexc.Aborted,  # safe to retry
                 gexc.RetryError,  # wrapped retries
             ) as exc:
+                if _cannot_recover(_extract_status_code(exc), str(exc)):
+                    # Early exit: a daily quota, so backoff is wasted.
+                    raise RuntimeError(f"Google API error: {exc}") from exc
                 _retry_later(
                     exc,
                     warning_context="Retryable Google API error",
@@ -535,7 +539,11 @@ class AIGoogleBase:
                 message_text_gemini: str = str(gemini_error)
                 if _cannot_recover(status_code, message_text_gemini):
                     # Early exit: quota or model gone, so backoff is wasted.
-                    raise gemini_error
+                    # Wrapped like the non-retryable branch below, so the
+                    # public exception type does not change.
+                    raise RuntimeError(
+                        f"Google Gemini error{f' ({status_code})' if status_code is not None else ''}: {gemini_error}"
+                    ) from gemini_error
                 if (
                     status_code in self.retryable_http_status_codes
                     or _should_retry_message(message_text_gemini)
@@ -562,7 +570,9 @@ class AIGoogleBase:
 
                 if _cannot_recover(status_code_api, message_text_api):
                     # Early exit: quota or model gone, so backoff is wasted.
-                    raise gemini_api_error
+                    raise RuntimeError(
+                        f"Google Gemini API error{f' ({status_code_api})' if status_code_api is not None else ''}: {gemini_api_error}"
+                    ) from gemini_api_error
                 if (
                     status_code_api in self.retryable_http_status_codes
                     or _should_retry_message(message_text_api)

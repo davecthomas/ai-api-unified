@@ -105,7 +105,7 @@ class TestBaseline:
     @pytest.mark.parametrize(
         ("status", "reason"),
         [
-            (None, R.UNAVAILABLE),
+            (None, None),
             (429, R.RATE_LIMITED),
             (404, R.MODEL_UNAVAILABLE),
             (500, R.UNAVAILABLE),
@@ -159,6 +159,12 @@ class TestAnthropic:
             ),
             (400, "invalid_request_error", "messages: bad shape", None),
             (401, "authentication_error", "invalid x-api-key", None),
+            (
+                403,
+                "permission_error",
+                "Your organization has been disabled. Contact billing support.",
+                None,
+            ),
         ],
     )
     def test_status_error_mapping(
@@ -270,6 +276,8 @@ class TestBedrock:
             ),
             ("ValidationException", 400, "messages: bad", None),
             ("AccessDeniedException", 403, "denied", None),
+            ("TooManyRequestsException", 429, "slow down", R.RATE_LIMITED),
+            ("ServiceUnavailable", 503, "x", R.UNAVAILABLE),
         ],
     )
     def test_client_error_mapping(
@@ -312,6 +320,21 @@ class TestBedrock:
         assert client.client.converse.call_count == 1
         client._sleep_with_backoff.assert_not_called()
 
+    def test_strict_schema_exits_once_on_model_error(self) -> None:
+        client = _bedrock()
+        client.client.converse.side_effect = _bedrock_error("ModelErrorException", 424)
+        with pytest.raises(AiProviderRequestError) as exc_info:
+            client.strict_schema_prompt("hi", _Answer)
+        assert exc_info.value.fallback_reason is R.UNAVAILABLE
+        assert client.client.converse.call_count == 1
+
+    def test_strict_schema_reports_connection_errors_as_typed(self) -> None:
+        client = _bedrock()
+        client.client.converse.side_effect = EndpointConnectionError(endpoint_url="x")
+        with pytest.raises(AiProviderRequestError) as exc_info:
+            client.strict_schema_prompt("hi", _Answer)
+        assert exc_info.value.fallback_reason is R.UNAVAILABLE
+
     def test_send_prompt_still_retries_throttling(self) -> None:
         client = _bedrock()
         client.client.converse.side_effect = _bedrock_error("ThrottlingException", 429)
@@ -324,16 +347,25 @@ class TestBedrock:
 # ── Gemini ──────────────────────────────────────────────────────────────────
 
 
+# Google's live RESOURCE_EXHAUSTED text: both carry the billing sentence, and
+# only the quota id separates a per-minute limit from a daily one.
+GEMINI_PER_MINUTE_MESSAGE: str = (
+    "429 RESOURCE_EXHAUSTED. You exceeded your current quota, please check your "
+    "plan and billing details. quota_metric: generativelanguage.googleapis.com/"
+    "generate_content_requests, quota_id: GenerateRequestsPerMinutePerProjectPerModel "
+    "retry_delay { seconds: 30 }"
+)
+GEMINI_PER_DAY_MESSAGE: str = GEMINI_PER_MINUTE_MESSAGE.replace(
+    "PerMinutePerProjectPerModel", "PerDayPerProjectPerModel"
+)
+
+
 class TestGemini:
     @pytest.mark.parametrize(
         ("status", "message", "reason"),
         [
-            (429, "Quota exceeded for requests per minute", R.RATE_LIMITED),
-            (
-                429,
-                "You exceeded your current quota, please check your plan and billing details.",
-                R.QUOTA_EXHAUSTED,
-            ),
+            (429, GEMINI_PER_MINUTE_MESSAGE, R.RATE_LIMITED),
+            (429, GEMINI_PER_DAY_MESSAGE, R.QUOTA_EXHAUSTED),
             (
                 429,
                 "Quota exceeded: generate_content_requests_per_day",
@@ -370,18 +402,45 @@ class TestGemini:
             429,
             {
                 "error": {
-                    "message": "You exceeded your current quota, please check "
-                    "your plan and billing details.",
+                    "message": GEMINI_PER_DAY_MESSAGE,
                     "status": "RESOURCE_EXHAUSTED",
                 }
             },
         )
         operation: Mock = Mock(side_effect=error)
         with patch("ai_api_unified.ai_google_base.time.sleep") as mock_sleep:
-            with pytest.raises(genai_errors.ClientError):
+            with pytest.raises(RuntimeError) as exc_info:
                 client._retry_with_exponential_backoff(operation, max_retries=5)
+        # Wrapped like the non-retryable branch, with the SDK error as cause.
+        assert exc_info.value.__cause__ is error
         assert operation.call_count == 1
         mock_sleep.assert_not_called()
+
+    def test_send_prompt_reports_the_typed_error(self) -> None:
+        genai_errors = pytest.importorskip("google.genai.errors")
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GoogleGeminiCompletions,
+        )
+
+        with patch.object(
+            GoogleGeminiCompletions,
+            "_initialize_client",
+            lambda self: setattr(self, "client", Mock()),
+        ):
+            client = GoogleGeminiCompletions(model="gemini-2.5-flash")
+        client.client.models.generate_content.side_effect = genai_errors.ClientError(
+            429,
+            {
+                "error": {
+                    "message": GEMINI_PER_DAY_MESSAGE,
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            },
+        )
+        with patch("ai_api_unified.ai_google_base.time.sleep"):
+            with pytest.raises(AiProviderRequestError) as exc_info:
+                client.send_prompt("hi")
+        assert exc_info.value.fallback_reason is R.QUOTA_EXHAUSTED
 
     def test_backoff_loop_still_retries_a_rate_limit(self) -> None:
         genai_errors = pytest.importorskip("google.genai.errors")
@@ -396,8 +455,7 @@ class TestGemini:
         ):
             client = GoogleGeminiCompletions(model="gemini-2.5-flash")
         error = genai_errors.ClientError(
-            429,
-            {"error": {"message": "Quota exceeded for requests per minute"}},
+            429, {"error": {"message": GEMINI_PER_MINUTE_MESSAGE}}
         )
         operation: Mock = Mock(side_effect=error)
         with patch("ai_api_unified.ai_google_base.time.sleep"):

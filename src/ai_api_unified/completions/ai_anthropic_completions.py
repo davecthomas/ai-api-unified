@@ -56,6 +56,7 @@ from ..ai_provider_exceptions import (
     AiFallbackReason,
     AiProviderRequestError,
     classify_fallback_reason_by_status,
+    classify_transport_fallback_reason,
 )
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
@@ -722,12 +723,8 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 f"{exception}",
                 status_code=None,
                 provider_engine=self.PROVIDER_ENGINE_CLAUDE,
-                # A timeout is the caller's own limit, so it is no reason to
-                # change model; a failed connection means the host is down.
-                fallback_reason=(
-                    None
-                    if isinstance(exception, APITimeoutError)
-                    else AiFallbackReason.UNAVAILABLE
+                fallback_reason=classify_transport_fallback_reason(
+                    isinstance(exception, APITimeoutError)
                 ),
             ) from exception
         # Normal return so non-transport exceptions propagate unchanged.
@@ -767,8 +764,14 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         if str_type == "not_found_error":
             # Early return for an unknown model.
             return AiFallbackReason.MODEL_UNAVAILABLE
-        if "credit balance" in str_message or "billing" in str_message:
-            # Early return: the account cannot pay for the request.
+        if (
+            exception.status_code == 400
+            and str_type == "invalid_request_error"
+            and "credit balance" in str_message
+        ):
+            # Early return: the documented low-credit 400. Other messages
+            # that mention billing (a disabled organization, an auth error)
+            # are account problems no model will fix.
             return AiFallbackReason.QUOTA_EXHAUSTED
         # Normal return with the status-only classification.
         return classify_fallback_reason_by_status(exception.status_code)

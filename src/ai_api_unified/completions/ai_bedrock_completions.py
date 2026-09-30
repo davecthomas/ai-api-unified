@@ -35,6 +35,7 @@ from ..ai_bedrock_base import AIBedrockBase, BotoCoreError, ClientError
 from ..ai_provider_exceptions import (
     AiFallbackReason,
     classify_fallback_reason_by_status,
+    classify_transport_fallback_reason,
     AiProviderCapabilityUnsupportedError,
     AiProviderRequestError,
 )
@@ -635,30 +636,18 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 except StructuredResponseTokenLimitError:
                     raise
 
-                except self.client.exceptions.ModelErrorException as model_error:
-                    _LOGGER.warning(
-                        "Bedrock model error on attempt %s: %s",
-                        attempt,
-                        model_error,
-                    )
-                    if attempt < len(self.backoff_delays):
-                        self._sleep_with_backoff(delay)
-                        continue
-                    raise RuntimeError(
-                        f"Bedrock ModelErrorException after {attempt} tries: {model_error}"
-                    ) from model_error
-
-                except ClientError as client_error:
+                except (ClientError, BotoCoreError) as transport_error:
+                    # ModelErrorException is a ClientError in the non-retryable
+                    # set, so it exits on the first attempt rather than
+                    # sleeping through the schedule.
                     if attempt < len(
                         self.backoff_delays
-                    ) and self._is_retryable_client_error(client_error):
+                    ) and self._is_retryable_client_error(transport_error):
                         self._sleep_with_backoff(delay)
                         continue
-                    # Exhausted, or the same model cannot clear this error.
-                    self._raise_bedrock_request_error(client_error)
-                    raise RuntimeError(
-                        f"Bedrock error after {attempt} tries: {client_error}"
-                    ) from client_error
+                    # Exhausted, or the same model cannot clear this error;
+                    # the helper always raises for these two types.
+                    self._raise_bedrock_request_error(transport_error)
 
                 except Exception as exception:
                     if "MAX_TOKENS" in str(exception).upper():
@@ -779,8 +768,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     ):
                         # Exhausted, or the same model cannot clear this
                         # error: raise the typed error without sleeping
-                        # through the rest of the schedule. Other exception
-                        # types keep the historical retry.
+                        # through the rest of the schedule. The helper
+                        # returns only for non-transport exceptions, which
+                        # keep the historical RuntimeError below.
                         self._raise_bedrock_request_error(exception)
                         raise RuntimeError(
                             f"Bedrock converse failed: {exception}"
@@ -1338,13 +1328,8 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 f"{exception}",
                 status_code=None,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
-                # A read timeout is the caller's own limit, so it is no reason
-                # to change model; any other transport failure means the
-                # endpoint is unreachable.
-                fallback_reason=(
-                    None
-                    if isinstance(exception, ReadTimeoutError)
-                    else AiFallbackReason.UNAVAILABLE
+                fallback_reason=classify_transport_fallback_reason(
+                    isinstance(exception, ReadTimeoutError)
                 ),
             ) from exception
         # Normal return so non-transport exceptions propagate unchanged.
@@ -1382,25 +1367,42 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         Returns:
             The fallback reason, or None when another model would not help.
         """
-        dict_error: dict[str, Any] = (getattr(exception, "response", None) or {}).get(
-            "Error"
-        ) or {}
-        str_code: str = str(dict_error.get("Code") or "")
+        str_code, str_message = cls._client_error_code_and_message(exception)
         if str_code in cls.DICT_FALLBACK_REASON_BY_ERROR_CODE:
             # Early return with the code-specific reason.
             return cls.DICT_FALLBACK_REASON_BY_ERROR_CODE[str_code]
-        if str_code == "ValidationException" and (
-            "model identifier is invalid"
-            in str(dict_error.get("Message") or "").lower()
-        ):
-            # Early return: the model id is unknown here (often the region).
-            return AiFallbackReason.MODEL_UNAVAILABLE
-        if str_code:
-            # Early return: every other Converse code is a request problem
-            # (validation, access denied, unsupported media).
+        if str_code == "ValidationException":
+            # Early return: an invalid model id (often the region) is the one
+            # validation failure another model could serve.
+            return (
+                AiFallbackReason.MODEL_UNAVAILABLE
+                if "model identifier is invalid" in str_message.lower()
+                else None
+            )
+        if str_code in cls.NON_RETRYABLE_ERROR_CODES:
+            # Early return: a request problem (access denied, bad input) that
+            # no model will fix.
             return None
-        # Normal return with the status-only classification.
+        # Normal return: an unlisted code (regional throttle spellings such
+        # as "Throttling" or "TooManyRequestsException") classifies by status.
         return classify_fallback_reason_by_status(status_code)
+
+    @staticmethod
+    def _client_error_code_and_message(exception: ClientError) -> tuple[str, str]:
+        """
+        Reads the Converse error code and message from one ClientError.
+
+        Args:
+            exception: botocore ClientError.
+
+        Returns:
+            (code, message), each "" when absent.
+        """
+        dict_error: dict[str, Any] = (getattr(exception, "response", None) or {}).get(
+            "Error"
+        ) or {}
+        # Normal return with the two fields as strings.
+        return str(dict_error.get("Code") or ""), str(dict_error.get("Message") or "")
 
     def _region_hint(self, exception: Exception) -> str:
         """
@@ -1422,11 +1424,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         Classifies one exception as retryable per the base error-code policy.
         """
         if isinstance(exception, ClientError):
-            str_error_code: str = str(
-                (getattr(exception, "response", None) or {})
-                .get("Error", {})
-                .get("Code", "")
-            )
+            str_error_code, _ = self._client_error_code_and_message(exception)
             # Normal return based on the shared non-retryable code set.
             return str_error_code not in self.NON_RETRYABLE_ERROR_CODES
         # Normal return treating other transport errors as retryable.

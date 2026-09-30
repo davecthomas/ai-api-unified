@@ -493,9 +493,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 capability=self.CLIENT_TYPE_COMPLETIONS,
                 operation="send_prompt",
                 dict_input_metadata=dict_input_metadata,
-                callable_execute=lambda: self._retry_with_exponential_backoff(
-                    _generate_text,
-                    max_retries=self._effective_max_retries(),
+                callable_execute=lambda: self._run_with_typed_errors(
+                    lambda: self._retry_with_exponential_backoff(
+                        _generate_text,
+                        max_retries=self._effective_max_retries(),
+                    )
                 ),
                 callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
                     observed_result=result,
@@ -774,9 +776,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 capability=self.CLIENT_TYPE_COMPLETIONS,
                 operation="strict_schema_prompt",
                 dict_input_metadata=dict_input_metadata,
-                callable_execute=lambda: self._retry_with_exponential_backoff(
-                    _generate_structured,
-                    max_retries=self._effective_max_retries(),
+                callable_execute=lambda: self._run_with_typed_errors(
+                    lambda: self._retry_with_exponential_backoff(
+                        _generate_structured,
+                        max_retries=self._effective_max_retries(),
+                    )
                 ),
                 callable_build_result_summary=lambda result, provider_elapsed_ms: self._build_completions_observability_result_summary(
                     observed_result=result,
@@ -1063,6 +1067,27 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             return 0
         # Normal return deferring to the engine default retry budget.
         return None
+
+    def _run_with_typed_errors(self, callable_run: Any) -> Any:
+        """
+        Runs one call and re-raises Google transport errors as the typed error.
+
+        The conversation and structured-output paths already do this inline;
+        send_prompt and strict_schema_prompt route through here so every
+        public method reports fallback_reason the same way.
+
+        Args:
+            callable_run: Zero-argument callable performing the call.
+
+        Returns:
+            Whatever callable_run returns.
+        """
+        try:
+            # Normal return with the call's result.
+            return callable_run()
+        except Exception as exception:
+            self._raise_gemini_request_error(exception)
+            raise
 
     def _raise_gemini_request_error(self, exception: Exception) -> None:
         """

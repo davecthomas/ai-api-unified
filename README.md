@@ -596,12 +596,14 @@ reports a low credit balance as a 400):
 | `RATE_LIMITED` | A transient 429; the engine's own backoff ran first | OpenAI `rate_limit_exceeded`, Bedrock `ThrottlingException`, Gemini per-minute quota |
 | `QUOTA_EXHAUSTED` | Billing, credit, or quota is used up; retrying the same model is pointless | OpenAI `insufficient_quota`, Anthropic "credit balance is too low", Bedrock `ServiceQuotaExceededException`, Gemini plan or daily quota |
 | `MODEL_UNAVAILABLE` | The model id is unknown, retired, or not offered in the region | 404, Bedrock `ResourceNotFoundException` or an invalid model identifier |
-| `None` | Another model would not help | Validation errors, authentication, a client-side timeout, a refusal |
+| `None` | Another model would not help | Validation errors, authentication, missing credentials, a client-side timeout, a refusal |
 
 `is_transient` is True for `UNAVAILABLE` and `RATE_LIMITED`. Engines that run
 their own retry schedule (Bedrock, Gemini, and the OpenAI `strict_schema_prompt`
 loop) stop retrying as soon as an error classifies as `QUOTA_EXHAUSTED` or
-`MODEL_UNAVAILABLE`, instead of sleeping through the schedule.
+`MODEL_UNAVAILABLE`, instead of sleeping through the schedule. Gemini reports
+a per-minute limit and a daily quota with the same 429 text, so the split
+reads the quota id in the message (`PerMinute` versus `PerDay`).
 
 ```python
 from ai_api_unified import AiFallbackReason, AiProviderRequestError
