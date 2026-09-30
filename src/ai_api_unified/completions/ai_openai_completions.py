@@ -1768,7 +1768,8 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         and, for EXTENDED retention on models that offer it, 24-hour
         retention. Engines whose capabilities do not declare hint support
         (OpenAI-compatible vendors) send nothing, since those servers may
-        reject the fields.
+        reject the fields. Fields the installed SDK does not accept are
+        dropped as well.
 
         Args:
             prompt_cache: Optional caller cache hint.
@@ -1787,7 +1788,16 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             and self.completions_model in self.SET_PROMPT_CACHE_24H_MODELS
         ):
             dict_kwargs["prompt_cache_retention"] = "24h"
-        # Normal return with the cache fields this model accepts.
+        set_known: frozenset[str] | None = self._known_provider_option_keys()
+        if set_known is not None:
+            # An older SDK raises TypeError on keyword arguments it predates,
+            # which would turn a cost-only hint into a failed request.
+            dict_kwargs = {
+                str_key: value
+                for str_key, value in dict_kwargs.items()
+                if str_key in set_known
+            }
+        # Normal return with the cache fields this model and SDK accept.
         return dict_kwargs
 
     @staticmethod

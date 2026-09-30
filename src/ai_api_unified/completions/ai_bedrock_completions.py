@@ -1123,9 +1123,11 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             Converse SystemContentBlock list.
         """
         list_system: list[dict[str, Any]] = [{"text": system_prompt}]
+        bool_cache_point, bool_ttl = self._converse_cache_point_support()
         if (
             prompt_cache is None
             or not system_prompt.strip()
+            or not bool_cache_point
             or not self.capabilities.supports_prompt_cache_hint
         ):
             # Early return because caching was not requested, there is no
@@ -1133,9 +1135,13 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             return list_system
         dict_cache_point: dict[str, str] = {"type": "default"}
         str_model_lower: str = self.model.lower()
-        if prompt_cache.retention is AIPromptCacheRetention.EXTENDED and any(
-            marker in str_model_lower
-            for marker in AICompletionsCapabilitiesBedrock.TUPLE_PROMPT_CACHE_1H_TTL_MODEL_MARKERS
+        if (
+            bool_ttl
+            and prompt_cache.retention is AIPromptCacheRetention.EXTENDED
+            and any(
+                marker in str_model_lower
+                for marker in AICompletionsCapabilitiesBedrock.TUPLE_PROMPT_CACHE_1H_TTL_MODEL_MARKERS
+            )
         ):
             dict_cache_point["ttl"] = "1h"
         list_system.append({"cachePoint": dict_cache_point})
@@ -1540,6 +1546,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
     # Cache for the resolved member set; the service model does not change
     # within a process, and shape lookup walks a large JSON model.
     _FROZENSET_CONVERSE_BLOCK_KEYS: ClassVar[frozenset[str] | None] = None
+    # (accepts cachePoint in system, accepts cachePoint ttl) for the installed
+    # botocore; None until first read.
+    _TUPLE_CACHE_POINT_SUPPORT: ClassVar[tuple[bool, bool] | None] = None
 
     _FROZENSET_CONVERSE_PARAMS: ClassVar[frozenset[str] | None] = None
 
@@ -1681,6 +1690,46 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         AiBedrockCompletions._FROZENSET_CONVERSE_BLOCK_KEYS = frozenset_keys
         # Normal return with the resolved member set.
         return frozenset_keys
+
+    @classmethod
+    def _converse_cache_point_support(cls) -> tuple[bool, bool]:
+        """
+        Reports whether the installed botocore accepts cachePoint and its ttl.
+
+        Older botocore releases reject a system cachePoint block, or its ttl
+        field, with ParamValidationError before any request is sent. Reading
+        the service model keeps a cost-only hint from failing a request on
+        those releases. Resolved once per process.
+
+        Returns:
+            Tuple of (system accepts cachePoint, cachePoint accepts ttl);
+            (False, False) when the service model cannot be read.
+        """
+        if cls._TUPLE_CACHE_POINT_SUPPORT is not None:
+            # Early return with the resolved support; the model is process-stable.
+            return cls._TUPLE_CACHE_POINT_SUPPORT
+        try:
+            import botocore.session
+
+            service_model = botocore.session.get_session().get_service_model(
+                "bedrock-runtime"
+            )
+            bool_cache_point: bool = (
+                "cachePoint" in service_model.shape_for("SystemContentBlock").members
+            )
+            bool_ttl: bool = bool_cache_point and (
+                "ttl" in service_model.shape_for("CachePointBlock").members
+            )
+        except Exception as exception:
+            _LOGGER.debug(
+                "Could not read the Converse cachePoint shape (%s); "
+                "prompt cache hints will be ignored.",
+                exception,
+            )
+            bool_cache_point, bool_ttl = False, False
+        AiBedrockCompletions._TUPLE_CACHE_POINT_SUPPORT = (bool_cache_point, bool_ttl)
+        # Normal return with the resolved support flags.
+        return bool_cache_point, bool_ttl
 
     @classmethod
     def _is_converse_block_list(cls, content: list[Any]) -> bool:

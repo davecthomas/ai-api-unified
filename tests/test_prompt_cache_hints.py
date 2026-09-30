@@ -485,3 +485,38 @@ class TestAnthropicBreakpointLimit:
         dict_kwargs = self._kwargs(4)
         assert "cache_control" not in dict_kwargs
         assert dict_kwargs["system"] == SYSTEM_PROMPT
+
+
+class TestOlderSdkGating:
+    def test_openai_drops_fields_the_sdk_does_not_accept(self) -> None:
+        client = _openai()
+        with patch.object(
+            AiOpenAICompletions,
+            "_known_provider_option_keys",
+            return_value=frozenset({"model", "messages", "prompt_cache_key"}),
+        ):
+            assert client._build_prompt_cache_kwargs(HINT_EXTENDED) == {
+                "prompt_cache_key": "tenant-42"
+            }
+
+    def test_bedrock_omits_ttl_when_botocore_lacks_it(self) -> None:
+        client = _bedrock("us.anthropic.claude-opus-5")
+        with patch.object(
+            AiBedrockCompletions,
+            "_converse_cache_point_support",
+            return_value=(True, False),
+        ):
+            assert client._build_converse_system(SYSTEM_PROMPT, HINT_EXTENDED)[1] == {
+                "cachePoint": {"type": "default"}
+            }
+
+    def test_bedrock_skips_cache_point_when_botocore_lacks_it(self) -> None:
+        client = _bedrock("us.anthropic.claude-opus-5")
+        with patch.object(
+            AiBedrockCompletions,
+            "_converse_cache_point_support",
+            return_value=(False, False),
+        ):
+            assert client._build_converse_system(SYSTEM_PROMPT, HINT_EXTENDED) == [
+                {"text": SYSTEM_PROMPT}
+            ]
