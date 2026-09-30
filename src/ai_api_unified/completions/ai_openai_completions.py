@@ -531,8 +531,16 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             try:
                 dict_message: Any = model_dump(exclude_none=True)
                 if isinstance(dict_message, dict):
-                    # Early return with the SDK-serialized assistant message.
-                    return dict_message
+                    # Early return with the SDK-serialized assistant message,
+                    # minus fields the SDK sets to an empty value (for
+                    # example annotations=[]). A text-only turn then replays
+                    # as plain {"role", "content"}, which other providers
+                    # accept; Anthropic rejects unknown keys with a 400.
+                    return {
+                        str_key: value
+                        for str_key, value in dict_message.items()
+                        if value not in (None, [], {})
+                    }
             except TypeError:
                 # Fall through to attribute-based reconstruction (test doubles).
                 pass

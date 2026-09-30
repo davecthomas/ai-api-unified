@@ -769,3 +769,105 @@ class TestFactory:
         )
         assert client.send_prompt("hi") == "from openai"
         assert client.last_route.engine == "openai"
+
+
+# ── Issue 65: OpenAI text-only turns must not read as provider-neutral ──────
+
+
+def _openai_engine_with_text_reply(text: str) -> Any:
+    """Real openai engine whose mocked SDK returns a text-only assistant turn."""
+    openai_module = pytest.importorskip("openai")
+    from openai.types.chat import ChatCompletionMessage
+
+    from ai_api_unified.completions.ai_openai_completions import AiOpenAICompletions
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        engine = AiOpenAICompletions(model="gpt-4o-mini")
+    engine.client = Mock()
+    # The real SDK message type, so raw_content is model_dump(exclude_none=True)
+    # and carries every field the SDK sets, such as annotations=[].
+    message = ChatCompletionMessage(role="assistant", content=text, annotations=[])
+    engine.client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=message, finish_reason="stop")],
+        usage=Mock(
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            prompt_tokens_details=Mock(cached_tokens=None),
+        ),
+    )
+    del openai_module
+    return engine
+
+
+class TestIssue65OpenAITextTurn:
+    def test_text_only_openai_turn_replays_without_sdk_fields(self) -> None:
+        engine = _openai_engine_with_text_reply("Blue.")
+        list_messages: list[dict[str, Any]] = [{"role": "user", "content": "Pick."}]
+        turn = engine.send_conversation("Be brief.", list_messages)
+        engine.extend_messages_with_turn(list_messages, turn)
+        assert list_messages[-1] == {"role": "assistant", "content": "Blue."}
+
+    def test_second_turn_after_failover_stays_on_openai(self) -> None:
+        primary = _FakeEngine(
+            "p", fail=_err(R.MODEL_UNAVAILABLE, 404), family="anthropic"
+        )
+        openai_engine = _openai_engine_with_text_reply("Blue.")
+        wrapper = AiFallbackCompletions(
+            primary=primary,
+            primary_candidate=AIFallbackCandidate(engine="fake", model="p"),
+            fallback_candidates=[
+                AIFallbackCandidate(engine="openai", model="gpt-4o-mini")
+            ],
+            client_builder=lambda candidate: openai_engine,
+            fallback_on={R.MODEL_UNAVAILABLE},
+        )
+        list_messages: list[dict[str, Any]] = [{"role": "user", "content": "Pick."}]
+        turn = wrapper.send_conversation("Be brief.", list_messages)
+        assert turn.provider_engine == "openai"
+        wrapper.extend_messages_with_turn(list_messages, turn)
+        list_messages.append({"role": "user", "content": "Which did you pick?"})
+        # A healthy primary must not receive the OpenAI turn's SDK fields, and
+        # a plain-text history may go to any candidate, so either route is
+        # acceptable as long as the replayed message is clean.
+        primary.fail = None
+        turn2 = wrapper.send_conversation("Be brief.", list_messages)
+        assert turn2.text in ("Blue.", "p:turn")
+        assert all(set(m) <= {"role", "content"} for m in list_messages)
+
+    def test_responses_message_item_reads_as_openai_responses(self) -> None:
+        from ai_api_unified.completions.ai_fallback_completions import (
+            history_family_of,
+        )
+
+        list_messages: list[dict[str, Any]] = [
+            {"role": "user", "content": "hi"},
+            {
+                "type": "message",
+                "role": "assistant",
+                "id": "msg_1",
+                "status": "completed",
+                "content": [
+                    {"type": "output_text", "text": "Blue.", "annotations": []}
+                ],
+            },
+        ]
+        assert history_family_of(list_messages) == "openai-responses"
+
+    def test_assistant_message_with_sdk_fields_reads_as_openai(self) -> None:
+        from ai_api_unified.completions.ai_fallback_completions import (
+            history_family_of,
+        )
+
+        assert (
+            history_family_of(
+                [{"role": "assistant", "content": "Blue.", "annotations": []}]
+            )
+            == "openai"
+        )
+        assert (
+            history_family_of(
+                [{"role": "assistant", "content": "Blue.", "refusal": None}]
+            )
+            == "openai"
+        )

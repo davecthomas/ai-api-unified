@@ -161,3 +161,38 @@ def test_first_conversation_turn_fails_over_and_stamps_the_route(
     assert turn.text is not None and "pong" in turn.text.lower()
     assert turn.provider_engine == FALLBACK_ENGINE
     assert turn.model_name == FALLBACK_MODEL
+
+
+def test_second_turn_after_failover_replays_on_the_fallback(
+    live_chain_credentials: None,
+) -> None:
+    # Issue 65: the OpenAI turn used to replay with SDK fields (annotations),
+    # which read as neutral history, so turn two went back to Claude and
+    # failed with a 400 on the unknown key.
+    client = AIFactory.get_ai_completions_client(
+        model_name=MISSING_MODEL,
+        completions_engine=PRIMARY_ENGINE,
+        fallbacks=[(FALLBACK_ENGINE, FALLBACK_MODEL)],
+        fallback_on={AiFallbackReason.MODEL_UNAVAILABLE},
+    )
+    list_messages: list[dict[str, str]] = [
+        {
+            "role": "user",
+            "content": "Pick one color: red or blue. Reply with the word only.",
+        }
+    ]
+
+    turn = client.send_conversation("Be brief.", list_messages, max_response_tokens=32)
+    client.extend_messages_with_turn(list_messages, turn)
+    list_messages.append(
+        {
+            "role": "user",
+            "content": "Which color did you pick? Reply with the word only.",
+        }
+    )
+    turn2 = client.send_conversation("Be brief.", list_messages, max_response_tokens=32)
+
+    assert turn.provider_engine == FALLBACK_ENGINE
+    assert turn2.provider_engine == FALLBACK_ENGINE
+    assert turn2.text is not None and turn2.text.strip()
+    assert set(list_messages[1]) <= {"role", "content"}

@@ -4,6 +4,22 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.32.1
+
+### Fixed
+
+- Model fallback sent the turn after a failover back to the primary and it
+  failed with a 400 (#65). The `openai` engine saved a text-only assistant
+  turn with the SDK's empty fields (`annotations: []`), the router did not
+  recognize those as OpenAI-shaped, and Anthropic rejected the unknown key.
+  Two fixes: the `openai` engine now drops empty SDK fields when it saves a
+  turn, so a text-only turn replays as plain `{"role", "content"}` on any
+  engine; and the router treats an assistant message carrying any OpenAI
+  SDK field (`annotations`, `refusal`, `audio`, `function_call`,
+  `tool_calls`) as OpenAI history. The router also recognizes Responses API
+  message items, which carry both a `type` and a `role`, as
+  `openai-responses` history rather than Anthropic content blocks.
+
 ## 2.32.0
 
 ### Added
