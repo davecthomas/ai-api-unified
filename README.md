@@ -1,4 +1,4 @@
-# ai-api-unified 2.32.1
+# ai-api-unified 2.33.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -627,20 +627,21 @@ The error also carries `fallback_reason`, an `AiFallbackReason` that says
 whether a different model might serve the request. Each engine sets it from
 the provider's own error codes, since a status alone cannot separate a rate
 limit from an exhausted quota (OpenAI returns 429 for both, and Anthropic
-reports a low credit balance as a 400):
+reports a low credit balance or a reached spend cap as a 400):
 
 | Reason | Meaning | Examples |
 | ------ | ------- | -------- |
 | `UNAVAILABLE` | The provider or model cannot serve right now | 5xx, Anthropic 529 overloaded, Bedrock `ServiceUnavailableException` / `ModelNotReadyException`, a failed connection |
 | `RATE_LIMITED` | A transient 429; the engine's own backoff ran first | OpenAI `rate_limit_exceeded`, Bedrock `ThrottlingException`, Gemini per-minute quota |
-| `QUOTA_EXHAUSTED` | Billing, credit, or quota is used up; retrying the same model is pointless | OpenAI `insufficient_quota`, Anthropic "credit balance is too low", Bedrock `ServiceQuotaExceededException`, Gemini plan or daily quota |
+| `QUOTA_EXHAUSTED` | Billing, credit, quota, or a spend cap is used up; retrying the same model is pointless | OpenAI `insufficient_quota` / `billing_hard_limit_reached`, Anthropic "credit balance is too low" or a reached workspace spend cap ("API usage limits"), Bedrock `ServiceQuotaExceededException`, Gemini plan or daily quota |
+| `AUTH_REJECTED` | The provider rejected the credentials or the account; retrying the same provider is pointless | 401/403, Anthropic `authentication_error` / `permission_error` (including a disabled organization), Gemini "API key not valid" (a 400), Bedrock `AccessDeniedException` / `UnrecognizedClientException` / `ExpiredTokenException` |
 | `MODEL_UNAVAILABLE` | The model id is unknown, retired, or not offered in the region | 404, Bedrock `ResourceNotFoundException` or an invalid model identifier |
-| `None` | Another model would not help | Validation errors, authentication, missing credentials, a client-side timeout, a refusal |
+| `None` | Another model would not help | Validation errors, missing local credentials, a client-side timeout, a refusal |
 
 `is_transient` is True for `UNAVAILABLE` and `RATE_LIMITED`. Engines that run
 their own retry schedule (Bedrock, Gemini, and the OpenAI `strict_schema_prompt`
-loop) stop retrying as soon as an error classifies as `QUOTA_EXHAUSTED` or
-`MODEL_UNAVAILABLE`, instead of sleeping through the schedule. Gemini reports
+loop) stop retrying as soon as an error classifies as `QUOTA_EXHAUSTED`,
+`AUTH_REJECTED`, or `MODEL_UNAVAILABLE`, instead of sleeping through the schedule. Gemini reports
 a per-minute limit and a daily quota with the same 429 text, so the split
 reads the quota id in the message (`PerMinute` versus `PerDay`).
 
@@ -1061,7 +1062,7 @@ COMPLETIONS_MODEL_NAME=claude-opus-5
 COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
 
 # Optional. Which failures trigger a move; this is the default.
-COMPLETIONS_FALLBACK_ON=unavailable,rate_limited,quota_exhausted
+COMPLETIONS_FALLBACK_ON=unavailable,rate_limited,quota_exhausted,auth_rejected
 ```
 
 Or in code, which overrides the settings:
@@ -1107,20 +1108,34 @@ Rules for the chain:
    of the chain.
 4. The client skips, with a warning, a fallback that lacks a capability the
    call needs (structured output, tool use, async, streaming).
-5. When every candidate has failed, the client raises the last failure.
+5. After a `QUOTA_EXHAUSTED` or `AUTH_REJECTED` failure, the client skips
+   the call's later candidates on the same account (same engine and
+   `base_url`), with a warning, since they would fail the same way.
+6. When every candidate has failed, the client raises the last failure.
 
 | Reason | Fails over by default | Typical causes |
 | ------ | --------------------- | -------------- |
 | `UNAVAILABLE` | yes | 5xx, Anthropic 529 overloaded, Bedrock `ServiceUnavailableException`, a failed connection |
 | `RATE_LIMITED` | yes | 429 after the engine's backoff is exhausted |
-| `QUOTA_EXHAUSTED` | yes | OpenAI `insufficient_quota`, Anthropic low credit balance, Bedrock `ServiceQuotaExceededException`, a Gemini daily quota |
+| `QUOTA_EXHAUSTED` | yes | OpenAI `insufficient_quota`, Anthropic low credit balance or workspace spend cap, Bedrock `ServiceQuotaExceededException`, a Gemini daily quota |
+| `AUTH_REJECTED` | yes | 401/403, a revoked or invalid API key, a disabled organization, expired AWS credentials |
 | `MODEL_UNAVAILABLE` | no | 404, an unknown or retired model id, a model not offered in the region |
-| `None` | never | validation errors, authentication, a client-side timeout, a safety refusal |
+| `None` | never | validation errors, a client-side timeout, a safety refusal |
 
 `MODEL_UNAVAILABLE` is off by default because an unknown model id usually
 means a configuration typo, and a working fallback would hide it. Turn it on
 with `fallback_on` or `COMPLETIONS_FALLBACK_ON` when you want an unknown or
-retired model to fail over. A safety refusal is never a trigger: retrying a
+retired model to fail over.
+
+`QUOTA_EXHAUSTED` and `AUTH_REJECTED` are account-level failures: every model
+on that provider's account fails the same way, so the client skips the
+account's other candidates (step 5), and a chain needs a candidate on a
+different provider to recover from them. A rejected key is
+often a configuration error too; the `failover` and `served_by_fallback` log
+events (below) are how you see it while traffic keeps flowing. Remove
+`auth_rejected` from `fallback_on` to make it fail loudly instead.
+
+A safety refusal is never a trigger: retrying a
 refused request on another model is a policy decision, not a reliability one,
 and it belongs in your code if you want it.
 
@@ -1137,7 +1152,7 @@ log processor can count and alert on them without parsing the message:
 | WARNING | `served_by_fallback` | A fallback answered a request the primary could not. Once per request that moved. Fields: `operation`, `fallback_from`, `fallback_to`, `fallback_reason`. |
 | ERROR | `chain_exhausted` | Every candidate failed; the last error is about to be raised. |
 | ERROR | `candidate_unbuildable` | A fallback could not be constructed and is out of the chain for this process. |
-| WARNING | `candidate_skipped` | A fallback lacks a capability the call needs. |
+| WARNING | `candidate_skipped` | A fallback lacks a capability the call needs, or its account already failed the call with `QUOTA_EXHAUSTED` or `AUTH_REJECTED`. |
 
 The messages start with `FALLBACK`, `FALLBACK SERVED`, or `FALLBACK
 EXHAUSTED`, so they stand out in plain log output too. A request the primary
@@ -1215,7 +1230,7 @@ across the chain.
 | Setting | Meaning |
 | ------- | ------- |
 | `COMPLETIONS_FALLBACKS` | Ordered `engine:model` pairs tried after the primary fails. Blank or unset means no chain. |
-| `COMPLETIONS_FALLBACK_ON` | Comma-separated `AiFallbackReason` values that trigger a move. Default `unavailable,rate_limited,quota_exhausted`. |
+| `COMPLETIONS_FALLBACK_ON` | Comma-separated `AiFallbackReason` values that trigger a move. Default `unavailable,rate_limited,quota_exhausted,auth_rejected`. |
 | `fallbacks=` (factory argument) | Same as the setting, as `(engine, model)` tuples or `AIFallbackCandidate` objects; overrides the setting. `[]` turns the chain off. |
 | `fallback_on=` (factory argument) | Same as the setting, as reasons or their values; overrides the setting. |
 
@@ -1256,7 +1271,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | --------------------------- | ------------------------------------------------------------------------------------------- |
 | `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
 | `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
-| `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted` |
+| `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted,auth_rejected` |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
 | `VIDEO_MODEL_NAME`          | Optional video model override                                                               |

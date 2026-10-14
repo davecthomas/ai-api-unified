@@ -1350,6 +1350,11 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         "ModelTimeoutException": AiFallbackReason.UNAVAILABLE,
         "ServiceQuotaExceededException": AiFallbackReason.QUOTA_EXHAUSTED,
         "ResourceNotFoundException": AiFallbackReason.MODEL_UNAVAILABLE,
+        # Credential and account failures; another provider can still serve.
+        "AccessDeniedException": AiFallbackReason.AUTH_REJECTED,
+        "UnrecognizedClientException": AiFallbackReason.AUTH_REJECTED,
+        "InvalidSignatureException": AiFallbackReason.AUTH_REJECTED,
+        "ExpiredTokenException": AiFallbackReason.AUTH_REJECTED,
     }
 
     @classmethod
@@ -1384,8 +1389,8 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 else None
             )
         if str_code in cls.NON_RETRYABLE_ERROR_CODES:
-            # Early return: a request problem (access denied, bad input) that
-            # no model will fix.
+            # Early return: a request problem (bad input, unsupported media)
+            # that no model will fix.
             return None
         # Normal return: an unlisted code (regional throttle spellings such
         # as "Throttling" or "TooManyRequestsException") classifies by status.

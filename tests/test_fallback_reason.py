@@ -112,8 +112,8 @@ class TestBaseline:
             (503, R.UNAVAILABLE),
             (529, R.UNAVAILABLE),
             (400, None),
-            (401, None),
-            (403, None),
+            (401, R.AUTH_REJECTED),
+            (403, R.AUTH_REJECTED),
         ],
     )
     def test_status_only_classification(
@@ -157,13 +157,20 @@ class TestAnthropic:
                 "Your credit balance is too low to access the Anthropic API.",
                 R.QUOTA_EXHAUSTED,
             ),
+            (
+                400,
+                "invalid_request_error",
+                "You have reached your specified workspace API usage limits. "
+                "You will regain access on 2026-11-01 at 00:00 UTC.",
+                R.QUOTA_EXHAUSTED,
+            ),
             (400, "invalid_request_error", "messages: bad shape", None),
-            (401, "authentication_error", "invalid x-api-key", None),
+            (401, "authentication_error", "invalid x-api-key", R.AUTH_REJECTED),
             (
                 403,
                 "permission_error",
                 "Your organization has been disabled. Contact billing support.",
-                None,
+                R.AUTH_REJECTED,
             ),
         ],
     )
@@ -216,6 +223,9 @@ class TestOpenAI:
         ("status", "code", "reason"),
         [
             (429, "insufficient_quota", R.QUOTA_EXHAUSTED),
+            (400, "billing_hard_limit_reached", R.QUOTA_EXHAUSTED),
+            (401, "invalid_api_key", R.AUTH_REJECTED),
+            (403, "unsupported_country_region_territory", R.AUTH_REJECTED),
             (429, "rate_limit_exceeded", R.RATE_LIMITED),
             (429, None, R.RATE_LIMITED),
             (404, "model_not_found", R.MODEL_UNAVAILABLE),
@@ -275,7 +285,9 @@ class TestBedrock:
                 R.MODEL_UNAVAILABLE,
             ),
             ("ValidationException", 400, "messages: bad", None),
-            ("AccessDeniedException", 403, "denied", None),
+            ("AccessDeniedException", 403, "denied", R.AUTH_REJECTED),
+            ("UnrecognizedClientException", 403, "bad token", R.AUTH_REJECTED),
+            ("ExpiredTokenException", 400, "expired", R.AUTH_REJECTED),
             ("TooManyRequestsException", 429, "slow down", R.RATE_LIMITED),
             ("ServiceUnavailable", 503, "x", R.UNAVAILABLE),
         ],
@@ -379,6 +391,14 @@ class TestGemini:
                 R.MODEL_UNAVAILABLE,
             ),
             (400, "Invalid argument: contents", None),
+            (
+                400,
+                "400 INVALID_ARGUMENT. API key not valid. Please pass a valid "
+                "API key. reason: API_KEY_INVALID",
+                R.AUTH_REJECTED,
+            ),
+            (401, "Request had invalid authentication credentials.", R.AUTH_REJECTED),
+            (403, "PERMISSION_DENIED", R.AUTH_REJECTED),
         ],
     )
     def test_message_classification(
