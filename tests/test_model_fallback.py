@@ -215,8 +215,19 @@ def _chain_primary_503() -> _FakeEngine:
     return _FakeEngine("p", fail=_err(R.UNAVAILABLE, 503))
 
 
-def _chain(*engines: _FakeEngine, **kwargs: Any) -> AiFallbackCompletions:
-    """Builds a wrapper whose builder hands out the given engines in order."""
+def _chain(
+    *engines: _FakeEngine, shared_account: bool = False, **kwargs: Any
+) -> AiFallbackCompletions:
+    """
+    Builds a wrapper whose builder hands out the given engines in order.
+
+    Each candidate gets its own base_url, so they count as separate provider
+    accounts, unless shared_account puts them all on one.
+    """
+
+    def _base_url(engine: _FakeEngine) -> str | None:
+        return None if shared_account else f"https://{engine.model}.test"
+
     list_rest: list[_FakeEngine] = list(engines[1:])
     dict_by_label: dict[str, _FakeEngine] = {
         f"fake:{engine.model}": engine for engine in list_rest
@@ -225,10 +236,14 @@ def _chain(*engines: _FakeEngine, **kwargs: Any) -> AiFallbackCompletions:
     wrapper = AiFallbackCompletions(
         primary=engines[0],
         primary_candidate=AIFallbackCandidate(
-            engine="fake", model=str(engines[0].model)
+            engine="fake",
+            model=str(engines[0].model),
+            base_url=_base_url(engines[0]),
         ),
         fallback_candidates=[
-            AIFallbackCandidate(engine="fake", model=str(engine.model))
+            AIFallbackCandidate(
+                engine="fake", model=str(engine.model), base_url=_base_url(engine)
+            )
             for engine in list_rest
         ],
         client_builder=builder,
@@ -276,6 +291,7 @@ class TestParsing:
             R.UNAVAILABLE,
             R.RATE_LIMITED,
             R.QUOTA_EXHAUSTED,
+            R.AUTH_REJECTED,
         }
 
 
@@ -317,6 +333,77 @@ class TestFailover:
             fallback_on={R.MODEL_UNAVAILABLE},
         )
         assert wrapper.send_prompt("hi") == "f:ok"
+
+    @pytest.mark.parametrize("reason", [R.QUOTA_EXHAUSTED, R.AUTH_REJECTED])
+    def test_account_failure_skips_same_account_candidates(
+        self, reason: AiFallbackReason, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sibling = _FakeEngine("sibling")
+        other = _FakeEngine("other")
+        wrapper = _chain(_FakeEngine("p", fail=_err(reason, 400)), sibling, other)
+        # p and sibling share an account; other is a different provider.
+        wrapper._candidates[1] = wrapper._candidates[1].model_copy(
+            update={"base_url": wrapper._candidates[0].base_url}
+        )
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            assert wrapper.send_prompt("hi") == "other:ok"
+        assert sibling.calls == []
+        assert [c.args[0].model for c in wrapper.builder.call_args_list] == ["other"]
+        assert "candidate_skipped" in [r.ai_fallback_event for r in caplog.records]
+
+    def test_per_model_quota_still_tries_same_account(self) -> None:
+        sibling = _FakeEngine("sibling")
+        error = AiProviderRequestError(
+            "per-model quota",
+            status_code=429,
+            fallback_reason=R.QUOTA_EXHAUSTED,
+            account_wide=False,
+        )
+        wrapper = _chain(_FakeEngine("p", fail=error), sibling, shared_account=True)
+        assert wrapper.send_prompt("hi") == "sibling:ok"
+
+    def test_transient_failure_still_tries_same_account(self) -> None:
+        sibling = _FakeEngine("sibling")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.UNAVAILABLE)), sibling, shared_account=True
+        )
+        assert wrapper.send_prompt("hi") == "sibling:ok"
+
+    def test_account_failure_exhausts_when_only_same_account_remains(self) -> None:
+        sibling = _FakeEngine("sibling")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.AUTH_REJECTED, 401)),
+            sibling,
+            shared_account=True,
+        )
+        with pytest.raises(AiProviderRequestError) as exc_info:
+            wrapper.send_prompt("hi")
+        assert exc_info.value.fallback_reason is R.AUTH_REJECTED
+        assert sibling.calls == []
+
+    def test_async_account_failure_skips_same_account(self) -> None:
+        sibling = _FakeEngine("sibling")
+        other = _FakeEngine("other")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.QUOTA_EXHAUSTED, 429)), sibling, other
+        )
+        wrapper._candidates[1] = wrapper._candidates[1].model_copy(
+            update={"base_url": wrapper._candidates[0].base_url}
+        )
+        assert asyncio.run(wrapper.asend_prompt("hi")) == "other:ok"
+        assert sibling.calls == []
+
+    def test_streaming_account_failure_skips_same_account(self) -> None:
+        sibling = _FakeEngine("sibling")
+        other = _FakeEngine("other")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.AUTH_REJECTED, 403)), sibling, other
+        )
+        wrapper._candidates[1] = wrapper._candidates[1].model_copy(
+            update={"base_url": wrapper._candidates[0].base_url}
+        )
+        assert list(wrapper.send_prompt_streaming("hi")) == ["other-1", "other-2"]
+        assert sibling.calls == []
 
     def test_error_without_reason_propagates(self) -> None:
         wrapper = _chain(_FakeEngine("p", fail=_err(None, 400)), _FakeEngine("f"))

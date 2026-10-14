@@ -112,8 +112,8 @@ class TestBaseline:
             (503, R.UNAVAILABLE),
             (529, R.UNAVAILABLE),
             (400, None),
-            (401, None),
-            (403, None),
+            (401, R.AUTH_REJECTED),
+            (403, R.AUTH_REJECTED),
         ],
     )
     def test_status_only_classification(
@@ -157,13 +157,20 @@ class TestAnthropic:
                 "Your credit balance is too low to access the Anthropic API.",
                 R.QUOTA_EXHAUSTED,
             ),
+            (
+                400,
+                "invalid_request_error",
+                "You have reached your specified workspace API usage limits. "
+                "You will regain access on 2026-11-01 at 00:00 UTC.",
+                R.QUOTA_EXHAUSTED,
+            ),
             (400, "invalid_request_error", "messages: bad shape", None),
-            (401, "authentication_error", "invalid x-api-key", None),
+            (401, "authentication_error", "invalid x-api-key", R.AUTH_REJECTED),
             (
                 403,
                 "permission_error",
                 "Your organization has been disabled. Contact billing support.",
-                None,
+                R.AUTH_REJECTED,
             ),
         ],
     )
@@ -216,6 +223,9 @@ class TestOpenAI:
         ("status", "code", "reason"),
         [
             (429, "insufficient_quota", R.QUOTA_EXHAUSTED),
+            (400, "billing_hard_limit_reached", R.QUOTA_EXHAUSTED),
+            (401, "invalid_api_key", R.AUTH_REJECTED),
+            (403, "unsupported_country_region_territory", R.AUTH_REJECTED),
             (429, "rate_limit_exceeded", R.RATE_LIMITED),
             (429, None, R.RATE_LIMITED),
             (404, "model_not_found", R.MODEL_UNAVAILABLE),
@@ -275,7 +285,9 @@ class TestBedrock:
                 R.MODEL_UNAVAILABLE,
             ),
             ("ValidationException", 400, "messages: bad", None),
-            ("AccessDeniedException", 403, "denied", None),
+            ("AccessDeniedException", 403, "denied", R.AUTH_REJECTED),
+            ("UnrecognizedClientException", 403, "bad token", R.AUTH_REJECTED),
+            ("ExpiredTokenException", 400, "expired", R.AUTH_REJECTED),
             ("TooManyRequestsException", 429, "slow down", R.RATE_LIMITED),
             ("ServiceUnavailable", 503, "x", R.UNAVAILABLE),
         ],
@@ -290,6 +302,26 @@ class TestBedrock:
                 "sys", [{"role": "user", "content": [{"text": "hi"}]}]
             )
         assert exc_info.value.fallback_reason is reason
+
+    @pytest.mark.parametrize(
+        ("code", "status", "account_wide"),
+        [
+            ("ServiceQuotaExceededException", 400, False),
+            ("AccessDeniedException", 403, False),
+            ("UnrecognizedClientException", 403, True),
+            ("ExpiredTokenException", 400, True),
+        ],
+    )
+    def test_per_model_codes_are_not_account_wide(
+        self, code: str, status: int, account_wide: bool
+    ) -> None:
+        client = _bedrock()
+        client.client.converse.side_effect = _bedrock_error(code, status, "x")
+        with pytest.raises(AiProviderRequestError) as exc_info:
+            client.send_conversation(
+                "sys", [{"role": "user", "content": [{"text": "hi"}]}]
+            )
+        assert exc_info.value.account_wide is account_wide
 
     def test_read_timeout_is_not_a_fallback_trigger(self) -> None:
         client = _bedrock()
@@ -379,6 +411,14 @@ class TestGemini:
                 R.MODEL_UNAVAILABLE,
             ),
             (400, "Invalid argument: contents", None),
+            (
+                400,
+                "400 INVALID_ARGUMENT. API key not valid. Please pass a valid "
+                "API key. reason: API_KEY_INVALID",
+                R.AUTH_REJECTED,
+            ),
+            (401, "Request had invalid authentication credentials.", R.AUTH_REJECTED),
+            (403, "PERMISSION_DENIED", R.AUTH_REJECTED),
         ],
     )
     def test_message_classification(
@@ -441,6 +481,8 @@ class TestGemini:
             with pytest.raises(AiProviderRequestError) as exc_info:
                 client.send_prompt("hi")
         assert exc_info.value.fallback_reason is R.QUOTA_EXHAUSTED
+        # Gemini quotas are per model, so another Gemini model may still serve.
+        assert exc_info.value.account_wide is False
 
     def test_backoff_loop_still_retries_a_rate_limit(self) -> None:
         genai_errors = pytest.importorskip("google.genai.errors")

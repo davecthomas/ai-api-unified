@@ -1320,11 +1320,17 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             dict_response: dict[str, Any] = getattr(exception, "response", None) or {}
             raw_status = dict_response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             int_status: int | None = raw_status if isinstance(raw_status, int) else None
+            str_code, _ = self._client_error_code_and_message(exception)
             raise AiProviderRequestError(
                 f"Bedrock request failed: {exception}{self._region_hint(exception)}",
                 status_code=int_status,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
                 fallback_reason=self._classify_fallback_reason(exception, int_status),
+                # Bedrock service quotas and model access are granted per
+                # model, so another Bedrock model on the account can serve.
+                account_wide=(
+                    False if str_code in self.FROZENSET_PER_MODEL_ERROR_CODES else None
+                ),
             ) from exception
         if isinstance(exception, BotoCoreError):
             raise AiProviderRequestError(
@@ -1350,7 +1356,18 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         "ModelTimeoutException": AiFallbackReason.UNAVAILABLE,
         "ServiceQuotaExceededException": AiFallbackReason.QUOTA_EXHAUSTED,
         "ResourceNotFoundException": AiFallbackReason.MODEL_UNAVAILABLE,
+        # Credential and account failures; another provider can still serve.
+        "AccessDeniedException": AiFallbackReason.AUTH_REJECTED,
+        "UnrecognizedClientException": AiFallbackReason.AUTH_REJECTED,
+        "InvalidSignatureException": AiFallbackReason.AUTH_REJECTED,
+        "ExpiredTokenException": AiFallbackReason.AUTH_REJECTED,
     }
+
+    # Error codes whose quota or access is scoped to one model, so a fallback
+    # layer must not skip the account's other models after one of them.
+    FROZENSET_PER_MODEL_ERROR_CODES: ClassVar[frozenset[str]] = frozenset(
+        {"ServiceQuotaExceededException", "AccessDeniedException"}
+    )
 
     @classmethod
     def _classify_fallback_reason(
@@ -1384,8 +1401,8 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 else None
             )
         if str_code in cls.NON_RETRYABLE_ERROR_CODES:
-            # Early return: a request problem (access denied, bad input) that
-            # no model will fix.
+            # Early return: a request problem (bad input, unsupported media)
+            # that no model will fix.
             return None
         # Normal return: an unlisted code (regional throttle spellings such
         # as "Throttling" or "TooManyRequestsException") classifies by status.

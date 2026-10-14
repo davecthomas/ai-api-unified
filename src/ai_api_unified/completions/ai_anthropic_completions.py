@@ -70,6 +70,15 @@ from ..pricing.pricing_registry import (
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
+# Lowercase fragments of the 400 invalid_request_error messages Anthropic
+# sends when the account cannot pay: a low credit balance, and a reached
+# workspace or organization spend cap ("You have reached your specified
+# workspace API usage limits. You will regain access on ...").
+TUPLE_ANTHROPIC_QUOTA_HINTS: tuple[str, ...] = (
+    "credit balance",
+    "usage limits",
+)
+
 
 class AICompletionsCapabilitiesAnthropic(AICompletionsCapabilitiesBase):
     """Anthropic-specific completions capabilities.
@@ -738,8 +747,9 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         Maps one Anthropic status error to a fallback reason.
 
         Reads the error type and message from the response body, because
-        Anthropic reports an exhausted credit balance as a 400 and the
-        status alone would miss it.
+        Anthropic reports an exhausted credit balance and a reached workspace
+        spend cap as a 400 invalid_request_error, which the status alone
+        would read as a malformed request.
 
         Args:
             exception: Anthropic SDK status error.
@@ -767,12 +777,14 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         if (
             exception.status_code == 400
             and str_type == "invalid_request_error"
-            and "credit balance" in str_message
+            and any(hint in str_message for hint in TUPLE_ANTHROPIC_QUOTA_HINTS)
         ):
-            # Early return: the documented low-credit 400. Other messages
-            # that mention billing (a disabled organization, an auth error)
-            # are account problems no model will fix.
+            # Early return: the low-credit or spend-cap 400. Anthropic's own
+            # backoff cannot clear it, but another provider can serve.
             return AiFallbackReason.QUOTA_EXHAUSTED
+        if str_type in ("authentication_error", "permission_error"):
+            # Early return: a rejected key or a disabled organization.
+            return AiFallbackReason.AUTH_REJECTED
         # Normal return with the status-only classification.
         return classify_fallback_reason_by_status(exception.status_code)
 

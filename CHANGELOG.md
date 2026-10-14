@@ -4,6 +4,44 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.33.0
+
+### Added
+
+- `AiFallbackReason.AUTH_REJECTED`: the provider rejected the credentials or
+  the account. Set for 401 and 403 on every engine, for Anthropic
+  `authentication_error` and `permission_error` (including a disabled
+  organization), for Gemini's "API key not valid" 400, and for Bedrock
+  `AccessDeniedException`, `UnrecognizedClientException`,
+  `InvalidSignatureException`, and `ExpiredTokenException`. Before this
+  release these errors carried no reason, so a revoked key failed the call
+  instead of moving to the next provider.
+
+- After a `QUOTA_EXHAUSTED` or `AUTH_REJECTED` failure, the fallback client
+  skips the call's later candidates on the same account (same engine and
+  `base_url`) and logs `candidate_skipped`. A chain such as
+  `claude:sonnet, claude:haiku, google-gemini:...` no longer spends a
+  request on Haiku when the Anthropic spend cap is reached. Failures scoped
+  to one model keep the sibling candidates: Gemini quotas, and Bedrock
+  `ServiceQuotaExceededException` and `AccessDeniedException` (model access).
+  `AiProviderRequestError.account_wide` carries the scope.
+
+### Changed
+
+- `AUTH_REJECTED` is in the default fallback set
+  (`unavailable,rate_limited,quota_exhausted,auth_rejected`). To keep a
+  rejected key failing loudly, set `COMPLETIONS_FALLBACK_ON` or
+  `fallback_on` without it.
+- Anthropic's workspace spend cap ("You have reached your specified
+  workspace API usage limits") is now `QUOTA_EXHAUSTED`. It arrives as a 400
+  `invalid_request_error`, which was read as a malformed request, so a
+  reached cap failed every call instead of failing over.
+- OpenAI `billing_hard_limit_reached` (a 400) is now `QUOTA_EXHAUSTED`.
+- Engines with their own retry schedule (Bedrock, Gemini, OpenAI
+  `strict_schema_prompt`) stop retrying on `AUTH_REJECTED`, and Bedrock no
+  longer backs off on `UnrecognizedClientException`,
+  `InvalidSignatureException`, or `ExpiredTokenException`.
+
 ## 2.32.1
 
 ### Fixed

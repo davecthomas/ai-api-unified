@@ -47,6 +47,17 @@ TUPLE_GEMINI_HARD_QUOTA_HINTS: tuple[str, ...] = (
 )
 
 
+# Lowercase fragments Google sends with a 400 INVALID_ARGUMENT when the API
+# key itself is bad ("API key not valid. Please pass a valid API key.",
+# reason API_KEY_INVALID, or an expired key). The status alone reads as a
+# malformed request.
+TUPLE_GEMINI_AUTH_HINTS: tuple[str, ...] = (
+    "api key not valid",
+    "api_key_invalid",
+    "api key expired",
+)
+
+
 def classify_gemini_fallback_reason(
     status_code: int | None, message: str
 ) -> AiFallbackReason | None:
@@ -73,6 +84,11 @@ def classify_gemini_fallback_reason(
     ):
         # Early return: Gemini reports a retired model as a 400/403.
         return AiFallbackReason.MODEL_UNAVAILABLE
+    if status_code == 400 and any(
+        hint in str_lower for hint in TUPLE_GEMINI_AUTH_HINTS
+    ):
+        # Early return: a rejected API key, reported as a 400.
+        return AiFallbackReason.AUTH_REJECTED
     # Normal return with the status-only classification.
     return classify_fallback_reason_by_status(status_code)
 
@@ -401,6 +417,7 @@ class AIGoogleBase:
             return reason in (
                 AiFallbackReason.QUOTA_EXHAUSTED,
                 AiFallbackReason.MODEL_UNAVAILABLE,
+                AiFallbackReason.AUTH_REJECTED,
             )
 
         def _should_retry_message(message_text: str) -> bool:

@@ -286,7 +286,7 @@ class AIFactory:
                 (engine, model) tuples, tried after the primary fails.
             fallback_on: Optional reasons that trigger the move to the next
                 candidate; defaults to COMPLETIONS_FALLBACK_ON, then to
-                UNAVAILABLE, RATE_LIMITED, and QUOTA_EXHAUSTED.
+                UNAVAILABLE, RATE_LIMITED, QUOTA_EXHAUSTED, and AUTH_REJECTED.
 
         Returns:
             Concrete AIBaseCompletions implementation for the requested engine,

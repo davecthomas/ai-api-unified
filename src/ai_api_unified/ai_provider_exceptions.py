@@ -17,14 +17,20 @@ class AiFallbackReason(str, Enum):
     Set on AiProviderRequestError by each engine from the provider's own error
     codes, since an HTTP status alone does not separate a rate limit from an
     exhausted quota. Errors that a different model would not fix (validation,
-    authentication, a content refusal, a caller-set timeout) carry no reason.
+    a content refusal, a caller-set timeout) carry no reason. Account-level
+    failures (a rejected key, a spend cap) do carry one: a candidate on
+    another provider uses another account.
 
     Members:
         UNAVAILABLE: The provider or model cannot serve right now: 5xx,
             overloaded, model not ready, or the connection failed.
         RATE_LIMITED: A transient 429; the engine's own backoff runs first.
-        QUOTA_EXHAUSTED: Billing, credit, or quota is used up, so retrying
-            the same model is pointless.
+        QUOTA_EXHAUSTED: Billing, credit, quota, or a spend cap is used up,
+            so retrying the same model is pointless.
+        AUTH_REJECTED: The provider rejected the credentials or the account
+            (401/403, an invalid or expired key, a disabled organization).
+            Retrying the same provider is pointless; another provider's
+            account can still serve.
         MODEL_UNAVAILABLE: The model id is unknown, retired, or not offered
             in the configured region. Usually a configuration error, so a
             fallback layer should not act on it unless told to.
@@ -34,6 +40,7 @@ class AiFallbackReason(str, Enum):
     RATE_LIMITED = "rate_limited"
     QUOTA_EXHAUSTED = "quota_exhausted"
     MODEL_UNAVAILABLE = "model_unavailable"
+    AUTH_REJECTED = "auth_rejected"
 
 
 class _DeriveFallbackReason:
@@ -47,6 +54,13 @@ DERIVE_FALLBACK_REASON: _DeriveFallbackReason = _DeriveFallbackReason()
 # Reasons the same model may clear on its own, so in-engine backoff applies.
 FROZENSET_TRANSIENT_FALLBACK_REASONS: frozenset[AiFallbackReason] = frozenset(
     {AiFallbackReason.UNAVAILABLE, AiFallbackReason.RATE_LIMITED}
+)
+
+# Reasons that usually hold for the whole provider account, not one model, so
+# a fallback layer can skip other candidates on the same account. An engine
+# whose quota or access is scoped per model passes account_wide=False.
+FROZENSET_ACCOUNT_FALLBACK_REASONS: frozenset[AiFallbackReason] = frozenset(
+    {AiFallbackReason.QUOTA_EXHAUSTED, AiFallbackReason.AUTH_REJECTED}
 )
 
 
@@ -78,6 +92,9 @@ def classify_fallback_reason_by_status(
     if status_code == 404:
         # Early return for an unknown model or endpoint.
         return AiFallbackReason.MODEL_UNAVAILABLE
+    if status_code in (401, 403):
+        # Early return: the provider refused this account's credentials.
+        return AiFallbackReason.AUTH_REJECTED
     if status_code in (500, 502, 503, 504, 529):
         # Early return for a server-side outage or overload.
         return AiFallbackReason.UNAVAILABLE
@@ -152,6 +169,11 @@ class AiProviderRequestError(AiProviderRuntimeError):
             Engines set it from provider error codes. When not supplied, it
             is derived from status_code alone; pass None explicitly to mark
             an error that must not trigger a fallback.
+        account_wide: True when the failure holds for every model on the same
+            provider account, so a fallback layer can skip them. When not
+            supplied, it is True for the reasons in
+            FROZENSET_ACCOUNT_FALLBACK_REASONS; engines whose quota or model
+            access is scoped per model pass False.
     """
 
     def __init__(
@@ -163,6 +185,7 @@ class AiProviderRequestError(AiProviderRuntimeError):
         fallback_reason: (
             AiFallbackReason | None | _DeriveFallbackReason
         ) = DERIVE_FALLBACK_REASON,
+        account_wide: bool | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code: int | None = status_code
@@ -172,6 +195,11 @@ class AiProviderRequestError(AiProviderRuntimeError):
             self.fallback_reason = classify_fallback_reason_by_status(status_code)
         else:
             self.fallback_reason = fallback_reason
+        self.account_wide: bool = (
+            account_wide
+            if account_wide is not None
+            else self.fallback_reason in FROZENSET_ACCOUNT_FALLBACK_REASONS
+        )
 
     @property
     def is_transient(self) -> bool:

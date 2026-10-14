@@ -446,7 +446,8 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         Maps one OpenAI status error to a fallback reason.
 
         Reads the error code, because OpenAI returns 429 both for a rate
-        limit and for an exhausted quota (`insufficient_quota`).
+        limit and for an exhausted quota (`insufficient_quota`), and a 400
+        when the account's billing hard limit is reached.
 
         Args:
             exception: OpenAI SDK status error.
@@ -455,7 +456,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             The fallback reason, or None when another model would not help.
         """
         str_code: str = str(getattr(exception, "code", None) or "")
-        if str_code == "insufficient_quota":
+        if str_code in ("insufficient_quota", "billing_hard_limit_reached"):
             # Early return: the account cannot pay for the request.
             return AiFallbackReason.QUOTA_EXHAUSTED
         if str_code == "model_not_found":
