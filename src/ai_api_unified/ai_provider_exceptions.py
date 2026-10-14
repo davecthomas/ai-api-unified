@@ -56,8 +56,9 @@ FROZENSET_TRANSIENT_FALLBACK_REASONS: frozenset[AiFallbackReason] = frozenset(
     {AiFallbackReason.UNAVAILABLE, AiFallbackReason.RATE_LIMITED}
 )
 
-# Reasons that hold for the whole provider account, not one model, so a
-# fallback layer can skip other candidates on the same account.
+# Reasons that usually hold for the whole provider account, not one model, so
+# a fallback layer can skip other candidates on the same account. An engine
+# whose quota or access is scoped per model passes account_wide=False.
 FROZENSET_ACCOUNT_FALLBACK_REASONS: frozenset[AiFallbackReason] = frozenset(
     {AiFallbackReason.QUOTA_EXHAUSTED, AiFallbackReason.AUTH_REJECTED}
 )
@@ -168,6 +169,11 @@ class AiProviderRequestError(AiProviderRuntimeError):
             Engines set it from provider error codes. When not supplied, it
             is derived from status_code alone; pass None explicitly to mark
             an error that must not trigger a fallback.
+        account_wide: True when the failure holds for every model on the same
+            provider account, so a fallback layer can skip them. When not
+            supplied, it is True for the reasons in
+            FROZENSET_ACCOUNT_FALLBACK_REASONS; engines whose quota or model
+            access is scoped per model pass False.
     """
 
     def __init__(
@@ -179,6 +185,7 @@ class AiProviderRequestError(AiProviderRuntimeError):
         fallback_reason: (
             AiFallbackReason | None | _DeriveFallbackReason
         ) = DERIVE_FALLBACK_REASON,
+        account_wide: bool | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code: int | None = status_code
@@ -188,6 +195,11 @@ class AiProviderRequestError(AiProviderRuntimeError):
             self.fallback_reason = classify_fallback_reason_by_status(status_code)
         else:
             self.fallback_reason = fallback_reason
+        self.account_wide: bool = (
+            account_wide
+            if account_wide is not None
+            else self.fallback_reason in FROZENSET_ACCOUNT_FALLBACK_REASONS
+        )
 
     @property
     def is_transient(self) -> bool:

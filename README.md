@@ -1110,7 +1110,9 @@ Rules for the chain:
    call needs (structured output, tool use, async, streaming).
 5. After a `QUOTA_EXHAUSTED` or `AUTH_REJECTED` failure, the client skips
    the call's later candidates on the same account (same engine and
-   `base_url`), with a warning, since they would fail the same way.
+   `base_url`), with a warning, since they would fail the same way. Gemini
+   quotas and Bedrock `ServiceQuotaExceededException` / `AccessDeniedException`
+   apply to one model, so after those the client still tries the account's other models.
 6. When every candidate has failed, the client raises the last failure.
 
 | Reason | Fails over by default | Typical causes |
@@ -1127,12 +1129,13 @@ means a configuration typo, and a working fallback would hide it. Turn it on
 with `fallback_on` or `COMPLETIONS_FALLBACK_ON` when you want an unknown or
 retired model to fail over.
 
-`QUOTA_EXHAUSTED` and `AUTH_REJECTED` are account-level failures: every model
-on that provider's account fails the same way, so the client skips the
-account's other candidates (step 5), and a chain needs a candidate on a
-different provider to recover from them. A rejected key is
+`QUOTA_EXHAUSTED` and `AUTH_REJECTED` are usually account-level failures:
+every model on that provider's account fails the same way; the client skips
+the account's other candidates (step 5), so a chain needs a candidate on a
+different provider to recover from them. `AiProviderRequestError.account_wide`
+reports which case a given error is. A rejected key is
 often a configuration error too; the `failover` and `served_by_fallback` log
-events (below) are how you see it while traffic keeps flowing. Remove
+events (below) record it while traffic keeps flowing. Remove
 `auth_rejected` from `fallback_on` to make it fail loudly instead.
 
 A safety refusal is never a trigger: retrying a

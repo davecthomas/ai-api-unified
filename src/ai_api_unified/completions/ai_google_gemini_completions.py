@@ -67,7 +67,7 @@ from ..ai_base import (
     normalize_retry_policy,
     resolve_retry_policy,
 )
-from ..ai_provider_exceptions import AiProviderRequestError
+from ..ai_provider_exceptions import AiFallbackReason, AiProviderRequestError
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
@@ -1124,13 +1124,18 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             str_module: str = type(candidate).__module__ or ""
             if str_module.startswith("google"):
                 int_status: int | None = _probe_status_code(candidate)
+                reason: AiFallbackReason | None = classify_gemini_fallback_reason(
+                    int_status, str(candidate)
+                )
                 raise AiProviderRequestError(
                     f"Google Gemini request failed: {candidate}",
                     status_code=int_status,
                     provider_engine=self.PROVIDER_ENGINE_TOKEN,
-                    fallback_reason=classify_gemini_fallback_reason(
-                        int_status, str(candidate)
-                    ),
+                    fallback_reason=reason,
+                    # Gemini quotas are per model (for example
+                    # GenerateRequestsPerDayPerProjectPerModel), so another
+                    # Gemini model on the same key can still serve.
+                    account_wide=reason is AiFallbackReason.AUTH_REJECTED,
                 ) from exception
         # Normal return so non-Google exceptions propagate unchanged.
         return None

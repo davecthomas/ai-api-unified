@@ -303,6 +303,26 @@ class TestBedrock:
             )
         assert exc_info.value.fallback_reason is reason
 
+    @pytest.mark.parametrize(
+        ("code", "status", "account_wide"),
+        [
+            ("ServiceQuotaExceededException", 400, False),
+            ("AccessDeniedException", 403, False),
+            ("UnrecognizedClientException", 403, True),
+            ("ExpiredTokenException", 400, True),
+        ],
+    )
+    def test_per_model_codes_are_not_account_wide(
+        self, code: str, status: int, account_wide: bool
+    ) -> None:
+        client = _bedrock()
+        client.client.converse.side_effect = _bedrock_error(code, status, "x")
+        with pytest.raises(AiProviderRequestError) as exc_info:
+            client.send_conversation(
+                "sys", [{"role": "user", "content": [{"text": "hi"}]}]
+            )
+        assert exc_info.value.account_wide is account_wide
+
     def test_read_timeout_is_not_a_fallback_trigger(self) -> None:
         client = _bedrock()
         client.client.converse.side_effect = ReadTimeoutError(endpoint_url="x")
@@ -461,6 +481,8 @@ class TestGemini:
             with pytest.raises(AiProviderRequestError) as exc_info:
                 client.send_prompt("hi")
         assert exc_info.value.fallback_reason is R.QUOTA_EXHAUSTED
+        # Gemini quotas are per model, so another Gemini model may still serve.
+        assert exc_info.value.account_wide is False
 
     def test_backoff_loop_still_retries_a_rate_limit(self) -> None:
         genai_errors = pytest.importorskip("google.genai.errors")

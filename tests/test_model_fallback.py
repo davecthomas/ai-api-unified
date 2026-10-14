@@ -351,6 +351,17 @@ class TestFailover:
         assert [c.args[0].model for c in wrapper.builder.call_args_list] == ["other"]
         assert "candidate_skipped" in [r.ai_fallback_event for r in caplog.records]
 
+    def test_per_model_quota_still_tries_same_account(self) -> None:
+        sibling = _FakeEngine("sibling")
+        error = AiProviderRequestError(
+            "per-model quota",
+            status_code=429,
+            fallback_reason=R.QUOTA_EXHAUSTED,
+            account_wide=False,
+        )
+        wrapper = _chain(_FakeEngine("p", fail=error), sibling, shared_account=True)
+        assert wrapper.send_prompt("hi") == "sibling:ok"
+
     def test_transient_failure_still_tries_same_account(self) -> None:
         sibling = _FakeEngine("sibling")
         wrapper = _chain(

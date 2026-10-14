@@ -22,9 +22,10 @@ Three limits follow from the engines' request shapes:
   The wrapper reads which engine family shaped the history and routes the
   turn to a candidate of that family; a failure there propagates. Routing
   is a function of the history, so one client can serve many conversations.
-- QUOTA_EXHAUSTED and AUTH_REJECTED hold for the whole provider account,
-  so after one of them the call skips later candidates on the same account
-  (same engine and base_url) instead of spending a request on each.
+- An account-wide failure (by default QUOTA_EXHAUSTED or AUTH_REJECTED,
+  unless the engine marks it per-model) makes the call skip later candidates
+  on the same account (same engine and base_url) instead of spending a
+  request on each.
 - A streaming call fails over only if the error arrives before the first
   chunk; after that the caller already holds partial output.
 - Batches, token counting, and capabilities always go to the primary. Cost
@@ -54,11 +55,7 @@ from ..ai_base import (
     AITool,
     AITurnResult,
 )
-from ..ai_provider_exceptions import (
-    FROZENSET_ACCOUNT_FALLBACK_REASONS,
-    AiFallbackReason,
-    AiProviderRequestError,
-)
+from ..ai_provider_exceptions import AiFallbackReason, AiProviderRequestError
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -626,7 +623,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             bool_is_last: True when no candidate follows.
             str_operation: Method name, for logs.
             set_failed_accounts: Gains the failed candidate's account key when
-                the reason is account-level, so _attempts skips its siblings.
+                the error is account-wide, so _attempts skips its siblings.
 
         Returns:
             True to try the next candidate; False to re-raise.
@@ -635,7 +632,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             # Early return: not a fallback trigger, so the error propagates.
             return False
         str_reason: str = error.fallback_reason.value if error.fallback_reason else ""
-        if error.fallback_reason in FROZENSET_ACCOUNT_FALLBACK_REASONS:
+        if error.account_wide:
             set_failed_accounts.add(self._candidates[int_index].account_key)
         if bool_is_last:
             self._log_exhausted(str_operation, error, self._candidates[int_index].label)

@@ -1320,11 +1320,17 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             dict_response: dict[str, Any] = getattr(exception, "response", None) or {}
             raw_status = dict_response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             int_status: int | None = raw_status if isinstance(raw_status, int) else None
+            str_code, _ = self._client_error_code_and_message(exception)
             raise AiProviderRequestError(
                 f"Bedrock request failed: {exception}{self._region_hint(exception)}",
                 status_code=int_status,
                 provider_engine=self.PROVIDER_ENGINE_TOKEN,
                 fallback_reason=self._classify_fallback_reason(exception, int_status),
+                # Bedrock service quotas and model access are granted per
+                # model, so another Bedrock model on the account can serve.
+                account_wide=(
+                    False if str_code in self.FROZENSET_PER_MODEL_ERROR_CODES else None
+                ),
             ) from exception
         if isinstance(exception, BotoCoreError):
             raise AiProviderRequestError(
@@ -1356,6 +1362,12 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         "InvalidSignatureException": AiFallbackReason.AUTH_REJECTED,
         "ExpiredTokenException": AiFallbackReason.AUTH_REJECTED,
     }
+
+    # Error codes whose quota or access is scoped to one model, so a fallback
+    # layer must not skip the account's other models after one of them.
+    FROZENSET_PER_MODEL_ERROR_CODES: ClassVar[frozenset[str]] = frozenset(
+        {"ServiceQuotaExceededException", "AccessDeniedException"}
+    )
 
     @classmethod
     def _classify_fallback_reason(

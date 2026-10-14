@@ -21,7 +21,10 @@ version lives in `pyproject.toml` (see the README release section).
   skips the call's later candidates on the same account (same engine and
   `base_url`) and logs `candidate_skipped`. A chain such as
   `claude:sonnet, claude:haiku, google-gemini:...` no longer spends a
-  request on Haiku when the Anthropic spend cap is reached.
+  request on Haiku when the Anthropic spend cap is reached. Failures scoped
+  to one model keep the sibling candidates: Gemini quotas, and Bedrock
+  `ServiceQuotaExceededException` and `AccessDeniedException` (model access).
+  `AiProviderRequestError.account_wide` carries the scope.
 
 ### Changed
 
