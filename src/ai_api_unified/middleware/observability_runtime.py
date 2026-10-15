@@ -14,6 +14,11 @@ from typing import TYPE_CHECKING, TypeVar
 
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 
+from ai_api_unified.middleware.request_cost import (
+    current_request_cost_scope,
+    record_call_line_item,
+)
+
 if TYPE_CHECKING:
     from ai_api_unified.middleware.observability import (
         AiApiObservabilityMiddleware,
@@ -392,7 +397,10 @@ def execute_observed_call(
     Raises:
         Propagates the original provider exception unchanged when `callable_execute` fails.
     """
-    if not observability_middleware.bool_enabled:
+    # The request ledger records every call under an open scope even when the
+    # logger middleware is off, so the per-request report stays programmatic.
+    bool_observe: bool = observability_middleware.bool_enabled
+    if not bool_observe and current_request_cost_scope() is None:
         provider_result_without_observability: ProviderCallReturnType = (
             callable_execute()
         )
@@ -412,12 +420,13 @@ def execute_observed_call(
         )
         # Normal return because call-context construction failed and observability must fail open.
         return provider_result_without_call_context
-    _safe_emit_observability_hook(
-        stage="before_call",
-        callable_emit=lambda: observability_middleware.before_call(
-            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_INPUT)
-        ),
-    )
+    if bool_observe:
+        _safe_emit_observability_hook(
+            stage="before_call",
+            callable_emit=lambda: observability_middleware.before_call(
+                call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_INPUT)
+            ),
+        )
 
     float_started_at: float = time.perf_counter()
     try:
@@ -425,14 +434,23 @@ def execute_observed_call(
     except Exception as exception:
         caught_exception: Exception = exception
         provider_elapsed_ms: float = (time.perf_counter() - float_started_at) * 1000.0
-        _safe_emit_observability_hook(
-            stage="on_error",
-            callable_emit=lambda: observability_middleware.on_error(
-                call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_ERROR),
-                exception=caught_exception,
-                float_elapsed_ms=provider_elapsed_ms,
-            ),
+        record_call_line_item(
+            call_context=call_context,
+            call_result_summary=None,
+            float_elapsed_ms=provider_elapsed_ms,
+            exception=caught_exception,
         )
+        if bool_observe:
+            _safe_emit_observability_hook(
+                stage="on_error",
+                callable_emit=lambda: observability_middleware.on_error(
+                    call_context=call_context.with_direction(
+                        OBSERVABILITY_DIRECTION_ERROR
+                    ),
+                    exception=caught_exception,
+                    float_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
         # Early return via re-raise because provider exception behavior must remain unchanged.
         raise
 
@@ -452,13 +470,21 @@ def execute_observed_call(
         )
         # Normal return because result-summary construction failed and observability must fail open.
         return provider_result
-    _safe_emit_observability_hook(
-        stage="after_call",
-        callable_emit=lambda: observability_middleware.after_call(
-            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_OUTPUT),
-            call_result_summary=call_result_summary,
-        ),
+    record_call_line_item(
+        call_context=call_context,
+        call_result_summary=call_result_summary,
+        float_elapsed_ms=provider_elapsed_ms,
     )
+    if bool_observe:
+        _safe_emit_observability_hook(
+            stage="after_call",
+            callable_emit=lambda: observability_middleware.after_call(
+                call_context=call_context.with_direction(
+                    OBSERVABILITY_DIRECTION_OUTPUT
+                ),
+                call_result_summary=call_result_summary,
+            ),
+        )
     # Normal return with the original provider result after observability emission.
     return provider_result
 
@@ -493,7 +519,8 @@ async def execute_observed_async_call(
     Raises:
         Propagates the original provider exception unchanged when the awaited call fails.
     """
-    if not observability_middleware.bool_enabled:
+    bool_observe: bool = observability_middleware.bool_enabled
+    if not bool_observe and current_request_cost_scope() is None:
         # Normal return because observability is disabled and the provider result is unchanged.
         return await callable_execute()
 
@@ -507,12 +534,13 @@ async def execute_observed_async_call(
         )
         # Normal return because call-context construction failed and observability must fail open.
         return await callable_execute()
-    _safe_emit_observability_hook(
-        stage="before_call",
-        callable_emit=lambda: observability_middleware.before_call(
-            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_INPUT)
-        ),
-    )
+    if bool_observe:
+        _safe_emit_observability_hook(
+            stage="before_call",
+            callable_emit=lambda: observability_middleware.before_call(
+                call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_INPUT)
+            ),
+        )
 
     float_started_at: float = time.perf_counter()
     try:
@@ -520,14 +548,23 @@ async def execute_observed_async_call(
     except Exception as exception:
         caught_exception: Exception = exception
         provider_elapsed_ms: float = (time.perf_counter() - float_started_at) * 1000.0
-        _safe_emit_observability_hook(
-            stage="on_error",
-            callable_emit=lambda: observability_middleware.on_error(
-                call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_ERROR),
-                exception=caught_exception,
-                float_elapsed_ms=provider_elapsed_ms,
-            ),
+        record_call_line_item(
+            call_context=call_context,
+            call_result_summary=None,
+            float_elapsed_ms=provider_elapsed_ms,
+            exception=caught_exception,
         )
+        if bool_observe:
+            _safe_emit_observability_hook(
+                stage="on_error",
+                callable_emit=lambda: observability_middleware.on_error(
+                    call_context=call_context.with_direction(
+                        OBSERVABILITY_DIRECTION_ERROR
+                    ),
+                    exception=caught_exception,
+                    float_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
         # Early return via re-raise because provider exception behavior must remain unchanged.
         raise
 
@@ -547,13 +584,21 @@ async def execute_observed_async_call(
         )
         # Normal return because result-summary construction failed and observability must fail open.
         return provider_result
-    _safe_emit_observability_hook(
-        stage="after_call",
-        callable_emit=lambda: observability_middleware.after_call(
-            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_OUTPUT),
-            call_result_summary=call_result_summary,
-        ),
+    record_call_line_item(
+        call_context=call_context,
+        call_result_summary=call_result_summary,
+        float_elapsed_ms=provider_elapsed_ms,
     )
+    if bool_observe:
+        _safe_emit_observability_hook(
+            stage="after_call",
+            callable_emit=lambda: observability_middleware.after_call(
+                call_context=call_context.with_direction(
+                    OBSERVABILITY_DIRECTION_OUTPUT
+                ),
+                call_result_summary=call_result_summary,
+            ),
+        )
     # Normal return with the original provider result after observability emission.
     return provider_result
 
@@ -588,7 +633,8 @@ def execute_observed_streaming_call(
     Raises:
         Propagates the original provider exception unchanged when the stream fails.
     """
-    if not observability_middleware.bool_enabled:
+    bool_observe: bool = observability_middleware.bool_enabled
+    if not bool_observe and current_request_cost_scope() is None:
         # Early yield-through because observability is disabled and the stream is unchanged.
         yield from callable_open_stream()
         return
@@ -605,12 +651,13 @@ def execute_observed_streaming_call(
         yield from callable_open_stream()
         return
 
-    _safe_emit_observability_hook(
-        stage="before_call",
-        callable_emit=lambda: observability_middleware.before_call(
-            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_INPUT)
-        ),
-    )
+    if bool_observe:
+        _safe_emit_observability_hook(
+            stage="before_call",
+            callable_emit=lambda: observability_middleware.before_call(
+                call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_INPUT)
+            ),
+        )
 
     float_started_at: float = time.perf_counter()
     bool_output_event_emitted: bool = False
@@ -634,6 +681,14 @@ def execute_observed_streaming_call(
                 exception.__class__.__name__,
             )
             # Early return because result-summary construction failed and observability fails open.
+            return None
+        record_call_line_item(
+            call_context=call_context,
+            call_result_summary=call_result_summary,
+            float_elapsed_ms=provider_elapsed_ms,
+        )
+        if not bool_observe:
+            # Early return: the ledger has the call; no logger hooks to fire.
             return None
         _safe_emit_observability_hook(
             stage="after_call",
@@ -659,14 +714,23 @@ def execute_observed_streaming_call(
         caught_exception: Exception = exception
         bool_output_event_emitted = True
         provider_elapsed_ms = (time.perf_counter() - float_started_at) * 1000.0
-        _safe_emit_observability_hook(
-            stage="on_error",
-            callable_emit=lambda: observability_middleware.on_error(
-                call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_ERROR),
-                exception=caught_exception,
-                float_elapsed_ms=provider_elapsed_ms,
-            ),
+        record_call_line_item(
+            call_context=call_context,
+            call_result_summary=None,
+            float_elapsed_ms=provider_elapsed_ms,
+            exception=caught_exception,
         )
+        if bool_observe:
+            _safe_emit_observability_hook(
+                stage="on_error",
+                callable_emit=lambda: observability_middleware.on_error(
+                    call_context=call_context.with_direction(
+                        OBSERVABILITY_DIRECTION_ERROR
+                    ),
+                    exception=caught_exception,
+                    float_elapsed_ms=provider_elapsed_ms,
+                ),
+            )
         # Early return via re-raise because provider exception behavior must remain unchanged.
         raise
 

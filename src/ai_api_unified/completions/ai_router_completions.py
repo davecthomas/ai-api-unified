@@ -28,6 +28,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
+from decimal import Decimal
 from typing import Any, ClassVar, Type, TypeVar
 
 from ..ai_base import (
@@ -55,6 +56,7 @@ from ..middleware.observability_runtime import (
     reset_observability_context,
     set_observability_context,
 )
+from ..middleware.request_cost import RequestCostScope, current_request_cost_scope
 from ..routing.router_config import (
     AIRouterConfig,
     AIRouterTier,
@@ -492,7 +494,7 @@ class AiRouterCompletions(AIBaseCompletions):
             return self._int_default_tier_index, ROUTE_METHOD_DEFAULT, None
         float_started: float = time.perf_counter()
         try:
-            decision: AIClassificationResult = self._classify(str_text)
+            decision: AIClassificationResult = self._classify(str_text, str_route_id)
         except Exception as exception:
             self._log_classifier_failed(
                 str_operation,
@@ -571,8 +573,8 @@ class AiRouterCompletions(AIBaseCompletions):
         # Normal return with the first eligible tier, or the default chain.
         return list_eligible[0] if list_eligible else None
 
-    def _classify(self, str_text: str) -> AIClassificationResult:
-        """Runs the classifier with the router role tagged on its call."""
+    def _classify(self, str_text: str, str_route_id: str) -> AIClassificationResult:
+        """Runs the classifier with the router role and route id tagged on its call."""
         assert self._classifier is not None
         list_choices: list[AIClassificationChoice] = [
             AIClassificationChoice(value=tier.name, description=tier.description)
@@ -584,7 +586,9 @@ class AiRouterCompletions(AIBaseCompletions):
         float_timeout: float | None = (
             self._config.classifier.timeout_seconds if self._config.classifier else None
         )
-        token = self._push_tags({TAG_ROUTER_ROLE: TAG_VALUE_CLASSIFIER_ROLE})
+        token = self._push_tags(
+            {TAG_ROUTER_ROLE: TAG_VALUE_CLASSIFIER_ROLE, TAG_ROUTE_ID: str_route_id}
+        )
         try:
             # Normal return with the classifier's decision.
             return self._classifier.classify_choice(
@@ -596,12 +600,14 @@ class AiRouterCompletions(AIBaseCompletions):
         finally:
             reset_observability_context(token)
 
-    async def _aclassify(self, str_text: str) -> AIClassificationResult:
+    async def _aclassify(
+        self, str_text: str, str_route_id: str
+    ) -> AIClassificationResult:
         """Async twin of _classify; falls back to the sync path without async support."""
         assert self._classifier is not None
         if not self._classifier.capabilities.supports_async:
             # Early return via the sync path.
-            return self._classify(str_text)
+            return self._classify(str_text, str_route_id)
         list_choices: list[AIClassificationChoice] = [
             AIClassificationChoice(value=tier.name, description=tier.description)
             for tier in self._config.tiers
@@ -612,7 +618,9 @@ class AiRouterCompletions(AIBaseCompletions):
         float_timeout: float | None = (
             self._config.classifier.timeout_seconds if self._config.classifier else None
         )
-        token = self._push_tags({TAG_ROUTER_ROLE: TAG_VALUE_CLASSIFIER_ROLE})
+        token = self._push_tags(
+            {TAG_ROUTER_ROLE: TAG_VALUE_CLASSIFIER_ROLE, TAG_ROUTE_ID: str_route_id}
+        )
         try:
             # Normal return with the classifier's decision.
             return await self._classifier.aclassify_choice(
@@ -648,7 +656,9 @@ class AiRouterCompletions(AIBaseCompletions):
             return self._int_default_tier_index, ROUTE_METHOD_DEFAULT, None
         float_started: float = time.perf_counter()
         try:
-            decision: AIClassificationResult = await self._aclassify(str_text)
+            decision: AIClassificationResult = await self._aclassify(
+                str_text, str_route_id
+            )
         except Exception as exception:
             self._log_classifier_failed(
                 str_operation,
@@ -930,7 +940,7 @@ class AiRouterCompletions(AIBaseCompletions):
                     decision.token_source if decision is not None else None
                 ),
                 "classifier_usd_cost": (
-                    self._decision_cost(decision) if decision is not None else None
+                    self._classifier_cost() if decision is not None else None
                 ),
                 "caller_id": context.caller_id,
                 "session_id": context.session_id,
@@ -938,25 +948,20 @@ class AiRouterCompletions(AIBaseCompletions):
             },
         )
 
-    def _decision_cost(self, decision: AIClassificationResult) -> float | None:
-        """USD cost of one classification from the classifier's pricing, if known."""
-        if self._classifier is None or decision.usage.input_tokens is None:
-            # Early return: nothing to price.
+    @staticmethod
+    def _classifier_cost() -> float | None:
+        """
+        USD cost of this request's classifier call, read from the request
+        ledger so it matches the classifier's own cost event (cache tokens
+        included), or None when unpriced or no request is open.
+        """
+        scope: RequestCostScope | None = current_request_cost_scope()
+        if scope is None:
+            # Early return: no request ledger to read.
             return None
-        pricing: Any = self._classifier.capabilities.pricing
-        if pricing is None:
-            # Early return: unpriced.
-            return None
-        # Normal return with the priced call.
-        return float(
-            pricing.compute_token_cost(
-                input_tokens=decision.usage.input_tokens,
-                output_tokens=decision.usage.output_tokens or 0,
-                cached_input_tokens=0,
-                cache_write_5m_tokens=0,
-                cache_write_1h_tokens=0,
-            )
-        )
+        usd_cost: Decimal | None = scope.classifier_cost()
+        # Normal return with the ledger's classifier spend.
+        return float(usd_cost) if usd_cost is not None else None
 
     def _log_classifier_failed(
         self,
@@ -1042,27 +1047,35 @@ class AiRouterCompletions(AIBaseCompletions):
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> str:
         str_route_id: str = uuid.uuid4().hex
-        int_index, str_method, decision = self._select(
-            str_text=prompt,
-            messages=None,
-            str_route=None,
-            str_operation="send_prompt",
-            str_route_id=str_route_id,
-        )
-        # Normal return with the serving tier's text.
-        return self._run(
-            "send_prompt",
-            lambda client: client.send_prompt(
-                prompt,
-                system_prompt=system_prompt,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                other_params=other_params,
-            ),
-            int_index=int_index,
-            str_method=str_method,
-            decision=decision,
-            str_route_id=str_route_id,
+
+        def _routed() -> str:
+            int_index, str_method, decision = self._select(
+                str_text=prompt,
+                messages=None,
+                str_route=None,
+                str_operation="send_prompt",
+                str_route_id=str_route_id,
+            )
+            # Normal return with the serving tier's text.
+            return self._run(
+                "send_prompt",
+                lambda client: client.send_prompt(
+                    prompt,
+                    system_prompt=system_prompt,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    other_params=other_params,
+                ),
+                int_index=int_index,
+                str_method=str_method,
+                decision=decision,
+                str_route_id=str_route_id,
+            )
+
+        # Normal return: the classifier and every tier attempt are charged
+        # to one request keyed by the route id.
+        return self._with_request_cost_scope(
+            "send_prompt", _routed, request_id=str_route_id
         )
 
     async def asend_prompt(
@@ -1075,27 +1088,34 @@ class AiRouterCompletions(AIBaseCompletions):
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> str:
         str_route_id: str = uuid.uuid4().hex
-        int_index, str_method, decision = await self._aselect(
-            str_text=prompt,
-            messages=None,
-            str_route=None,
-            str_operation="asend_prompt",
-            str_route_id=str_route_id,
-        )
-        # Normal return with the serving tier's text.
-        return await self._arun(
-            "asend_prompt",
-            lambda client: client.asend_prompt(
-                prompt,
-                system_prompt=system_prompt,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                other_params=other_params,
-            ),
-            int_index=int_index,
-            str_method=str_method,
-            decision=decision,
-            str_route_id=str_route_id,
+
+        async def _routed() -> str:
+            int_index, str_method, decision = await self._aselect(
+                str_text=prompt,
+                messages=None,
+                str_route=None,
+                str_operation="asend_prompt",
+                str_route_id=str_route_id,
+            )
+            # Normal return with the serving tier's text.
+            return await self._arun(
+                "asend_prompt",
+                lambda client: client.asend_prompt(
+                    prompt,
+                    system_prompt=system_prompt,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    other_params=other_params,
+                ),
+                int_index=int_index,
+                str_method=str_method,
+                decision=decision,
+                str_route_id=str_route_id,
+            )
+
+        # Normal return with the request-scoped result.
+        return await self._awith_request_cost_scope(
+            "asend_prompt", _routed, request_id=str_route_id
         )
 
     def send_prompt_streaming(
@@ -1105,15 +1125,20 @@ class AiRouterCompletions(AIBaseCompletions):
         other_params: AICompletionsPromptParamsBase | None = None,
     ) -> Iterator[str]:
         """Classifies once, then streams from the chosen tier; escalation only before the first chunk."""
-        # Normal return with the routing generator.
-        return self._stream(prompt, other_params)
+        str_route_id: str = uuid.uuid4().hex
+        # Normal return with the routing generator, charged to one request.
+        return self._stream_with_request_cost_scope(
+            "send_prompt_streaming",
+            lambda: self._stream(prompt, other_params, str_route_id),
+            request_id=str_route_id,
+        )
 
     def _stream(
         self,
         prompt: str,
         other_params: AICompletionsPromptParamsBase | None,
+        str_route_id: str,
     ) -> Iterator[str]:
-        str_route_id: str = uuid.uuid4().hex
         int_index, str_method, decision = self._select(
             str_text=prompt,
             messages=None,
@@ -1191,32 +1216,39 @@ class AiRouterCompletions(AIBaseCompletions):
     ) -> AIStructuredOutputResult:
         str_route_id: str = uuid.uuid4().hex
         dict_options, str_route = self._strip_route_option(provider_options)
-        int_index, str_method, decision = self._select(
-            str_text=classification_text_for(prompt, messages),
-            messages=messages,
-            str_route=str_route,
-            str_operation="send_structured_output",
-            str_route_id=str_route_id,
-        )
-        # Normal return with the serving tier's result.
-        return self._run(
-            "send_structured_output",
-            lambda client: client.send_structured_output(
-                prompt,
-                response_model=response_model,
-                response_schema=response_schema,
-                system_prompt=system_prompt,
+
+        def _routed() -> AIStructuredOutputResult:
+            int_index, str_method, decision = self._select(
+                str_text=classification_text_for(prompt, messages),
                 messages=messages,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=dict_options,
-                prompt_cache=prompt_cache,
-            ),
-            int_index=int_index,
-            str_method=str_method,
-            decision=decision,
-            str_route_id=str_route_id,
-            messages=messages,
+                str_route=str_route,
+                str_operation="send_structured_output",
+                str_route_id=str_route_id,
+            )
+            # Normal return with the serving tier's result.
+            return self._run(
+                "send_structured_output",
+                lambda client: client.send_structured_output(
+                    prompt,
+                    response_model=response_model,
+                    response_schema=response_schema,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=dict_options,
+                    prompt_cache=prompt_cache,
+                ),
+                int_index=int_index,
+                str_method=str_method,
+                decision=decision,
+                str_route_id=str_route_id,
+                messages=messages,
+            )
+
+        # Normal return with the request-scoped result.
+        return self._with_request_cost_scope(
+            "send_structured_output", _routed, request_id=str_route_id
         )
 
     async def asend_structured_output(
@@ -1234,32 +1266,39 @@ class AiRouterCompletions(AIBaseCompletions):
     ) -> AIStructuredOutputResult:
         str_route_id: str = uuid.uuid4().hex
         dict_options, str_route = self._strip_route_option(provider_options)
-        int_index, str_method, decision = await self._aselect(
-            str_text=classification_text_for(prompt, messages),
-            messages=messages,
-            str_route=str_route,
-            str_operation="asend_structured_output",
-            str_route_id=str_route_id,
-        )
-        # Normal return with the serving tier's result.
-        return await self._arun(
-            "asend_structured_output",
-            lambda client: client.asend_structured_output(
-                prompt,
-                response_model=response_model,
-                response_schema=response_schema,
-                system_prompt=system_prompt,
+
+        async def _routed() -> AIStructuredOutputResult:
+            int_index, str_method, decision = await self._aselect(
+                str_text=classification_text_for(prompt, messages),
                 messages=messages,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=dict_options,
-                prompt_cache=prompt_cache,
-            ),
-            int_index=int_index,
-            str_method=str_method,
-            decision=decision,
-            str_route_id=str_route_id,
-            messages=messages,
+                str_route=str_route,
+                str_operation="asend_structured_output",
+                str_route_id=str_route_id,
+            )
+            # Normal return with the serving tier's result.
+            return await self._arun(
+                "asend_structured_output",
+                lambda client: client.asend_structured_output(
+                    prompt,
+                    response_model=response_model,
+                    response_schema=response_schema,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=dict_options,
+                    prompt_cache=prompt_cache,
+                ),
+                int_index=int_index,
+                str_method=str_method,
+                decision=decision,
+                str_route_id=str_route_id,
+                messages=messages,
+            )
+
+        # Normal return with the request-scoped result.
+        return await self._awith_request_cost_scope(
+            "asend_structured_output", _routed, request_id=str_route_id
         )
 
     def send_conversation(
@@ -1276,31 +1315,38 @@ class AiRouterCompletions(AIBaseCompletions):
     ) -> AITurnResult:
         str_route_id: str = uuid.uuid4().hex
         dict_options, str_route = self._strip_route_option(provider_options)
-        int_index, str_method, decision = self._select(
-            str_text=classification_text_for(None, messages),
-            messages=messages,
-            str_route=str_route,
-            str_operation="send_conversation",
-            str_route_id=str_route_id,
-        )
-        # Normal return with the serving tier's turn.
-        return self._run(
-            "send_conversation",
-            lambda client: client.send_conversation(
-                system_prompt,
-                messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=dict_options,
-                prompt_cache=prompt_cache,
-            ),
-            int_index=int_index,
-            str_method=str_method,
-            decision=decision,
-            str_route_id=str_route_id,
-            messages=messages,
+
+        def _routed() -> AITurnResult:
+            int_index, str_method, decision = self._select(
+                str_text=classification_text_for(None, messages),
+                messages=messages,
+                str_route=str_route,
+                str_operation="send_conversation",
+                str_route_id=str_route_id,
+            )
+            # Normal return with the serving tier's turn.
+            return self._run(
+                "send_conversation",
+                lambda client: client.send_conversation(
+                    system_prompt,
+                    messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=dict_options,
+                    prompt_cache=prompt_cache,
+                ),
+                int_index=int_index,
+                str_method=str_method,
+                decision=decision,
+                str_route_id=str_route_id,
+                messages=messages,
+            )
+
+        # Normal return with the request-scoped turn.
+        return self._with_request_cost_scope(
+            "send_conversation", _routed, request_id=str_route_id
         )
 
     async def asend_conversation(
@@ -1317,31 +1363,38 @@ class AiRouterCompletions(AIBaseCompletions):
     ) -> AITurnResult:
         str_route_id: str = uuid.uuid4().hex
         dict_options, str_route = self._strip_route_option(provider_options)
-        int_index, str_method, decision = await self._aselect(
-            str_text=classification_text_for(None, messages),
-            messages=messages,
-            str_route=str_route,
-            str_operation="asend_conversation",
-            str_route_id=str_route_id,
-        )
-        # Normal return with the serving tier's turn.
-        return await self._arun(
-            "asend_conversation",
-            lambda client: client.asend_conversation(
-                system_prompt,
-                messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=dict_options,
-                prompt_cache=prompt_cache,
-            ),
-            int_index=int_index,
-            str_method=str_method,
-            decision=decision,
-            str_route_id=str_route_id,
-            messages=messages,
+
+        async def _routed() -> AITurnResult:
+            int_index, str_method, decision = await self._aselect(
+                str_text=classification_text_for(None, messages),
+                messages=messages,
+                str_route=str_route,
+                str_operation="asend_conversation",
+                str_route_id=str_route_id,
+            )
+            # Normal return with the serving tier's turn.
+            return await self._arun(
+                "asend_conversation",
+                lambda client: client.asend_conversation(
+                    system_prompt,
+                    messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=dict_options,
+                    prompt_cache=prompt_cache,
+                ),
+                int_index=int_index,
+                str_method=str_method,
+                decision=decision,
+                str_route_id=str_route_id,
+                messages=messages,
+            )
+
+        # Normal return with the request-scoped turn.
+        return await self._awith_request_cost_scope(
+            "asend_conversation", _routed, request_id=str_route_id
         )
 
     # ── History helpers ─────────────────────────────────────────────────────

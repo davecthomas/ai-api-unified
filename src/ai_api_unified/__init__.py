@@ -79,6 +79,11 @@ from .completions.ai_fallback_completions import (
     AIFallbackCandidate,
     AiFallbackCompletions,
 )
+from .middleware.request_cost import (
+    AIRequestCostLineItem,
+    AIRequestCostReport,
+    request_cost_scope,
+)
 from .pricing import (
     AIModelInfo,
     AIModelPricing,
@@ -136,6 +141,8 @@ __all__: list[str] = [
     "AIPromptCacheRetention",
     "AIProviderOrgInfoBase",
     "AIProviderOrgInfoCapability",
+    "AIRequestCostLineItem",
+    "AIRequestCostReport",
     "AIStructuredOutputResult",
     "AITokenUsage",
     "AITool",
@@ -148,6 +155,7 @@ __all__: list[str] = [
     "RETRY_POLICY_NONE",
     "StructuredResponseTokenLimitError",
     "SupportedDataType",
+    "request_cost_scope",
     "AIModelPricing",
     "AIModelInfo",
     "AITokenRates",

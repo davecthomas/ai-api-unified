@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from decimal import Decimal
 from collections.abc import Callable, Mapping
 
 from ai_api_unified.middleware.middleware import (
@@ -31,8 +32,13 @@ from ai_api_unified.middleware.observability_runtime import (
     OBSERVABILITY_DIRECTION_OUTPUT,
     ORIGINATING_CALLER_ID_SOURCE_NONE,
 )
+from ai_api_unified.middleware.request_cost import (
+    OBSERVABILITY_EVENT_REQUEST_COST,
+    AIRequestCostReport,
+    compute_call_cost,
+    resolve_call_pricing,
+)
 from ai_api_unified.pricing.model_pricing import AIModelPricing
-from ai_api_unified.pricing.pricing_registry import get_model_pricing
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 OBSERVABILITY_LOGGER_NAME: str = "ai_api_unified.middleware.observability"
@@ -153,6 +159,22 @@ class AiApiObservabilityMiddleware(ABC):
             None after the middleware finishes its error-side observation work.
         """
         ...
+
+    def emit_request_cost(self, report: AIRequestCostReport) -> None:
+        """
+        Observes the finished per-request cost report when a request scope closes.
+
+        Not abstract: a middleware that only watches single calls can ignore
+        requests. The logger-backed implementation emits it on the cost topic.
+
+        Args:
+            report: Totals and line items for one request.
+
+        Returns:
+            None after the middleware finishes its request-level observation work.
+        """
+        # Normal return because the default implementation ignores request reports.
+        return None
 
 
 class NoOpObservabilityMiddleware(AiApiObservabilityMiddleware):
@@ -365,14 +387,15 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         if not self.observability_settings.emit_cost:
             # Early return because cost enrichment is disabled.
             return None
-        if call_context.model_name is None:
-            # Early return because a model is required to resolve pricing.
-            return None
-        pricing: AIModelPricing | None = get_model_pricing(
-            call_context.provider_vendor, call_context.model_name
-        )
-        if pricing is None or pricing.token_rates is None:
+        pricing: AIModelPricing | None = resolve_call_pricing(call_context)
+        if pricing is None:
             # Early return because this model has no token pricing on record.
+            return None
+        # The request line item is priced by the same function, so the
+        # per-call event and the per-request total never disagree.
+        usd_cost: Decimal | None = compute_call_cost(pricing, call_result_summary)
+        if usd_cost is None:
+            # Early return because there is no usage to cost.
             return None
         int_input_tokens: int | None = call_result_summary.provider_prompt_tokens
         int_output_tokens: int | None = call_result_summary.provider_completion_tokens
@@ -384,27 +407,6 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         )
         int_cache_write_1h_tokens: int | None = (
             call_result_summary.provider_cache_write_1h_tokens
-        )
-        if (
-            int_input_tokens is None
-            and int_output_tokens is None
-            and int_cache_write_5m_tokens is None
-            and int_cache_write_1h_tokens is None
-        ):
-            # Early return because there is no usage to cost.
-            return None
-        # Cached input tokens are a subset of provider_prompt_tokens billed at
-        # the cached rate; the remainder bills at the full input rate. Cache
-        # writes are reported separately by the provider and are not part of
-        # the prompt count, so they are added rather than subtracted.
-        int_cached: int = int_cached_input_tokens or 0
-        int_non_cached_input: int = max((int_input_tokens or 0) - int_cached, 0)
-        usd_cost = pricing.compute_token_cost(
-            input_tokens=int_non_cached_input,
-            output_tokens=int_output_tokens or 0,
-            cached_input_tokens=int_cached,
-            cache_write_5m_tokens=int_cache_write_5m_tokens or 0,
-            cache_write_1h_tokens=int_cache_write_1h_tokens or 0,
         )
         dict_cost_fields: dict[str, object] = {
             "call_id": call_context.call_id,
@@ -439,6 +441,29 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             dict_cost_fields,
         )
         # Normal return after cost event logging.
+        return None
+
+    def emit_request_cost(self, report: AIRequestCostReport) -> None:
+        """
+        Emits one `ai_api_request_cost` event on the cost topic when cost
+        enrichment is enabled.
+
+        Args:
+            report: Totals and line items for one request.
+
+        Returns:
+            None after the request-cost event has been logged or skipped.
+        """
+        if not self.observability_settings.emit_cost:
+            # Early return because cost enrichment is disabled.
+            return None
+        self.cost_logger.log(
+            self.int_log_level,
+            OBSERVABILITY_EVENT_LOG_MESSAGE,
+            OBSERVABILITY_EVENT_REQUEST_COST,
+            report.to_event_fields(),
+        )
+        # Normal return after request-cost event logging.
         return None
 
     def on_error(

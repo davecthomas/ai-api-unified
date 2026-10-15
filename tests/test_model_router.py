@@ -306,8 +306,11 @@ class TestClassifiedRouting:
         call = classifier.calls[0]
         assert call["choices"] == ["easy", "hard"] and call["text"] == "hi"
         assert "Pick the one tier" in call["instructions"]
-        assert classifier.tags_seen[0] == {"router_role": "classifier"}
-        # The tag is gone once the call returns.
+        tags = classifier.tags_seen[0]
+        assert tags["router_role"] == "classifier"
+        # The classifier call correlates with the tier calls and the request.
+        assert tags["route_id"] and tags["request_id"] == tags["route_id"]
+        # The tags are gone once the call returns.
         assert dict(get_observability_context().tags) == {}
 
     def test_custom_instructions_and_timeout_reach_the_classifier(self) -> None:

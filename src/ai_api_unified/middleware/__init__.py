@@ -34,8 +34,17 @@ from ai_api_unified.middleware.observability_runtime import (
     set_observability_context,
 )
 from ai_api_unified.middleware.pii_redactor import AiApiPiiMiddleware
+from ai_api_unified.middleware.request_cost import (
+    AIRequestCostLineItem,
+    AIRequestCostReport,
+    RequestCostScope,
+    current_request_cost_scope,
+    request_cost_scope,
+)
 
 __all__: list[str] = [
+    "AIRequestCostLineItem",
+    "AIRequestCostReport",
     "AiApiCallContextModel",
     "AiApiCallResultSummaryModel",
     "AiApiMiddleware",
@@ -50,11 +59,14 @@ __all__: list[str] = [
     "ObservabilityContextModel",
     "ObservabilitySettingsModel",
     "PiiRedactionSettingsModel",
+    "RequestCostScope",
+    "current_request_cost_scope",
     "execute_observed_call",
     "execute_middleware_with_timing",
     "get_observability_context",
     "get_observability_middleware",
     "log_middleware_observability_events",
+    "request_cost_scope",
     "reset_observability_context",
     "resolve_originating_caller",
     "set_observability_context",

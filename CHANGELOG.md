@@ -4,6 +4,25 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.3.0
+
+### Added
+
+- Per-request cost. A request (a router or fallback call, a plain engine
+  call, or a caller's `request_cost_scope()`) records one line item per
+  provider call it makes: the classifier, each failed attempt, each
+  fallback, and each escalation. `client.last_request_cost` returns an
+  `AIRequestCostReport` with `total_usd`, `classifier_usd`, `wasted_usd`
+  (billed answers nobody used), `billed_calls`, `failed_calls`,
+  `unpriced_calls`, `served_by`, and the `calls` list
+  (`AIRequestCostLineItem`). The ledger is kept whether or not the
+  observability middleware is enabled. With `emit_cost` on, the outermost
+  scope emits one `ai_api_request_cost` event on the cost topic; per-call
+  cost events are unchanged and gain `tag_request_id`. The router's
+  classifier call now carries the `route_id` tag, and the routed log's
+  `classifier_usd_cost` comes from the same pricing as the classifier's cost
+  event (cache tokens included). ADR-0020 amends ADR-0014 and ADR-0016.
+
 ## 3.2.0
 
 ### Added

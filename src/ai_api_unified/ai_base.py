@@ -49,6 +49,11 @@ from ai_api_unified.middleware.observability_runtime import (
     get_observability_context,
     resolve_originating_caller,
 )
+from ai_api_unified.middleware.request_cost import (
+    AIRequestCostReport,
+    RequestCostScope,
+    request_cost_scope,
+)
 from ai_api_unified.pricing.model_pricing import AIModelPricing
 from ai_api_unified.middleware.pii_redactor import AiApiPiiMiddleware
 
@@ -781,10 +786,92 @@ class AIBase(ABC):
     PROVIDER_ENGINE_CLAUDE = "claude"
     PROVIDER_ENGINE_VOYAGE = "voyage"
     _observability_middleware: AiApiObservabilityMiddleware | None = None
+    _last_request_cost: AIRequestCostReport | None = None
 
     def __init__(self, model: str | None = None, **kwargs):
         super().__init__()
         self.model: str | None = model
+
+    @property
+    def last_request_cost(self) -> AIRequestCostReport | None:
+        """
+        Cost report for the last request this client ran as the outermost
+        call: every provider call it made (classification, failed attempts,
+        fallbacks, escalations) with one total. None before the first
+        request, and unchanged by calls made under another client's or a
+        caller's `request_cost_scope()`, which own that report instead.
+        """
+        # Normal return with the stored report.
+        return self._last_request_cost
+
+    def _with_request_cost_scope(
+        self,
+        operation: str,
+        callable_run: Callable[[], ProviderCallReturnType],
+        *,
+        request_id: str | None = None,
+    ) -> ProviderCallReturnType:
+        """
+        Runs one public call inside a request-cost scope, opening it when
+        none is active and storing the report when this client owns it.
+
+        Args:
+            operation: Public operation name for the report.
+            callable_run: The call to charge to the request.
+            request_id: Correlation id for a new scope; generated when omitted.
+
+        Returns:
+            Whatever `callable_run` returns.
+        """
+        scope: RequestCostScope | None = None
+        try:
+            with request_cost_scope(operation, request_id=request_id) as scope:
+                result: ProviderCallReturnType = callable_run()
+                scope.mark_served()
+        finally:
+            if scope is not None and scope.bool_owner:
+                self._last_request_cost = scope.report
+        # Normal return with the call's result.
+        return result
+
+    async def _awith_request_cost_scope(
+        self,
+        operation: str,
+        callable_run: Callable[[], Any],
+        *,
+        request_id: str | None = None,
+    ) -> Any:
+        """Async twin of _with_request_cost_scope; `callable_run` returns an awaitable."""
+        scope: RequestCostScope | None = None
+        try:
+            with request_cost_scope(operation, request_id=request_id) as scope:
+                result: Any = await callable_run()
+                scope.mark_served()
+        finally:
+            if scope is not None and scope.bool_owner:
+                self._last_request_cost = scope.report
+        # Normal return with the call's result.
+        return result
+
+    def _stream_with_request_cost_scope(
+        self,
+        operation: str,
+        callable_open_stream: Callable[[], Iterator[str]],
+        *,
+        request_id: str | None = None,
+    ) -> Iterator[str]:
+        """
+        Streaming twin of _with_request_cost_scope: the scope spans the
+        stream's consumption and closes when it ends or is abandoned.
+        """
+        scope: RequestCostScope | None = None
+        try:
+            with request_cost_scope(operation, request_id=request_id) as scope:
+                yield from callable_open_stream()
+                scope.mark_served()
+        finally:
+            if scope is not None and scope.bool_owner:
+                self._last_request_cost = scope.report
 
     @property
     def model_name(self) -> str | None:
@@ -924,16 +1011,21 @@ class AIBase(ABC):
         observability_middleware: AiApiObservabilityMiddleware = (
             self._get_observability_middleware()
         )
-        provider_result: ProviderCallReturnType = execute_observed_call(
-            observability_middleware=observability_middleware,
-            callable_build_call_context=lambda: self._build_observability_call_context(
-                capability=capability,
-                operation=operation,
-                dict_metadata=dict_input_metadata,
-                legacy_caller_id=legacy_caller_id,
+        # A plain engine call is its own one-call request unless a wrapper or
+        # the caller already opened one.
+        provider_result: ProviderCallReturnType = self._with_request_cost_scope(
+            operation,
+            lambda: execute_observed_call(
+                observability_middleware=observability_middleware,
+                callable_build_call_context=lambda: self._build_observability_call_context(
+                    capability=capability,
+                    operation=operation,
+                    dict_metadata=dict_input_metadata,
+                    legacy_caller_id=legacy_caller_id,
+                ),
+                callable_execute=callable_execute,
+                callable_build_result_summary=callable_build_result_summary,
             ),
-            callable_execute=callable_execute,
-            callable_build_result_summary=callable_build_result_summary,
         )
         # Normal return with the original provider result after optional observability wrapping.
         return provider_result
@@ -967,16 +1059,19 @@ class AIBase(ABC):
         observability_middleware: AiApiObservabilityMiddleware = (
             self._get_observability_middleware()
         )
-        provider_result: Any = await execute_observed_async_call(
-            observability_middleware=observability_middleware,
-            callable_build_call_context=lambda: self._build_observability_call_context(
-                capability=capability,
-                operation=operation,
-                dict_metadata=dict_input_metadata,
-                legacy_caller_id=legacy_caller_id,
+        provider_result: Any = await self._awith_request_cost_scope(
+            operation,
+            lambda: execute_observed_async_call(
+                observability_middleware=observability_middleware,
+                callable_build_call_context=lambda: self._build_observability_call_context(
+                    capability=capability,
+                    operation=operation,
+                    dict_metadata=dict_input_metadata,
+                    legacy_caller_id=legacy_caller_id,
+                ),
+                callable_execute=callable_execute,
+                callable_build_result_summary=callable_build_result_summary,
             ),
-            callable_execute=callable_execute,
-            callable_build_result_summary=callable_build_result_summary,
         )
         # Normal return with the original provider result after optional observability wrapping.
         return provider_result
@@ -4387,16 +4482,19 @@ class AIBaseCompletions(AIBase):
             Iterator of caller-facing stream chunks with observability emission attached.
         """
         # Normal return with the observability-wrapped streaming iterator.
-        return execute_observed_streaming_call(
-            observability_middleware=self._get_observability_middleware(),
-            callable_build_call_context=lambda: self._build_observability_call_context(
-                capability=self.CLIENT_TYPE_COMPLETIONS,
-                operation=operation,
-                dict_metadata=dict_input_metadata,
-                legacy_caller_id=legacy_caller_id,
+        return self._stream_with_request_cost_scope(
+            operation,
+            lambda: execute_observed_streaming_call(
+                observability_middleware=self._get_observability_middleware(),
+                callable_build_call_context=lambda: self._build_observability_call_context(
+                    capability=self.CLIENT_TYPE_COMPLETIONS,
+                    operation=operation,
+                    dict_metadata=dict_input_metadata,
+                    legacy_caller_id=legacy_caller_id,
+                ),
+                callable_open_stream=callable_open_stream,
+                callable_build_result_summary=callable_build_result_summary,
             ),
-            callable_open_stream=callable_open_stream,
-            callable_build_result_summary=callable_build_result_summary,
         )
 
     def _build_streaming_completions_observability_result_summary(

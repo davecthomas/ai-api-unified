@@ -850,6 +850,35 @@ class AiFallbackCompletions(AIBaseCompletions):
         str_family: str | None = None,
     ) -> T:
         """
+        Runs one call across the chain inside a request-cost scope, so every
+        attempt (failed or served) lands on one request total.
+
+        See `_run_chain` for the arguments and the failover rules.
+        """
+        # Normal return with the chain's result, charged to one request.
+        return self._with_request_cost_scope(
+            str_operation,
+            lambda: self._run_chain(
+                str_operation,
+                call,
+                tuple_capabilities=tuple_capabilities,
+                bool_allow_fallback=bool_allow_fallback,
+                int_start=int_start,
+                str_family=str_family,
+            ),
+        )
+
+    def _run_chain(
+        self,
+        str_operation: str,
+        call: Callable[[AIBaseCompletions], T],
+        *,
+        tuple_capabilities: tuple[str, ...] = (),
+        bool_allow_fallback: bool = True,
+        int_start: int = 0,
+        str_family: str | None = None,
+    ) -> T:
+        """
         Runs one call across the chain until a candidate serves it.
 
         Args:
@@ -920,6 +949,30 @@ class AiFallbackCompletions(AIBaseCompletions):
         str_family: str | None = None,
     ) -> T:
         """Async twin of _run."""
+        # Normal return with the chain's result, charged to one request.
+        return await self._awith_request_cost_scope(
+            str_operation,
+            lambda: self._arun_chain(
+                str_operation,
+                call,
+                tuple_capabilities=tuple_capabilities,
+                bool_allow_fallback=bool_allow_fallback,
+                int_start=int_start,
+                str_family=str_family,
+            ),
+        )
+
+    async def _arun_chain(
+        self,
+        str_operation: str,
+        call: Callable[[AIBaseCompletions], Awaitable[T]],
+        *,
+        tuple_capabilities: tuple[str, ...] = (),
+        bool_allow_fallback: bool = True,
+        int_start: int = 0,
+        str_family: str | None = None,
+    ) -> T:
+        """Async twin of _run_chain."""
         last_error: AiProviderRequestError | None = None
         set_failed_accounts: set[tuple[str, str | None]] = set()
         # Loop over the chain until a candidate serves the call.
@@ -1153,8 +1206,11 @@ class AiFallbackCompletions(AIBaseCompletions):
         Once a candidate has yielded output the caller holds partial text,
         so a later failure propagates rather than restarting elsewhere.
         """
-        # Normal return with the failover-aware generator.
-        return self._stream_with_fallback(prompt, other_params)
+        # Normal return with the failover-aware generator, charged to one request.
+        return self._stream_with_request_cost_scope(
+            "send_prompt_streaming",
+            lambda: self._stream_with_fallback(prompt, other_params),
+        )
 
     def _stream_with_fallback(
         self,
