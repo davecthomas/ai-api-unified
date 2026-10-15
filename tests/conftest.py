@@ -263,3 +263,6 @@ def _isolate_from_developer_wrappers(monkeypatch: pytest.MonkeyPatch) -> None:
         "COMPLETIONS_FALLBACK_ON",
     ):
         monkeypatch.setenv(str_key, "")
+    # The configured-model check probes real providers; mocked tests must
+    # not. Checker tests set AI_MODEL_CHECK themselves with fake probes.
+    monkeypatch.setenv("AI_MODEL_CHECK", "off")

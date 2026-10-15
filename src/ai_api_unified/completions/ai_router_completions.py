@@ -224,10 +224,14 @@ class AiRouterCompletions(AIBaseCompletions):
         Raises:
             ValueError: No such tier.
         """
-        if str_name.strip().lower() == STR_DEFAULT_CHAIN_LABEL:
-            # Early return with the default chain.
+        str_resolved: str | None = self._config.resolve_tier_name(
+            str_name.strip().lower()
+        )
+        if str_resolved is None or str_resolved == STR_DEFAULT_CHAIN_LABEL:
+            # Early return with the default chain (also a pruned tier with
+            # nothing above it).
             return self._default_client
-        int_index: int | None = self._config.tier_index(str_name.strip().lower())
+        int_index: int | None = self._config.tier_index(str_resolved)
         if int_index is None:
             raise ValueError(
                 f"Unknown router tier {str_name!r}; expected one of "
@@ -462,10 +466,12 @@ class AiRouterCompletions(AIBaseCompletions):
             ValueError: The override names no tier.
         """
         if str_route is not None:
-            if str_route == STR_DEFAULT_CHAIN_LABEL:
-                # Early return: pinned to the default chain.
+            str_resolved: str | None = self._config.resolve_tier_name(str_route)
+            if str_resolved is None or str_resolved == STR_DEFAULT_CHAIN_LABEL:
+                # Early return: pinned to the default chain (or a pruned tier
+                # with nothing above it).
                 return None, ROUTE_METHOD_OVERRIDE, None
-            int_override: int | None = self._config.tier_index(str_route)
+            int_override: int | None = self._config.tier_index(str_resolved)
             if int_override is None:
                 raise ValueError(
                     f"Unknown router tier {str_route!r} in provider_options "
@@ -497,11 +503,21 @@ class AiRouterCompletions(AIBaseCompletions):
             )
             # Early return: the classifier failed, so the default route.
             return self._int_default_tier_index, ROUTE_METHOD_DEFAULT, None
-        self._last_decision = decision
-        int_index: int | None = (
-            self._config.tier_index(decision.choice) if decision.choice else None
+        # Normal return with the classified tier, or the default route.
+        return self._tier_for_decision(
+            decision, str_operation, str_route_id, float_started
         )
-        if decision.refused or int_index is None:
+
+    def _tier_for_decision(
+        self,
+        decision: AIClassificationResult,
+        str_operation: str,
+        str_route_id: str,
+        float_started: float,
+    ) -> tuple[int | None, str, AIClassificationResult | None]:
+        """Maps a classifier answer to a tier, honoring pruned tiers."""
+        self._last_decision = decision
+        if decision.refused or not decision.choice:
             self._log_classifier_failed(
                 str_operation,
                 str_route_id,
@@ -511,6 +527,26 @@ class AiRouterCompletions(AIBaseCompletions):
                 decision=decision,
             )
             # Early return: no usable answer, so the default route.
+            return self._int_default_tier_index, ROUTE_METHOD_DEFAULT, decision
+        if decision.choice in self._config.pruned_tiers:
+            str_next: str | None = self._config.pruned_tiers[decision.choice]
+            # Early return: a pruned tier goes to the next higher survivor.
+            return (
+                self._config.tier_index(str_next) if str_next else None,
+                ROUTE_METHOD_CLASSIFIER,
+                decision,
+            )
+        int_index: int | None = self._config.tier_index(decision.choice)
+        if int_index is None:
+            self._log_classifier_failed(
+                str_operation,
+                str_route_id,
+                error="unknown_tier",
+                fallback_reason=None,
+                float_started=float_started,
+                decision=decision,
+            )
+            # Early return: the classifier named no tier we know.
             return self._int_default_tier_index, ROUTE_METHOD_DEFAULT, decision
         # Normal return with the classified tier.
         return int_index, ROUTE_METHOD_CLASSIFIER, decision
@@ -623,23 +659,10 @@ class AiRouterCompletions(AIBaseCompletions):
             )
             # Early return: the classifier failed, so the default route.
             return self._int_default_tier_index, ROUTE_METHOD_DEFAULT, None
-        self._last_decision = decision
-        int_index: int | None = (
-            self._config.tier_index(decision.choice) if decision.choice else None
+        # Normal return with the classified tier, or the default route.
+        return self._tier_for_decision(
+            decision, str_operation, str_route_id, float_started
         )
-        if decision.refused or int_index is None:
-            self._log_classifier_failed(
-                str_operation,
-                str_route_id,
-                error="refusal" if decision.refused else "unknown_tier",
-                fallback_reason=None,
-                float_started=float_started,
-                decision=decision,
-            )
-            # Early return: no usable answer, so the default route.
-            return self._int_default_tier_index, ROUTE_METHOD_DEFAULT, decision
-        # Normal return with the classified tier.
-        return int_index, ROUTE_METHOD_CLASSIFIER, decision
 
     # ── Dispatch ────────────────────────────────────────────────────────────
 

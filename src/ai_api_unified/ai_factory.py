@@ -33,6 +33,18 @@ from .routing.router_config import (
     AIRouterClassifierConfig,
     AIRouterConfig,
     load_router_config,
+    prune_router_config,
+)
+from .util import ai_model_probes  # noqa: F401  (registers the provider probes)
+from .util.ai_model_checker import (
+    AI_MODEL_CHECK_KEY,
+    MODEL_CHECK_MODE_OFF,
+    MODEL_CHECK_MODE_STRICT,
+    AiModelChecker,
+    AiModelCheckResult,
+    AiModelCheckStatus,
+    prune_candidates,
+    resolve_model_check_mode,
 )
 from .completions.ai_fallback_completions import (
     DEFAULT_FALLBACK_REASONS,
@@ -367,6 +379,18 @@ class AIFactory:
                             AI_PROVIDER_CAPABILITY_COMPLETIONS,
                             candidate.engine,
                         ) from exception
+        str_classifier_missing: str | None = None
+        if router_config is not None or list_fallbacks:
+            list_fallbacks, router_config, str_classifier_missing = (
+                AIFactory._check_configured_models(
+                    env_settings=env_settings,
+                    primary_candidate=AIFallbackCandidate(
+                        engine=str_engine, model=str_model_name, base_url=base_url
+                    ),
+                    list_fallbacks=list_fallbacks,
+                    router_config=router_config,
+                )
+            )
         primary: AIBaseCompletions = AIFactory._build_completions_client(
             str_engine, str_model_name, base_url
         )
@@ -391,9 +415,14 @@ class AIFactory:
         if router_config is None:
             # Normal return without a router: the plain engine or its chain.
             return default_client
-        classifier, str_unavailable = AIFactory._resolve_router_classifier(
-            env_settings=env_settings, router_config=router_config
-        )
+        classifier: AIBaseClassifier | None
+        str_unavailable: str | None
+        if str_classifier_missing is not None:
+            classifier, str_unavailable = None, str_classifier_missing
+        else:
+            classifier, str_unavailable = AIFactory._resolve_router_classifier(
+                env_settings=env_settings, router_config=router_config
+            )
         # Normal return with the routing client over the default route.
         return AiRouterCompletions(
             default_client=default_client,
@@ -404,6 +433,199 @@ class AIFactory:
             ),
             fallback_on=router_config.fallback_on or frozenset_reasons,
             str_classifier_unavailable_reason=str_unavailable,
+        )
+
+    _LIST_LAST_MODEL_CHECK: list[AiModelCheckResult] = []
+
+    @classmethod
+    def last_model_check_report(cls) -> list[AiModelCheckResult]:
+        """Results of the most recent configured-model check, in check order."""
+        # Normal return with a copy of the last report.
+        return list(cls._LIST_LAST_MODEL_CHECK)
+
+    @staticmethod
+    def _check_configured_models(
+        *,
+        env_settings: EnvSettings,
+        primary_candidate: AIFallbackCandidate,
+        list_fallbacks: list[AIFallbackCandidate],
+        router_config: AIRouterConfig | None,
+    ) -> tuple[list[AIFallbackCandidate], AIRouterConfig | None, str | None]:
+        """
+        Verifies every configured model once and prunes the missing ones.
+
+        Runs when a chain or a router is configured (a lone primary fails on
+        its own at build). AI_MODEL_CHECK selects the mode: "prune"
+        (default) drops missing fallback and tier models with a warning,
+        "strict" raises on any missing model, "off" skips the check. The
+        primary cannot be pruned: when it is missing the factory raises in
+        every mode but "off".
+
+        Args:
+            env_settings: Shared environment/settings accessor.
+            primary_candidate: The configured completions LLM.
+            list_fallbacks: The configured chain.
+            router_config: The configured router, if any.
+
+        Returns:
+            (pruned chain, pruned router config or None when no tier
+            survived, reason the router classifier is unusable or None).
+
+        Raises:
+            ValueError: The primary is missing, or strict mode found a
+                missing model.
+        """
+        str_mode: str = resolve_model_check_mode(
+            env_settings.get_setting(AI_MODEL_CHECK_KEY, "")
+        )
+        if str_mode == MODEL_CHECK_MODE_OFF:
+            # Early return: the check is turned off.
+            return list_fallbacks, router_config, None
+        list_candidates: list[AIFallbackCandidate] = [
+            primary_candidate,
+            *list_fallbacks,
+        ]
+        classifier_candidate: AIFallbackCandidate | None = None
+        if router_config is not None:
+            # Loop over tiers to collect every candidate.
+            for tier in router_config.tiers:
+                list_candidates.extend(tier.candidates)
+            classifier_candidate = AIFactory._router_classifier_candidate(
+                env_settings=env_settings, router_config=router_config
+            )
+            if classifier_candidate is not None:
+                list_candidates.append(classifier_candidate)
+        list_results: list[AiModelCheckResult] = AiModelChecker().check_all(
+            list_candidates
+        )
+        AIFactory._LIST_LAST_MODEL_CHECK = list(list_results)
+        dict_results: dict[tuple[str, str, str | None], AiModelCheckResult] = {
+            (result.engine, result.model, result.base_url): result
+            for result in list_results
+        }
+
+        def _keep(candidate: AIFallbackCandidate) -> bool:
+            result: AiModelCheckResult | None = dict_results.get(
+                (candidate.engine, candidate.model, candidate.base_url)
+            )
+            return result is None or result.keeps_model
+
+        list_missing: list[AiModelCheckResult] = [
+            result
+            for result in list_results
+            if result.status is AiModelCheckStatus.MISSING
+        ]
+        if not _keep(primary_candidate):
+            raise ValueError(
+                f"The configured completions model {primary_candidate.label} is not "
+                "available and cannot be pruned: it is the default route. Fix "
+                "COMPLETIONS_ENGINE / COMPLETIONS_MODEL_NAME."
+            )
+        if str_mode == MODEL_CHECK_MODE_STRICT and list_missing:
+            raise ValueError(
+                "AI_MODEL_CHECK=strict: configured models not available: "
+                + ", ".join(f"{r.label} ({r.detail})" for r in list_missing)
+            )
+        list_fallbacks = prune_candidates(list_fallbacks, dict_results)
+        str_classifier_missing: str | None = None
+        if classifier_candidate is not None and not _keep(classifier_candidate):
+            str_classifier_missing = (
+                f"classifier model {classifier_candidate.label} is not available"
+            )
+        if router_config is not None:
+            pruned: AIRouterConfig | None = prune_router_config(router_config, _keep)
+            if pruned is None:
+                _LOGGER.warning(
+                    "MODEL CHECK: every router tier lost all of its models; "
+                    "routing is off and every call goes to the default route.",
+                    extra={"ai_model_check_event": "router_disabled"},
+                )
+            elif pruned.pruned_tiers != router_config.pruned_tiers:
+                # Loop over newly pruned tiers so each is logged once.
+                for str_tier, str_next in pruned.pruned_tiers.items():
+                    if str_tier in router_config.pruned_tiers:
+                        continue
+                    _LOGGER.warning(
+                        "MODEL CHECK: router tier %r has no available model and "
+                        "will be ignored; requests for it go to %s.",
+                        str_tier,
+                        f"tier {str_next!r}" if str_next else "the default route",
+                        extra={
+                            "ai_model_check_event": "router_tier_pruned",
+                            "tier": str_tier,
+                            "escalate_to": str_next,
+                        },
+                    )
+            router_config = pruned
+        # Normal return with the pruned configuration.
+        return list_fallbacks, router_config, str_classifier_missing
+
+    @staticmethod
+    def _router_classifier_candidate(
+        *, env_settings: EnvSettings, router_config: AIRouterConfig
+    ) -> AIFallbackCandidate | None:
+        """
+        The (engine, model) the router's classifier would use, resolved the
+        same way _resolve_router_classifier resolves it, so the model check
+        can probe it without building it.
+
+        Returns:
+            The candidate, or None when the classifier is disabled or no
+            engine can be named without a build.
+        """
+        str_setting: str = str(
+            env_settings.get_setting(COMPLETIONS_ROUTER_CLASSIFIER_KEY, "") or ""
+        ).strip()
+        str_engine: str | None = None
+        str_model: str | None = None
+        str_base_url: str | None = None
+        if str_setting:
+            str_engine_part, _, str_model_part = str_setting.partition(":")
+            str_engine = str_engine_part.strip().lower()
+            str_model = str_model_part.strip() or None
+            # The setting overrides engine and model; the config's base_url
+            # still applies, as in _resolve_router_classifier.
+            if router_config.classifier is not None:
+                str_base_url = router_config.classifier.base_url
+        elif router_config.classifier is not None:
+            if router_config.classifier.disabled:
+                # Early return: no classifier at all.
+                return None
+            str_engine = router_config.classifier.engine
+            str_model = router_config.classifier.model
+            str_base_url = router_config.classifier.base_url
+        if not str_engine:
+            str_engine = str(
+                env_settings.get_setting(CLASSIFIER_ENGINE_KEY, "") or ""
+            ).strip().lower() or (
+                DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY
+                if str(
+                    env_settings.get_setting(OPENAI_API_KEY_SETTING, "") or ""
+                ).strip()
+                else ""
+            )
+        if not str_model:
+            # get_ai_classifier_client reads CLASSIFIER_MODEL_NAME whenever no
+            # model is passed, whichever way the engine was named.
+            str_model = (
+                str(
+                    env_settings.get_setting(CLASSIFIER_MODEL_NAME_KEY, "") or ""
+                ).strip()
+                or None
+            )
+        if not str_engine or str_engine == "none":
+            # Early return: nothing to probe.
+            return None
+        if str_engine == DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY and not str_model:
+            # Local import: the classification module needs the openai extra.
+            from .classification.ai_openai_decisions_classifier import (
+                DECISIONS_DEFAULT_MODEL,
+            )
+
+            str_model = DECISIONS_DEFAULT_MODEL
+        # Normal return with the probe candidate.
+        return AIFallbackCandidate(
+            engine=str_engine, model=str_model or "", base_url=str_base_url
         )
 
     @staticmethod
