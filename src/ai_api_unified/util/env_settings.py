@@ -113,12 +113,23 @@ class EnvSettings(BaseSettings):
         bool_in_dotenv: bool = bool(
             self.model_extra and str_dotenv_key in self.model_extra
         )
-        bool_configured: bool = AI_MODELS_CONFIG_KEY in os.environ or bool_in_dotenv
-        str_configured: str | None = (
-            os.environ[AI_MODELS_CONFIG_KEY]
-            if AI_MODELS_CONFIG_KEY in os.environ
-            else (str(self.model_extra[str_dotenv_key]) if bool_in_dotenv else None)
+        # An exact-case extra (init kwarg or override_setting) is an attribute,
+        # as get_setting treats it.
+        object_attribute: Any = getattr(self, AI_MODELS_CONFIG_KEY, None)
+        bool_configured: bool = (
+            object_attribute is not None
+            or AI_MODELS_CONFIG_KEY in os.environ
+            or bool_in_dotenv
         )
+        str_configured: str | None
+        if object_attribute is not None:
+            str_configured = str(object_attribute)
+        elif AI_MODELS_CONFIG_KEY in os.environ:
+            str_configured = os.environ[AI_MODELS_CONFIG_KEY]
+        else:
+            str_configured = (
+                str(self.model_extra[str_dotenv_key]) if bool_in_dotenv else None
+            )
         # Normal return with the resolved config, or None.
         return resolve_models_config(str_configured, bool_configured=bool_configured)
 

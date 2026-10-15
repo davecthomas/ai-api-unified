@@ -398,9 +398,7 @@ class AIFactory:
                 router_config=router_config,
             )
         )
-        if (
-            router_config is not None or list_fallbacks
-        ) and str_classifier_missing is None:
+        if router_config is not None or list_fallbacks:
             list_fallbacks, router_config, str_classifier_missing = (
                 AIFactory._check_configured_models(
                     env_settings=env_settings,
@@ -409,6 +407,7 @@ class AIFactory:
                     ),
                     list_fallbacks=list_fallbacks,
                     router_config=router_config,
+                    str_classifier_missing=str_classifier_missing,
                 )
             )
         primary: AIBaseCompletions = AIFactory._build_completions_client(
@@ -618,6 +617,7 @@ class AIFactory:
         primary_candidate: AIFallbackCandidate,
         list_fallbacks: list[AIFallbackCandidate],
         router_config: AIRouterConfig | None,
+        str_classifier_missing: str | None = None,
     ) -> tuple[list[AIFallbackCandidate], AIRouterConfig | None, str | None]:
         """
         Verifies every configured model once and prunes the missing ones.
@@ -634,6 +634,9 @@ class AIFactory:
             primary_candidate: The configured completions LLM.
             list_fallbacks: The configured chain.
             router_config: The configured router, if any.
+            str_classifier_missing: Why the router classifier is already
+                unusable (the policy denied it); it is then not probed and
+                the reason is passed through.
 
         Returns:
             (pruned chain, pruned router config or None when no tier
@@ -648,7 +651,7 @@ class AIFactory:
         )
         if str_mode == MODEL_CHECK_MODE_OFF:
             # Early return: the check is turned off.
-            return list_fallbacks, router_config, None
+            return list_fallbacks, router_config, str_classifier_missing
         list_candidates: list[AIFallbackCandidate] = [
             primary_candidate,
             *list_fallbacks,
@@ -658,9 +661,10 @@ class AIFactory:
             # Loop over tiers to collect every candidate.
             for tier in router_config.tiers:
                 list_candidates.extend(tier.candidates)
-            classifier_candidate = AIFactory._router_classifier_candidate(
-                env_settings=env_settings, router_config=router_config
-            )
+            if str_classifier_missing is None:
+                classifier_candidate = AIFactory._router_classifier_candidate(
+                    env_settings=env_settings, router_config=router_config
+                )
             if classifier_candidate is not None:
                 list_candidates.append(classifier_candidate)
         raw_timeout: object = env_settings.get_setting(
@@ -701,7 +705,6 @@ class AIFactory:
                 + ", ".join(f"{r.label} ({r.detail})" for r in list_missing)
             )
         list_fallbacks = prune_candidates(list_fallbacks, dict_results)
-        str_classifier_missing: str | None = None
         if classifier_candidate is not None and not _keep(classifier_candidate):
             str_classifier_missing = (
                 f"classifier model {classifier_candidate.label} is not available"

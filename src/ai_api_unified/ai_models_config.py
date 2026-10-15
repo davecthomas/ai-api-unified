@@ -31,7 +31,7 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .routing.router_config import AIRouterConfig
+from .routing.router_config import AIRouterClassifierConfig, AIRouterConfig
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -281,6 +281,39 @@ def _classifier_pair(config: AIModelsConfig) -> str | None:
     )
 
 
+def _router_with_classifier(config: AIModelsConfig) -> AIRouterConfig | None:
+    """
+    The router for COMPLETIONS_ROUTER_CONFIG, carrying the `classifier`
+    section's base_url, timeout, and instructions when the router names no
+    classifier of its own (engine and model travel as
+    COMPLETIONS_ROUTER_CLASSIFIER).
+    """
+    router: AIRouterConfig | None = config.router
+    if router is None or router.classifier is not None:
+        # Early return: no router, or it carries its own classifier config.
+        return router
+    selection: AIClassifierSelection = config.classifier
+    if (
+        selection.base_url is None
+        and selection.timeout_seconds is None
+        and selection.instructions is None
+    ):
+        # Early return: nothing to carry over.
+        return router
+    dict_classifier: dict[str, Any] = {
+        "engine": selection.engine,
+        "model": selection.model,
+        "base_url": selection.base_url,
+        "instructions": selection.instructions,
+    }
+    if selection.timeout_seconds is not None:
+        dict_classifier["timeout_seconds"] = selection.timeout_seconds
+    # Normal return with the classifier section folded in.
+    return router.model_copy(
+        update={"classifier": AIRouterClassifierConfig(**dict_classifier)}
+    )
+
+
 # Settings key -> the file value that stands in for it.
 DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
     "COMPLETIONS_ENGINE": lambda c: c.completions.engine,
@@ -291,7 +324,7 @@ DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
     "CLASSIFIER_ENGINE": lambda c: c.classifier.engine,
     "CLASSIFIER_MODEL_NAME": lambda c: c.classifier.model,
     "COMPLETIONS_ROUTER_CLASSIFIER": _classifier_pair,
-    "COMPLETIONS_ROUTER_CONFIG": lambda c: c.router,
+    "COMPLETIONS_ROUTER_CONFIG": _router_with_classifier,
     "AI_MODEL_CHECK": lambda c: c.model_check.mode,
     "AI_MODEL_CHECK_TIMEOUT_SECONDS": lambda c: c.model_check.timeout_seconds,
     "EMBEDDING_ENGINE": lambda c: c.embeddings.engine,
@@ -345,8 +378,13 @@ def load_models_config(str_value: str) -> AIModelsConfig:
             raise ValueError(f"Models config file not found: {path}")
         str_text: str = path.read_text(encoding="utf-8")
         if path.suffix.lower() in TUPLE_YAML_SUFFIXES:
-            import yaml
-
+            try:
+                import yaml
+            except ImportError as exception:
+                raise ValueError(
+                    f"Models config {path} is YAML, which needs PyYAML "
+                    "(pip install pyyaml); or write the file as JSON."
+                ) from exception
             try:
                 dict_payload = yaml.safe_load(str_text)
             except yaml.YAMLError as exception:

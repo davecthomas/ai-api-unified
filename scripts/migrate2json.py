@@ -64,8 +64,14 @@ STR_ROUTER_KEY: str = "COMPLETIONS_ROUTER_CONFIG"
 STR_ROUTER_CLASSIFIER_KEY: str = "COMPLETIONS_ROUTER_CLASSIFIER"
 STR_GEO_KEY: str = "AI_API_GEO_RESIDENCY"
 FROZENSET_LIST_FIELDS: frozenset[str] = frozenset({"fallbacks"})
-FROZENSET_INT_FIELDS: frozenset[str] = frozenset(
-    {"dimensions", "poll_interval_seconds", "timeout_seconds"}
+# (section, field) pairs the schema types as integers; every other
+# *_seconds field is a float.
+FROZENSET_INT_FIELDS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("embeddings", "dimensions"),
+        ("videos", "poll_interval_seconds"),
+        ("videos", "timeout_seconds"),
+    }
 )
 # Structural defaults copied from the sample when .env says nothing.
 TUPLE_SAMPLE_DEFAULTS: tuple[tuple[str, str], ...] = (
@@ -88,21 +94,24 @@ TUPLE_SECTION_ORDER: tuple[str, ...] = (
 )
 
 
-def _coerce(str_field: str, str_value: str) -> Any:
+def _coerce(str_section: str, str_field: str, str_value: str) -> Any:
     """Turns a .env string into the JSON type the section expects."""
     str_stripped: str = str_value.strip()
     if str_field in FROZENSET_LIST_FIELDS:
         # Early return with a list for the chain.
         return [item.strip() for item in str_stripped.split(",") if item.strip()]
-    if str_field in FROZENSET_INT_FIELDS:
+    if (str_section, str_field) in FROZENSET_INT_FIELDS:
         try:
             # Early return with an integer.
             return int(float(str_stripped))
         except ValueError:
             return str_stripped
-    if str_field == "timeout_seconds":
-        # Normal return with a float timeout.
-        return float(str_stripped)
+    if str_field.endswith("_seconds"):
+        try:
+            # Early return with a float timeout.
+            return float(str_stripped)
+        except ValueError:
+            return str_stripped
     # Normal return with the string.
     return str_stripped
 
@@ -151,7 +160,9 @@ def build_models_config(
         raw: str | None = dict_env.get(str_key)
         if raw is None or not str(raw).strip():
             continue
-        dict_out.setdefault(str_section, {})[str_field] = _coerce(str_field, str(raw))
+        dict_out.setdefault(str_section, {})[str_field] = _coerce(
+            str_section, str_field, str(raw)
+        )
         list_moved.append(str_key)
     str_router_classifier: str = str(
         dict_env.get(STR_ROUTER_CLASSIFIER_KEY) or ""

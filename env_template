@@ -47,7 +47,9 @@ GOOGLE_AUTH_METHOD=api_key
 # holds inline JSON; unset means ./models.json when it exists; blank turns
 # the file off. Every selection key below still works and overrides the
 # file when set, so a deployment can pin one value without editing the file.
-AI_MODELS_CONFIG=./models.json
+# Leave it unset to pick up ./models.json when present: a set path that does
+# not exist is an error on every settings read.
+# AI_MODELS_CONFIG=./models.json
 # Completions engine (openai | openai-responses | claude | google-gemini | nova | anthropic | ...)
 # COMPLETIONS_ENGINE=google-gemini
 
