@@ -22,7 +22,7 @@ from types import MappingProxyType
 from collections.abc import Mapping
 from typing import Any, ClassVar, Generic, Iterator, Literal, NoReturn, Type, TypeVar
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from ai_api_unified.ai_completions_exceptions import (
     StructuredResponseTokenLimitError,
@@ -36,6 +36,7 @@ from ai_api_unified.middleware.observability import (
     get_observability_middleware,
 )
 from ai_api_unified.middleware.observability_runtime import (
+    TOKEN_COUNT_SOURCE_NONE as _TOKEN_COUNT_SOURCE_NONE_RUNTIME,
     AiApiCallContextModel,
     AiApiCallResultSummaryModel,
     OBSERVABILITY_DIRECTION_INPUT,
@@ -768,6 +769,7 @@ class AIBase(ABC):
     CLIENT_TYPE_COMPLETIONS = "completions"
     CLIENT_TYPE_IMAGES = "images"
     CLIENT_TYPE_VIDEOS = "videos"
+    CLIENT_TYPE_CLASSIFICATION = "classification"
     PROVIDER_VENDOR_OPENAI = "openai"
     PROVIDER_VENDOR_BEDROCK = "bedrock"
     PROVIDER_VENDOR_GOOGLE = "google"
@@ -1869,6 +1871,615 @@ class AIBaseEmbeddings(AIBase):
             AiProviderCapabilityUnsupportedError: Always, in the base class.
         """
         self._raise_capability_unsupported("multimodal embeddings")
+
+
+# ── Classification ──────────────────────────────────────────────────────────
+
+# Default cap on the text a classifier reads. Classification bills input
+# tokens on every call and a label rarely needs more than the head and tail
+# of a long prompt.
+DEFAULT_CLASSIFIER_MAX_INPUT_CHARS: int = 6000
+
+CLASSIFY_OPERATION_CHOICE: str = "classify_choice"
+CLASSIFY_OPERATION_PREDICATE: str = "classify_predicate"
+CLASSIFY_OPERATION_SCORE: str = "classify_score"
+
+# Values of the `ai_classifier_event` field on this module's log records.
+CLASSIFIER_EVENT_UNMETERED: str = "classifier_unmetered"
+
+
+def truncate_classification_text(str_text: str, int_max_chars: int | None) -> str:
+    """
+    Shortens text for a classifier, keeping its head and tail.
+
+    Args:
+        str_text: The text to classify.
+        int_max_chars: Cap on characters, or None for no cap.
+
+    Returns:
+        The text unchanged when it fits, else its first two thirds and last
+        third of the cap joined by an ellipsis line.
+    """
+    if int_max_chars is None or len(str_text) <= int_max_chars:
+        # Early return: nothing to cut.
+        return str_text
+    int_head: int = (int_max_chars * 2) // 3
+    int_tail: int = int_max_chars - int_head
+    # Normal return with the head and tail around a marker.
+    return f"{str_text[:int_head]}\n...\n{str_text[-int_tail:]}"
+
+
+class AIClassifierCapabilitiesBase(BaseModel):
+    """
+    Capability descriptor for a classification engine.
+
+    Attributes:
+        supports_choice: Picks one of a caller-defined set of options.
+        supports_predicate: Answers a yes/no question with a probability.
+        supports_score: Places the input on an ordered scale of levels.
+        supports_images: Accepts image input alongside text.
+        supports_async: Exposes the aclassify_* coroutines.
+        max_choices: Most options one choice question may offer, or None.
+        max_input_chars: Characters kept from the input before the call; the
+            template truncates longer text head-and-tail. None means no cap.
+        pricing: Per-token rates used to price classification calls.
+    """
+
+    supports_choice: bool = True
+    supports_predicate: bool = False
+    supports_score: bool = False
+    supports_images: bool = False
+    supports_async: bool = False
+    max_choices: int | None = None
+    max_input_chars: int | None = DEFAULT_CLASSIFIER_MAX_INPUT_CHARS
+    pricing: AIModelPricing | None = None
+
+
+class AIClassificationChoice(BaseModel):
+    """
+    One option a choice question offers.
+
+    Attributes:
+        value: The token returned when this option is picked.
+        description: What the option means, shown to the classifier.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    value: str
+    description: str = ""
+
+
+class AIClassificationLevel(BaseModel):
+    """
+    One step on a score question's ordered scale, lowest first.
+
+    Attributes:
+        label: The level's name.
+        description: What the level means, shown to the classifier.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    description: str = ""
+
+
+class AIClassificationResult(BaseModel):
+    """
+    What a classifier decided, plus how the call was metered.
+
+    Attributes:
+        question_type: "choice", "predicate", or "score".
+        choice: The picked option value, or the picked level label for a
+            score question; None when the classifier refused.
+        probability: Predicate answers: probability that the condition holds.
+        score: Score answers: position on the scale normalized to [0, 1].
+        confidence: The classifier's confidence in the answer, when reported.
+        probabilities: Distribution over options or levels, when reported.
+        refused: True when the classifier declined to answer.
+        raw_text: Provider text behind the answer, for debugging.
+        usage: Token usage for the call.
+        token_source: Where the token counts came from: "provider",
+            "estimated", or "none". Never silently zero: "none" means the call
+            could not be metered and was logged as such.
+        provider_engine: Engine token that served the call.
+        model_name: Model that served the call.
+        latency_ms: Wall-clock duration of the provider call.
+    """
+
+    question_type: Literal["choice", "predicate", "score"]
+    choice: str | None = None
+    probability: float | None = None
+    score: float | None = None
+    confidence: float | None = None
+    probabilities: dict[str, float] | None = None
+    refused: bool = False
+    raw_text: str = ""
+    usage: AITokenUsage = Field(default_factory=AITokenUsage)
+    token_source: str = _TOKEN_COUNT_SOURCE_NONE_RUNTIME
+    provider_engine: str | None = None
+    model_name: str | None = None
+    latency_ms: float = 0.0
+
+
+class AIBaseClassifier(AIBase):
+    """
+    Base class for classification engines.
+
+    A classifier answers a narrow question about one input: pick one of a
+    caller-defined set of options, say whether a condition holds, or place
+    the input on an ordered scale. The public methods are template methods:
+    they validate the question, run the input through the PII middleware,
+    truncate it to the engine's cap, call the provider hook inside the shared
+    observability lifecycle (so every call emits input, output, error, and
+    cost events like any other capability), and stamp the result.
+
+    An engine that delegates to another observed client (the structured
+    output adapter wraps a completions engine) sets BOOL_PROVIDER_OBSERVED
+    so the template does not wrap the call a second time.
+    """
+
+    BOOL_PROVIDER_OBSERVED: ClassVar[bool] = False
+
+    def __init__(self, model: str | None = None, **kwargs: Any) -> None:
+        super().__init__(model=model)
+        self.pii_middleware = AiApiPiiMiddleware()
+
+    @property
+    def capabilities(self) -> AIClassifierCapabilitiesBase:
+        """Conservative defaults; engines override with their own descriptor."""
+        # Normal return with the conservative descriptor.
+        return AIClassifierCapabilitiesBase()
+
+    # ── Public template methods ─────────────────────────────────────────────
+
+    def classify_choice(
+        self,
+        text: str,
+        choices: list[AIClassificationChoice],
+        *,
+        instructions: str | None = None,
+        request_timeout_seconds: float | None = None,
+    ) -> AIClassificationResult:
+        """
+        Picks one of the given options for the text.
+
+        Args:
+            text: The input to classify.
+            choices: Two or more options with distinct values.
+            instructions: Optional guidance on how to choose.
+            request_timeout_seconds: Optional per-call provider timeout.
+
+        Returns:
+            The result with `choice` set, or `refused` True.
+        """
+        self._require_question_support(
+            self.capabilities.supports_choice, CLASSIFY_OPERATION_CHOICE
+        )
+        self._validate_choices(choices)
+        str_text: str = self._prepare_text(text)
+        # Normal return with the observed, stamped result.
+        return self._run_classification(
+            CLASSIFY_OPERATION_CHOICE,
+            dict_input_metadata={
+                "question_type": "choice",
+                "option_count": len(choices),
+                "input_chars": len(str_text),
+            },
+            callable_execute=lambda: self._classify_choice_provider(
+                str_text,
+                choices,
+                instructions=instructions,
+                request_timeout_seconds=request_timeout_seconds,
+            ),
+        )
+
+    def classify_predicate(
+        self,
+        text: str,
+        *,
+        instructions: str,
+        request_timeout_seconds: float | None = None,
+    ) -> AIClassificationResult:
+        """
+        Reports the probability that a condition holds for the text.
+
+        Args:
+            text: The input to classify.
+            instructions: The condition, as a yes/no question.
+            request_timeout_seconds: Optional per-call provider timeout.
+
+        Returns:
+            The result with `probability` set, or `refused` True.
+        """
+        self._require_question_support(
+            self.capabilities.supports_predicate, CLASSIFY_OPERATION_PREDICATE
+        )
+        if not instructions or not instructions.strip():
+            raise ValueError(
+                "classify_predicate needs instructions stating the condition."
+            )
+        str_text: str = self._prepare_text(text)
+        # Normal return with the observed, stamped result.
+        return self._run_classification(
+            CLASSIFY_OPERATION_PREDICATE,
+            dict_input_metadata={
+                "question_type": "predicate",
+                "input_chars": len(str_text),
+            },
+            callable_execute=lambda: self._classify_predicate_provider(
+                str_text,
+                instructions=instructions,
+                request_timeout_seconds=request_timeout_seconds,
+            ),
+        )
+
+    def classify_score(
+        self,
+        text: str,
+        levels: list[AIClassificationLevel],
+        *,
+        instructions: str | None = None,
+        request_timeout_seconds: float | None = None,
+    ) -> AIClassificationResult:
+        """
+        Places the text on an ordered scale.
+
+        Args:
+            text: The input to classify.
+            levels: Two or more levels, lowest first, with distinct labels.
+            instructions: Optional guidance on how to rate.
+            request_timeout_seconds: Optional per-call provider timeout.
+
+        Returns:
+            The result with `score` in [0, 1] and `choice` set to the level
+            label, or `refused` True.
+        """
+        self._require_question_support(
+            self.capabilities.supports_score, CLASSIFY_OPERATION_SCORE
+        )
+        self._validate_levels(levels)
+        str_text: str = self._prepare_text(text)
+        # Normal return with the observed, stamped result.
+        return self._run_classification(
+            CLASSIFY_OPERATION_SCORE,
+            dict_input_metadata={
+                "question_type": "score",
+                "level_count": len(levels),
+                "input_chars": len(str_text),
+            },
+            callable_execute=lambda: self._classify_score_provider(
+                str_text,
+                levels,
+                instructions=instructions,
+                request_timeout_seconds=request_timeout_seconds,
+            ),
+        )
+
+    async def aclassify_choice(
+        self,
+        text: str,
+        choices: list[AIClassificationChoice],
+        *,
+        instructions: str | None = None,
+        request_timeout_seconds: float | None = None,
+    ) -> AIClassificationResult:
+        """Async twin of classify_choice."""
+        self._require_async()
+        self._require_question_support(
+            self.capabilities.supports_choice, CLASSIFY_OPERATION_CHOICE
+        )
+        self._validate_choices(choices)
+        str_text: str = self._prepare_text(text)
+        # Normal return with the observed, stamped result.
+        return await self._arun_classification(
+            CLASSIFY_OPERATION_CHOICE,
+            dict_input_metadata={
+                "question_type": "choice",
+                "option_count": len(choices),
+                "input_chars": len(str_text),
+            },
+            callable_execute=lambda: self._aclassify_choice_provider(
+                str_text,
+                choices,
+                instructions=instructions,
+                request_timeout_seconds=request_timeout_seconds,
+            ),
+        )
+
+    async def aclassify_predicate(
+        self,
+        text: str,
+        *,
+        instructions: str,
+        request_timeout_seconds: float | None = None,
+    ) -> AIClassificationResult:
+        """Async twin of classify_predicate."""
+        self._require_async()
+        self._require_question_support(
+            self.capabilities.supports_predicate, CLASSIFY_OPERATION_PREDICATE
+        )
+        if not instructions or not instructions.strip():
+            raise ValueError(
+                "classify_predicate needs instructions stating the condition."
+            )
+        str_text: str = self._prepare_text(text)
+        # Normal return with the observed, stamped result.
+        return await self._arun_classification(
+            CLASSIFY_OPERATION_PREDICATE,
+            dict_input_metadata={
+                "question_type": "predicate",
+                "input_chars": len(str_text),
+            },
+            callable_execute=lambda: self._aclassify_predicate_provider(
+                str_text,
+                instructions=instructions,
+                request_timeout_seconds=request_timeout_seconds,
+            ),
+        )
+
+    async def aclassify_score(
+        self,
+        text: str,
+        levels: list[AIClassificationLevel],
+        *,
+        instructions: str | None = None,
+        request_timeout_seconds: float | None = None,
+    ) -> AIClassificationResult:
+        """Async twin of classify_score."""
+        self._require_async()
+        self._require_question_support(
+            self.capabilities.supports_score, CLASSIFY_OPERATION_SCORE
+        )
+        self._validate_levels(levels)
+        str_text: str = self._prepare_text(text)
+        # Normal return with the observed, stamped result.
+        return await self._arun_classification(
+            CLASSIFY_OPERATION_SCORE,
+            dict_input_metadata={
+                "question_type": "score",
+                "level_count": len(levels),
+                "input_chars": len(str_text),
+            },
+            callable_execute=lambda: self._aclassify_score_provider(
+                str_text,
+                levels,
+                instructions=instructions,
+                request_timeout_seconds=request_timeout_seconds,
+            ),
+        )
+
+    # ── Provider hooks ──────────────────────────────────────────────────────
+
+    def _classify_choice_provider(
+        self,
+        str_text: str,
+        list_choices: list[AIClassificationChoice],
+        *,
+        instructions: str | None,
+        request_timeout_seconds: float | None,
+    ) -> AIClassificationResult:
+        """Provider hook for classify_choice; engines override."""
+        self._raise_capability_unsupported(CLASSIFY_OPERATION_CHOICE)
+
+    def _classify_predicate_provider(
+        self,
+        str_text: str,
+        *,
+        instructions: str,
+        request_timeout_seconds: float | None,
+    ) -> AIClassificationResult:
+        """Provider hook for classify_predicate; engines override."""
+        self._raise_capability_unsupported(CLASSIFY_OPERATION_PREDICATE)
+
+    def _classify_score_provider(
+        self,
+        str_text: str,
+        list_levels: list[AIClassificationLevel],
+        *,
+        instructions: str | None,
+        request_timeout_seconds: float | None,
+    ) -> AIClassificationResult:
+        """Provider hook for classify_score; engines override."""
+        self._raise_capability_unsupported(CLASSIFY_OPERATION_SCORE)
+
+    async def _aclassify_choice_provider(
+        self,
+        str_text: str,
+        list_choices: list[AIClassificationChoice],
+        *,
+        instructions: str | None,
+        request_timeout_seconds: float | None,
+    ) -> AIClassificationResult:
+        """Async provider hook for classify_choice; engines override."""
+        self._raise_capability_unsupported("aclassify_choice")
+
+    async def _aclassify_predicate_provider(
+        self,
+        str_text: str,
+        *,
+        instructions: str,
+        request_timeout_seconds: float | None,
+    ) -> AIClassificationResult:
+        """Async provider hook for classify_predicate; engines override."""
+        self._raise_capability_unsupported("aclassify_predicate")
+
+    async def _aclassify_score_provider(
+        self,
+        str_text: str,
+        list_levels: list[AIClassificationLevel],
+        *,
+        instructions: str | None,
+        request_timeout_seconds: float | None,
+    ) -> AIClassificationResult:
+        """Async provider hook for classify_score; engines override."""
+        self._raise_capability_unsupported("aclassify_score")
+
+    # ── Template internals ──────────────────────────────────────────────────
+
+    def _raise_capability_unsupported(self, str_operation: str) -> NoReturn:
+        """Raises the typed capability error for one operation."""
+        raise AiProviderCapabilityUnsupportedError(
+            f"{type(self).__name__} model '{self.model_name}' does not support "
+            f"{str_operation}."
+        )
+
+    def _require_question_support(
+        self, bool_supported: bool, str_operation: str
+    ) -> None:
+        """Raises unless the capabilities descriptor allows the question type."""
+        if not bool_supported:
+            self._raise_capability_unsupported(str_operation)
+
+    def _require_async(self) -> None:
+        """Raises unless the engine declares async support."""
+        if not self.capabilities.supports_async:
+            self._raise_capability_unsupported("async classification")
+
+    def _validate_choices(self, list_choices: list[AIClassificationChoice]) -> None:
+        """Rejects fewer than two options, duplicate values, or too many."""
+        if len(list_choices) < 2:
+            raise ValueError("classify_choice needs at least two choices.")
+        list_values: list[str] = [choice.value for choice in list_choices]
+        if len(set(list_values)) != len(list_values):
+            raise ValueError("classify_choice choices must have distinct values.")
+        int_max: int | None = self.capabilities.max_choices
+        if int_max is not None and len(list_choices) > int_max:
+            raise ValueError(
+                f"{type(self).__name__} accepts at most {int_max} choices; "
+                f"{len(list_choices)} given."
+            )
+
+    def _validate_levels(self, list_levels: list[AIClassificationLevel]) -> None:
+        """Rejects fewer than two levels or duplicate labels."""
+        if len(list_levels) < 2:
+            raise ValueError("classify_score needs at least two levels.")
+        list_labels: list[str] = [level.label for level in list_levels]
+        if len(set(list_labels)) != len(list_labels):
+            raise ValueError("classify_score levels must have distinct labels.")
+
+    def _prepare_text(self, text: str) -> str:
+        """Validates, redacts, and truncates the input."""
+        if not text or not text.strip():
+            raise ValueError("Text to classify cannot be empty or None")
+        str_text: str = self.pii_middleware.process_input(text)
+        # Normal return with the capped text.
+        return truncate_classification_text(str_text, self.capabilities.max_input_chars)
+
+    def _run_classification(
+        self,
+        str_operation: str,
+        *,
+        dict_input_metadata: dict[str, ObservabilityMetadataValue],
+        callable_execute: Callable[[], AIClassificationResult],
+    ) -> AIClassificationResult:
+        """
+        Runs one provider hook inside the observability lifecycle and stamps
+        the result.
+
+        Args:
+            str_operation: Public operation name, for events.
+            dict_input_metadata: Scalar request metadata for the input event.
+            callable_execute: The provider hook, already bound to its inputs.
+
+        Returns:
+            The stamped result.
+        """
+        float_started: float = time.perf_counter()
+        result: AIClassificationResult
+        if self.BOOL_PROVIDER_OBSERVED:
+            # The delegate engine emits its own events; wrapping again would
+            # double-count the call's cost.
+            result = callable_execute()
+        else:
+            result = self._execute_provider_call_with_observability(
+                capability=self.CLIENT_TYPE_CLASSIFICATION,
+                operation=str_operation,
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=callable_execute,
+                callable_build_result_summary=self._build_classification_result_summary,
+            )
+        # Normal return with the stamped result.
+        return self._stamp_result(result, str_operation, float_started)
+
+    async def _arun_classification(
+        self,
+        str_operation: str,
+        *,
+        dict_input_metadata: dict[str, ObservabilityMetadataValue],
+        callable_execute: Callable[[], Any],
+    ) -> AIClassificationResult:
+        """Async twin of _run_classification."""
+        float_started: float = time.perf_counter()
+        result: AIClassificationResult
+        if self.BOOL_PROVIDER_OBSERVED:
+            result = await callable_execute()
+        else:
+            result = await self._execute_provider_acall_with_observability(
+                capability=self.CLIENT_TYPE_CLASSIFICATION,
+                operation=str_operation,
+                dict_input_metadata=dict_input_metadata,
+                callable_execute=callable_execute,
+                callable_build_result_summary=self._build_classification_result_summary,
+            )
+        # Normal return with the stamped result.
+        return self._stamp_result(result, str_operation, float_started)
+
+    def _stamp_result(
+        self,
+        result: AIClassificationResult,
+        str_operation: str,
+        float_started: float,
+    ) -> AIClassificationResult:
+        """Fills engine, model, and latency; warns when the call was unmetered."""
+        if result.provider_engine is None:
+            result.provider_engine = self._resolve_observability_provider_engine()
+        if result.model_name is None:
+            result.model_name = self.model_name
+        if result.latency_ms == 0.0:
+            result.latency_ms = (time.perf_counter() - float_started) * 1000.0
+        if result.token_source == _TOKEN_COUNT_SOURCE_NONE_RUNTIME:
+            _LOGGER.warning(
+                "CLASSIFIER UNMETERED: %s on %s:%s returned no token counts.",
+                str_operation,
+                result.provider_engine,
+                result.model_name,
+                extra={
+                    "ai_classifier_event": CLASSIFIER_EVENT_UNMETERED,
+                    "operation": str_operation,
+                    "provider_engine": result.provider_engine,
+                    "model_name": result.model_name,
+                },
+            )
+        # Normal return with the stamped result.
+        return result
+
+    def _build_classification_result_summary(
+        self, result: AIClassificationResult, provider_elapsed_ms: float
+    ) -> AiApiCallResultSummaryModel:
+        """Summarizes one result for the output and cost events."""
+        # Normal return with the summary the cost event prices from.
+        return AiApiCallResultSummaryModel(
+            provider_elapsed_ms=provider_elapsed_ms,
+            input_token_count=result.usage.input_tokens,
+            input_token_count_source=result.token_source,
+            output_token_count=result.usage.output_tokens,
+            output_token_count_source=(
+                result.token_source
+                if result.usage.output_tokens is not None
+                else _TOKEN_COUNT_SOURCE_NONE_RUNTIME
+            ),
+            provider_prompt_tokens=result.usage.input_tokens,
+            provider_completion_tokens=result.usage.output_tokens,
+            provider_total_tokens=result.usage.total_tokens,
+            finish_reason="refusal" if result.refused else "complete",
+            dict_metadata={
+                "question_type": result.question_type,
+                "token_count_source": result.token_source,
+                "refused": result.refused,
+            },
+        )
 
 
 class AIStructuredPrompt(BaseModel):

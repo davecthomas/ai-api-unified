@@ -13,7 +13,13 @@ import logging
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from .ai_base import AIBaseCompletions, AIBaseEmbeddings, AIBaseImages, AIBaseVideos
+from .ai_base import (
+    AIBaseClassifier,
+    AIBaseCompletions,
+    AIBaseEmbeddings,
+    AIBaseImages,
+    AIBaseVideos,
+)
 from .ai_provider_exceptions import (
     AiFallbackReason,
     AiProviderCapabilityUnsupportedError,
@@ -30,6 +36,7 @@ from .completions.ai_fallback_completions import (
 )
 from .ai_provider_loader import load_ai_provider_class
 from .ai_provider_registry import (
+    AI_PROVIDER_CAPABILITY_CLASSIFICATION,
     AiProviderSpec,
     AI_PROVIDER_CAPABILITY_COMPLETIONS,
     AI_PROVIDER_CAPABILITY_EMBEDDINGS,
@@ -60,6 +67,8 @@ COMPLETIONS_FALLBACK_ON_KEY: str = "COMPLETIONS_FALLBACK_ON"
 EMBEDDING_MODEL_NAME_KEY: str = "EMBEDDING_MODEL_NAME"
 EMBEDDING_ENGINE_KEY: str = "EMBEDDING_ENGINE"
 EMBEDDING_DIMENSIONS_KEY: str = "EMBEDDING_DIMENSIONS"
+CLASSIFIER_ENGINE_KEY: str = "CLASSIFIER_ENGINE"
+CLASSIFIER_MODEL_NAME_KEY: str = "CLASSIFIER_MODEL_NAME"
 IMAGE_MODEL_NAME_KEY: str = "IMAGE_MODEL_NAME"
 IMAGE_ENGINE_KEY: str = "IMAGE_ENGINE"
 VIDEO_MODEL_NAME_KEY: str = "VIDEO_MODEL_NAME"
@@ -573,6 +582,73 @@ class AIFactory:
             raise TypeError(f"Expected AIBaseCompletions, got {type(client).__name__}")
         # Normal return with provider model name collection.
         return client.list_model_names
+
+    @staticmethod
+    def get_ai_classifier_client(
+        classifier_engine: str | None = None,
+        model_name: str | None = None,
+        base_url: str | None = None,
+    ) -> AIBaseClassifier:
+        """
+        Builds a classification client.
+
+        Args:
+            classifier_engine: Engine token override; defaults to CLASSIFIER_ENGINE.
+                Tokens named after a completions engine (openai, claude,
+                google-gemini, ...) classify through that engine's structured
+                output.
+            model_name: Model override; defaults to CLASSIFIER_MODEL_NAME, then
+                the engine's own default.
+            base_url: Optional API base-URL override for engines that accept one.
+
+        Returns:
+            Concrete AIBaseClassifier implementation for the engine.
+
+        Raises:
+            ValueError: No engine was configured, or the registry has no
+                classification spec for the token.
+        """
+        env_settings: EnvSettings = EnvSettings()
+        str_engine: str = AIFactory._resolve_required_engine(
+            env_settings=env_settings,
+            str_engine_key=CLASSIFIER_ENGINE_KEY,
+            str_engine_override=classifier_engine,
+        )
+        str_model_name: str = (
+            model_name
+            if model_name is not None
+            else str(env_settings.get_setting(CLASSIFIER_MODEL_NAME_KEY, "") or "")
+        )
+        try:
+            ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+                AI_PROVIDER_CAPABILITY_CLASSIFICATION, str_engine
+            )
+            class_classifier_client: type[AIBaseClassifier] = load_ai_provider_class(
+                ai_provider_spec,
+                AIBaseClassifier,
+            )
+            dict_client_kwargs: dict[str, Any] = {
+                "model": str_model_name.strip() or None,
+                "engine": str_engine,
+            }
+            if base_url is not None:
+                dict_client_kwargs["base_url"] = base_url
+            classifier_client: AIBaseClassifier = class_classifier_client(
+                **dict_client_kwargs
+            )
+            # Normal return with the configured classification client.
+            return classifier_client
+        except AiProviderConfigurationError as exception:
+            raise AIFactory._translate_config_exception(
+                exception,
+                AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+                str_engine,
+            ) from exception
+        except AiProviderDependencyUnavailableError as exception:
+            _LOGGER.warning(str(exception))
+            raise
+        except AiProviderRuntimeError:
+            raise
 
     @staticmethod
     def get_ai_images_client(
