@@ -21,11 +21,18 @@ from .ai_base import (
     AIBaseVideos,
 )
 from .ai_provider_exceptions import (
+    AiProviderError,
     AiFallbackReason,
     AiProviderCapabilityUnsupportedError,
     AiProviderConfigurationError,
     AiProviderDependencyUnavailableError,
     AiProviderRuntimeError,
+)
+from .completions.ai_router_completions import AiRouterCompletions
+from .routing.router_config import (
+    AIRouterClassifierConfig,
+    AIRouterConfig,
+    load_router_config,
 )
 from .completions.ai_fallback_completions import (
     DEFAULT_FALLBACK_REASONS,
@@ -64,6 +71,8 @@ COMPLETIONS_FALLBACKS_KEY: str = "COMPLETIONS_FALLBACKS"
 # Comma-separated AiFallbackReason values that move a request to the next
 # candidate. Blank means DEFAULT_FALLBACK_REASONS.
 COMPLETIONS_FALLBACK_ON_KEY: str = "COMPLETIONS_FALLBACK_ON"
+COMPLETIONS_ROUTER_CONFIG_KEY: str = "COMPLETIONS_ROUTER_CONFIG"
+COMPLETIONS_ROUTER_CLASSIFIER_KEY: str = "COMPLETIONS_ROUTER_CLASSIFIER"
 EMBEDDING_MODEL_NAME_KEY: str = "EMBEDDING_MODEL_NAME"
 EMBEDDING_ENGINE_KEY: str = "EMBEDDING_ENGINE"
 EMBEDDING_DIMENSIONS_KEY: str = "EMBEDDING_DIMENSIONS"
@@ -280,6 +289,7 @@ class AIFactory:
         base_url: str | None = None,
         fallbacks: Sequence[AIFallbackCandidate | tuple[str, str]] | None = None,
         fallback_on: Iterable[AiFallbackReason | str] | None = None,
+        router: AIRouterConfig | None = None,
     ) -> AIBaseCompletions:
         """
         Instantiates the configured completions client.
@@ -300,6 +310,11 @@ class AIFactory:
             fallback_on: Optional reasons that trigger the move to the next
                 candidate; defaults to COMPLETIONS_FALLBACK_ON, then to
                 UNAVAILABLE, RATE_LIMITED, QUOTA_EXHAUSTED, and AUTH_REJECTED.
+            router: Optional complexity router config; defaults to the
+                COMPLETIONS_ROUTER_CONFIG setting (a JSON file path or inline
+                JSON). When present, the returned client classifies each
+                request and routes it to a tier of models, with this engine
+                and its chain as the default route.
 
         Returns:
             Concrete AIBaseCompletions implementation for the requested engine,
@@ -335,26 +350,152 @@ class AIFactory:
                 raise AIFactory._translate_config_exception(
                     exception, AI_PROVIDER_CAPABILITY_COMPLETIONS, candidate.engine
                 ) from exception
+        router_config: AIRouterConfig | None = AIFactory._resolve_router_config(
+            env_settings=env_settings, router=router
+        )
+        if router_config is not None:
+            # Loop over tier candidates so a typo fails at startup, as for fallbacks.
+            for tier in router_config.tiers:
+                for candidate in tier.candidates:
+                    try:
+                        get_ai_provider_spec(
+                            AI_PROVIDER_CAPABILITY_COMPLETIONS, candidate.engine
+                        )
+                    except AiProviderConfigurationError as exception:
+                        raise AIFactory._translate_config_exception(
+                            exception,
+                            AI_PROVIDER_CAPABILITY_COMPLETIONS,
+                            candidate.engine,
+                        ) from exception
         primary: AIBaseCompletions = AIFactory._build_completions_client(
             str_engine, str_model_name, base_url
         )
-        if not list_fallbacks:
-            # Early return with the plain engine, as before.
-            return primary
-        # Normal return with the failover wrapper around the primary.
-        return AiFallbackCompletions(
-            primary=primary,
-            primary_candidate=AIFallbackCandidate(
-                engine=str_engine, model=str_model_name, base_url=base_url
-            ),
-            fallback_candidates=list_fallbacks,
-            fallback_on=AIFactory._resolve_fallback_reasons(
+        frozenset_reasons: frozenset[AiFallbackReason] = (
+            AIFactory._resolve_fallback_reasons(
                 env_settings=env_settings, fallback_on=fallback_on
-            ),
+            )
+        )
+        default_client: AIBaseCompletions = primary
+        if list_fallbacks:
+            default_client = AiFallbackCompletions(
+                primary=primary,
+                primary_candidate=AIFallbackCandidate(
+                    engine=str_engine, model=str_model_name, base_url=base_url
+                ),
+                fallback_candidates=list_fallbacks,
+                fallback_on=frozenset_reasons,
+                client_builder=lambda candidate: AIFactory._build_completions_client(
+                    candidate.engine, candidate.model, candidate.base_url
+                ),
+            )
+        if router_config is None:
+            # Normal return without a router: the plain engine or its chain.
+            return default_client
+        classifier, str_unavailable = AIFactory._resolve_router_classifier(
+            env_settings=env_settings, router_config=router_config
+        )
+        # Normal return with the routing client over the default route.
+        return AiRouterCompletions(
+            default_client=default_client,
+            config=router_config,
+            classifier=classifier,
             client_builder=lambda candidate: AIFactory._build_completions_client(
                 candidate.engine, candidate.model, candidate.base_url
             ),
+            fallback_on=router_config.fallback_on or frozenset_reasons,
+            str_classifier_unavailable_reason=str_unavailable,
         )
+
+    @staticmethod
+    def _resolve_router_config(
+        *, env_settings: EnvSettings, router: AIRouterConfig | None
+    ) -> AIRouterConfig | None:
+        """
+        Resolves the router config from the argument or COMPLETIONS_ROUTER_CONFIG.
+
+        Args:
+            env_settings: Shared environment/settings accessor.
+            router: Explicit config, or None to read the setting.
+
+        Returns:
+            The config, or None when no router is configured.
+        """
+        if router is not None:
+            # Early return with the explicit config.
+            return router
+        str_value: str = str(
+            env_settings.get_setting(COMPLETIONS_ROUTER_CONFIG_KEY, "") or ""
+        ).strip()
+        if not str_value:
+            # Early return: no router configured.
+            return None
+        # Normal return with the parsed config.
+        return load_router_config(str_value)
+
+    @staticmethod
+    def _resolve_router_classifier(
+        *, env_settings: EnvSettings, router_config: AIRouterConfig
+    ) -> tuple[AIBaseClassifier | None, str | None]:
+        """
+        Builds the router's classifier, or explains why there is none.
+
+        Order: COMPLETIONS_ROUTER_CLASSIFIER, then the config's classifier,
+        then the classification factory's own resolution (CLASSIFIER_ENGINE,
+        then openai-decisions when OPENAI_API_KEY is set). "none" turns the
+        classifier off. A build failure never raises: the router degrades to
+        its default route and logs the reason.
+
+        Args:
+            env_settings: Shared environment/settings accessor.
+            router_config: The router config.
+
+        Returns:
+            (classifier or None, reason it is None or None).
+        """
+        str_setting: str = str(
+            env_settings.get_setting(COMPLETIONS_ROUTER_CLASSIFIER_KEY, "") or ""
+        ).strip()
+        classifier_config: AIRouterClassifierConfig | None = router_config.classifier
+        if str_setting:
+            str_engine_part, _, str_model_part = str_setting.partition(":")
+            classifier_config = AIRouterClassifierConfig(
+                engine=str_engine_part.strip().lower(),
+                model=str_model_part.strip() or None,
+                timeout_seconds=(
+                    classifier_config.timeout_seconds
+                    if classifier_config is not None
+                    else AIRouterClassifierConfig().timeout_seconds
+                ),
+                instructions=(
+                    classifier_config.instructions
+                    if classifier_config is not None
+                    else None
+                ),
+            )
+        if classifier_config is not None and classifier_config.disabled:
+            # Early return: turned off on purpose.
+            return None, "disabled"
+        try:
+            if classifier_config is not None and classifier_config.engine:
+                # Early return with the configured classifier.
+                return (
+                    AIFactory.get_ai_classifier_client(
+                        classifier_engine=classifier_config.engine,
+                        model_name=classifier_config.model,
+                        base_url=classifier_config.base_url,
+                    ),
+                    None,
+                )
+            # Normal return with the factory-resolved classifier.
+            return AIFactory.get_ai_classifier_client(), None
+        except (ValueError, AiProviderError) as exception:
+            _LOGGER.warning(
+                "Router classifier unavailable (%s: %s); routing to the default route.",
+                type(exception).__name__,
+                exception,
+            )
+            # Early return: no classifier, with the reason.
+            return None, f"{type(exception).__name__}: {exception}"
 
     @staticmethod
     def _resolve_fallback_chain(

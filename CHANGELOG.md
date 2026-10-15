@@ -4,9 +4,45 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
-## 2.36.0
+## 3.0.0
+
+A major release: classification becomes a capability of the library, and a
+complexity-based model router sits above completions. Existing completions,
+embeddings, images, videos, and voice APIs are unchanged; the major bump
+marks the new public surface (`AIBaseClassifier`, `AiRouterCompletions`,
+and their configuration) and the new default classifier behavior when
+`OPENAI_API_KEY` is set.
 
 ### Added
+
+- Model routing. `AIFactory.get_ai_completions_client(router=...)`, or the
+  `COMPLETIONS_ROUTER_CONFIG` setting (a JSON file path or inline JSON),
+  returns an `AiRouterCompletions` that classifies each request's latest
+  user text with a classification engine and sends it to the tier of
+  models the classifier names. A config is an ordered list of tiers,
+  ascending capability, each an `engine:model` chain; the chain is an
+  `AiFallbackCompletions`, so provider failures, engine families, and
+  same-account skips behave as without a router. The configured
+  completions LLM (and its fallback chain) is the default route. Tier
+  names easy, medium, and hard carry built-in descriptions.
+- Routing policy: a tier's chain exhausted on a trigger reason escalates
+  to the next tier up (`on_exhausted: escalate`, or `raise`). The
+  classifier never fails a call: no classifier, a classifier error, or a
+  refusal routes to `default_tier` or the default route and logs why.
+  Engine-shaped histories (tool turns) skip the classifier and stay in a
+  tier of their family. Per-call control: `provider_options={"route":
+  "<tier>" | "default"}` or `client.for_tier(name)`.
+- Routing decisions are always logged on
+  `ai_api_unified.completions.ai_router_completions` with an
+  `ai_router_event` field: `routed` (every call; tier, method, classifier
+  engine and model, confidence, probabilities, latency, classifier tokens
+  and cost), `classifier_unavailable`, `classifier_failed`,
+  `tier_exhausted`, `tier_unbuildable`. Route tags (`route_id`,
+  `route_tier`, `route_method`) ride on every downstream engine event.
+- `COMPLETIONS_ROUTER_CLASSIFIER` (`engine:model`, or `none`) picks the
+  router's classifier; otherwise the classification factory's resolution
+  applies (`CLASSIFIER_ENGINE`, then `openai-decisions` when
+  `OPENAI_API_KEY` is set).
 
 - Classification as a capability. `AIFactory.get_ai_classifier_client()`
   (settings `CLASSIFIER_ENGINE`, `CLASSIFIER_MODEL_NAME`) returns an
