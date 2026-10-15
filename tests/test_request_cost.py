@@ -502,7 +502,8 @@ class TestPlainEngineAndCallerScope:
             engine.send_prompt("a")
             chain.send_prompt("b")
             with request_cost_scope("inner") as inner:
-                assert inner is scope
+                assert not inner.bool_owner
+                assert inner.request_id == scope.request_id
         assert scope.report.operation == "workflow-step"
         assert len(scope.report.calls) == 2
         assert scope.report.total_usd == GPT_COST * 2

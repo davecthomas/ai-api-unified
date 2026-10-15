@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from ai_api_unified.middleware.request_cost import (
     current_request_cost_scope,
     record_call_line_item,
+    summary_from_exception_usage,
 )
 
 if TYPE_CHECKING:
@@ -451,6 +452,12 @@ def execute_observed_call(
                     float_elapsed_ms=provider_elapsed_ms,
                 ),
             )
+            _emit_billed_error(
+                observability_middleware=observability_middleware,
+                call_context=call_context,
+                exception=caught_exception,
+                float_elapsed_ms=provider_elapsed_ms,
+            )
         # Early return via re-raise because provider exception behavior must remain unchanged.
         raise
 
@@ -564,6 +571,12 @@ async def execute_observed_async_call(
                     exception=caught_exception,
                     float_elapsed_ms=provider_elapsed_ms,
                 ),
+            )
+            _emit_billed_error(
+                observability_middleware=observability_middleware,
+                call_context=call_context,
+                exception=caught_exception,
+                float_elapsed_ms=provider_elapsed_ms,
             )
         # Early return via re-raise because provider exception behavior must remain unchanged.
         raise
@@ -731,12 +744,56 @@ def execute_observed_streaming_call(
                     float_elapsed_ms=provider_elapsed_ms,
                 ),
             )
+            _emit_billed_error(
+                observability_middleware=observability_middleware,
+                call_context=call_context,
+                exception=caught_exception,
+                float_elapsed_ms=provider_elapsed_ms,
+            )
         # Early return via re-raise because provider exception behavior must remain unchanged.
         raise
 
     _emit_output_event()
     # Normal return after the stream is exhausted and the output event has fired.
     return
+
+
+def _emit_billed_error(
+    *,
+    observability_middleware: AiApiObservabilityMiddleware,
+    call_context: AiApiCallContextModel,
+    exception: Exception,
+    float_elapsed_ms: float,
+) -> None:
+    """
+    Fires `on_billed_error` when a failed call's exception carries provider
+    usage, so a billed answer the library could not use is still costed.
+
+    Args:
+        observability_middleware: Effective observability middleware for the call.
+        call_context: Immutable provider-boundary call metadata.
+        exception: The failure; billed when it carries a `usage` attribute.
+        float_elapsed_ms: Elapsed provider time before the failure.
+
+    Returns:
+        None after the hook fires or the failure proves unbilled.
+    """
+    call_result_summary: AiApiCallResultSummaryModel | None = (
+        summary_from_exception_usage(exception, float_elapsed_ms)
+    )
+    if call_result_summary is None:
+        # Early return: a transport failure carries nothing billable.
+        return None
+    _safe_emit_observability_hook(
+        stage="on_billed_error",
+        callable_emit=lambda: observability_middleware.on_billed_error(
+            call_context=call_context.with_direction(OBSERVABILITY_DIRECTION_ERROR),
+            call_result_summary=call_result_summary,
+            exception=exception,
+        ),
+    )
+    # Normal return after the billed-error hook.
+    return None
 
 
 def _safe_emit_observability_hook(

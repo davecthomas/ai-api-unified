@@ -60,7 +60,10 @@ from .ai_base import (
     RETRY_POLICY_NONE,
     SupportedDataType,
 )
-from .ai_completions_exceptions import StructuredResponseTokenLimitError
+from .ai_completions_exceptions import (
+    StructuredOutputValidationError,
+    StructuredResponseTokenLimitError,
+)
 from .ai_provider_exceptions import (
     AiProviderCapabilityUnsupportedError,
     AiFallbackReason,
@@ -153,6 +156,7 @@ __all__: list[str] = [
     "AiProviderRequestError",
     "RETRY_POLICY_DEFAULT",
     "RETRY_POLICY_NONE",
+    "StructuredOutputValidationError",
     "StructuredResponseTokenLimitError",
     "SupportedDataType",
     "request_cost_scope",
