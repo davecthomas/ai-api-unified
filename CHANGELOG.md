@@ -4,6 +4,39 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.2.0
+
+### Added
+
+- `models.json`: one file for every model selection. `AI_MODELS_CONFIG`
+  names it (a path to `.json`, `.yaml`, or `.yml`, or inline JSON); unset
+  means `./models.json` when it exists; blank turns the file off. Sections:
+  `allow` and `deny` (model policy), `completions` (engine, model,
+  fallbacks, fallback_on, retry_policy), `classifier`, `router`,
+  `model_check`, `embeddings`, `images`, `videos`, `voice`, and
+  `geo_residency`. Every `.env` selection key keeps working and overrides
+  the file (precedence: factory argument, process environment, `.env`,
+  file, default), so a deployment can pin one value without editing the
+  file. Secrets, AWS region, base-URL overrides, and the middleware config
+  path stay in `.env`. `models_sample.json` documents every section.
+- Allow and deny lists over models. Entries are `engine:model` globs
+  (`claude:*`, `*:gpt-4*`, a bare `bedrock` means `bedrock:*`); deny wins
+  over allow and an empty allow list allows everything. A denied fallback,
+  tier, or classifier model is pruned exactly like a missing one, with
+  `configured ... is denied by policy pattern '...' and will be ignored`
+  (`ai_model_policy_event=model_denied`); a dropped tier routes to the next
+  higher surviving tier. A denied primary, or an explicit request for a
+  denied completions, embeddings, image, or video model, raises
+  `ValueError` naming the pattern.
+- `AI_MODEL_CHECK_TIMEOUT_SECONDS` (or `model_check.timeout_seconds` in the
+  file) bounds each existence probe.
+- `scripts/migrate2json.py` generates `models.json` from the current
+  directory's `.env`: each selection key lands in its section, a router
+  file named by `COMPLETIONS_ROUTER_CONFIG` is embedded, structural
+  defaults (model check mode and timeout, `fallback_on`, `on_exhausted`)
+  come from `models_sample.json`, the allow and deny lists start empty, and
+  secrets stay in `.env`. `--comment-env` comments the moved keys out.
+
 ## 3.1.0
 
 ### Added

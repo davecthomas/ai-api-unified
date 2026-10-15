@@ -19,6 +19,7 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env into process environment so poetry-run pytest sees it
@@ -182,6 +183,18 @@ def pytest_collection_modifyitems(
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
+        "--models-config",
+        action="store",
+        default=None,
+        metavar="PATH",
+        help=(
+            "models.json to run the tests against (sets AI_MODELS_CONFIG for every "
+            "test). The suite otherwise blanks AI_MODELS_CONFIG so a developer's "
+            "own models.json never becomes a test's configuration. Live tests "
+            "that read a models config default to tests/fixtures/models_test.json."
+        ),
+    )
+    parser.addoption(
         "--aiprovider",
         action="store",
         # default="openai",
@@ -246,8 +259,23 @@ def placeholder_provider_keys(
     return None
 
 
+@pytest.fixture
+def models_config_path(request: pytest.FixtureRequest) -> str:
+    """
+    The models config a live test should read: --models-config when given,
+    else the committed tests/fixtures/models_test.json.
+    """
+    str_option: str | None = request.config.getoption("--models-config")
+    # Normal return with the option or the fixture file.
+    return str_option or str(
+        Path(__file__).resolve().parent / "fixtures" / "models_test.json"
+    )
+
+
 @pytest.fixture(autouse=True)
-def _isolate_from_developer_wrappers(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_from_developer_wrappers(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
     """
     Keeps a developer's .env router or fallback chain out of the suite.
 
@@ -266,3 +294,7 @@ def _isolate_from_developer_wrappers(monkeypatch: pytest.MonkeyPatch) -> None:
     # The configured-model check probes real providers; mocked tests must
     # not. Checker tests set AI_MODEL_CHECK themselves with fake probes.
     monkeypatch.setenv("AI_MODEL_CHECK", "off")
+    # A developer's models.json must not become every test's configuration,
+    # unless --models-config names the file the run should use.
+    str_models_config: str | None = request.config.getoption("--models-config")
+    monkeypatch.setenv("AI_MODELS_CONFIG", str_models_config or "")

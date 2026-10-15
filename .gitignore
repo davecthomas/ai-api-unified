@@ -28,6 +28,7 @@ venv/
 # Environment & config
 .env*
 config.json
+models.json
 settings.json
 
 # Editor / IDE

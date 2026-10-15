@@ -1,0 +1,24 @@
+{
+  "_comment": "Test configuration for the live configured-model check. The fallback chain and the easy tier each list a model no provider serves, so a run proves missing models are pruned with a warning while the configuration still builds.",
+  "allow": [],
+  "deny": [],
+
+  "completions": {
+    "engine": "google-gemini",
+    "model": "gemini-2.5-flash",
+    "fallbacks": ["claude:claude-nope-9", "claude:claude-sonnet-5"]
+  },
+
+  "classifier": {"engine": "none"},
+
+  "router": {
+    "tiers": [
+      {"name": "easy", "models": ["google-gemini:gemini-nope-1", "google-gemini:gemini-2.5-flash-lite"]},
+      {"name": "hard", "models": ["claude:claude-opus-5-5"]}
+    ],
+    "default_tier": "easy",
+    "on_exhausted": "escalate"
+  },
+
+  "model_check": {"mode": "prune", "timeout_seconds": 10}
+}

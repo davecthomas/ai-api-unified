@@ -1,0 +1,26 @@
+{
+  "_comment": "Test configuration for the live policy and routing tests. Point pytest at it (or at your own file) with --models-config PATH. The hard tier deliberately lists a model the deny list rejects, so a run proves the deny list bites.",
+  "allow": [],
+  "deny": ["*:claude-fable-*", "*:*moonshot*", "*:*kimi*"],
+
+  "completions": {
+    "engine": "google-gemini",
+    "model": "gemini-2.5-flash",
+    "fallbacks": ["claude:claude-sonnet-5"],
+    "fallback_on": "unavailable,rate_limited,quota_exhausted,auth_rejected"
+  },
+
+  "classifier": {"engine": "openai-decisions", "model": "gpt-6-luna"},
+
+  "router": {
+    "tiers": [
+      {"name": "easy",   "models": ["google-gemini:gemini-2.5-flash-lite", "claude:claude-haiku-4-5"]},
+      {"name": "medium", "models": ["google-gemini:gemini-2.5-flash", "claude:claude-sonnet-5"]},
+      {"name": "hard",   "models": ["claude:claude-fable-5-1", "claude:claude-opus-5-5"]}
+    ],
+    "default_tier": "medium",
+    "on_exhausted": "escalate"
+  },
+
+  "model_check": {"mode": "prune", "timeout_seconds": 10}
+}

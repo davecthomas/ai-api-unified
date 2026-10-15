@@ -4,7 +4,7 @@
 # Which embedding model family?   openai | titan | google-gemini | voyage
 # EMBEDDING_ENGINE=titan
 # EMBEDDING_ENGINE=voyage
-EMBEDDING_ENGINE=google-gemini
+# EMBEDDING_ENGINE=google-gemini
 
 
 ########################################################################
@@ -40,12 +40,22 @@ GOOGLE_GEMINI_API_KEY=
 # Optional API base-URL override for Gemini. Same https rule as above.
 GOOGLE_GEMINI_BASE_URL_OVERRIDE=
 GOOGLE_AUTH_METHOD=api_key
+# --- Model selections live in models.json ---------------------------------
+# Engines, models, the fallback chain, the router, the classifier, the
+# configured-model check, and the allow/deny policy are authored in
+# models.json (copy models_sample.json). AI_MODELS_CONFIG names the file or
+# holds inline JSON; unset means ./models.json when it exists; blank turns
+# the file off. Every selection key below still works and overrides the
+# file when set, so a deployment can pin one value without editing the file.
+# Leave it unset to pick up ./models.json when present: a set path that does
+# not exist is an error on every settings read.
+# AI_MODELS_CONFIG=./models.json
 # Completions engine (openai | openai-responses | claude | google-gemini | nova | anthropic | ...)
-COMPLETIONS_ENGINE=google-gemini
+# COMPLETIONS_ENGINE=google-gemini
 
 # Generic AI settings
 # Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001 | voyage-3 | voyage-4)
-EMBEDDING_MODEL_NAME=gemini-embedding-001
+# EMBEDDING_MODEL_NAME=gemini-embedding-001
 # Classification engine (openai-decisions | openai | openai-responses |
 # openai-compatible | claude | google-gemini | bedrock | anthropic). When unset,
 # openai-decisions is used if OPENAI_API_KEY is set. A completions engine token
@@ -67,7 +77,7 @@ EMBEDDING_MODEL_NAME=gemini-embedding-001
 #     needs one; OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=json_schema|json_object;
 #     OPENAI_COMPATIBLE_CONTEXT_WINDOW for the context guard)
 #   nova:          default amazon.nova-lite-v1:0 | amazon.nova-micro-v1:0
-COMPLETIONS_MODEL_NAME=gemini-3.7-flash
+# COMPLETIONS_MODEL_NAME=gemini-3.7-flash
 # COMPLETIONS_MODEL_NAME=gemini-3.8-flash
 # COMPLETIONS_MODEL_NAME=claude-opus-5-5
 # COMPLETIONS_MODEL_NAME=gpt-6-sol
@@ -86,7 +96,7 @@ COMPLETIONS_MODEL_NAME=gemini-3.7-flash
 # Optional complexity router: a JSON file path (or inline JSON) listing tiers of
 # engine:model chains. The configured completions LLM is the default route.
 # See README "Model routing".
-# COMPLETIONS_ROUTER_CONFIG=./router.json
+# COMPLETIONS_ROUTER_CONFIG=  (override of the router section in models.json; a path or inline JSON)
 # Classifier for the router as engine:model, or none. Default: the
 # classification factory's resolution (CLASSIFIER_ENGINE, then
 # openai-decisions when OPENAI_API_KEY is set).
@@ -117,10 +127,10 @@ AWS_SESSION_TOKEN=
 ELEVEN_LABS_API_KEY=
 
 # Voice engine: "elevenlabs", "google", "openai", "azure"
-AI_VOICE_ENGINE=google
+# AI_VOICE_ENGINE=google
 
 # Language code (e.g. en, de)
-AI_VOICE_LANGUAGE=en
+# AI_VOICE_LANGUAGE=en
 
 ########################################################################
 #   Google AI Voice Settings
@@ -131,7 +141,7 @@ AI_VOICE_LANGUAGE=en
 # GOOGLE_PROJECT_ID=
 # GOOGLE_LOCATION=us-central1
 # Preferred Google TTS model
-DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
+# DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
 
 ########################################################################
 #   Google Gemini AI Settings (Completions & Embeddings)
@@ -156,20 +166,20 @@ MICROSOFT_COGNITIVE_SERVICES_REGION=eastus
 MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=https://eastus.api.cognitive.microsoft.com/
 
 # Image engine: openai | nova-canvas | google-gemini
-IMAGE_ENGINE=google-gemini
+# IMAGE_ENGINE=google-gemini
 # image model used for image generation requests: openai: gpt-image-2 ; amazon nova: amazon.nova-canvas-v1:0 ; google gemini: gemini-3.1-flash-image
-IMAGE_MODEL_NAME=gemini-3.1-flash-image
+# IMAGE_MODEL_NAME=gemini-3.1-flash-image
 
 # Video engine: openai | google-gemini | nova-reel | nova | bedrock
 # The simplest OSS default path is Google Veo via API key auth.
-VIDEO_ENGINE=google-gemini
+# VIDEO_ENGINE=google-gemini
 # Video model defaults by provider when left unset:
 #   openai -> sora-2 (retired 2026-09-24; the engine now raises on construction)
 #   google-gemini -> veo-3.1-lite-generate-preview
 #   nova-reel / bedrock -> amazon.nova-reel-v1:1
-VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
+# VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
 # Local directory used when the library materializes generated videos.
-VIDEO_OUTPUT_DIR=./generated_videos
+# VIDEO_OUTPUT_DIR=./generated_videos
 # Optional blocking-flow tuning for video polling.
 # VIDEO_POLL_INTERVAL_SECONDS=10
 # VIDEO_TIMEOUT_SECONDS=900
