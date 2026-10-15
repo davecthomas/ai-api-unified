@@ -186,7 +186,7 @@ class TestAnthropic:
         assert exc_info.value.fallback_reason is reason
         assert exc_info.value.provider_engine == "claude"
 
-    def test_timeout_is_not_a_fallback_trigger(self) -> None:
+    def test_timeout_classifies_as_timeout(self) -> None:
         client = _anthropic()
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         client.client.messages.create.side_effect = anthropic.APITimeoutError(
@@ -194,7 +194,10 @@ class TestAnthropic:
         )
         with pytest.raises(AiProviderRequestError) as exc_info:
             client.send_prompt("hi")
-        assert exc_info.value.fallback_reason is None
+        assert exc_info.value.fallback_reason is R.TIMEOUT
+        assert exc_info.value.status_code is None
+        assert exc_info.value.is_transient is False
+        assert exc_info.value.account_wide is False
 
     def test_connection_error_is_unavailable(self) -> None:
         client = _anthropic()
@@ -323,14 +326,14 @@ class TestBedrock:
             )
         assert exc_info.value.account_wide is account_wide
 
-    def test_read_timeout_is_not_a_fallback_trigger(self) -> None:
+    def test_read_timeout_classifies_as_timeout(self) -> None:
         client = _bedrock()
         client.client.converse.side_effect = ReadTimeoutError(endpoint_url="x")
         with pytest.raises(AiProviderRequestError) as exc_info:
             client.send_conversation(
                 "sys", [{"role": "user", "content": [{"text": "hi"}]}]
             )
-        assert exc_info.value.fallback_reason is None
+        assert exc_info.value.fallback_reason is R.TIMEOUT
 
     def test_endpoint_connection_error_is_unavailable(self) -> None:
         client = _bedrock()
@@ -483,6 +486,37 @@ class TestGemini:
         assert exc_info.value.fallback_reason is R.QUOTA_EXHAUSTED
         # Gemini quotas are per model, so another Gemini model may still serve.
         assert exc_info.value.account_wide is False
+
+    @pytest.mark.parametrize(
+        ("exception", "reason"),
+        [
+            (httpx.ReadTimeout("read timed out"), R.TIMEOUT),
+            (httpx.ConnectError("connection refused"), R.UNAVAILABLE),
+            (httpx.ReadError("connection reset"), R.UNAVAILABLE),
+            (httpx.RemoteProtocolError("peer closed connection"), R.UNAVAILABLE),
+        ],
+    )
+    def test_httpx_transport_errors_are_typed(
+        self, exception: Exception, reason: AiFallbackReason
+    ) -> None:
+        # The google-genai SDK raises httpx transport errors unwrapped.
+        pytest.importorskip("google.genai.errors")
+        from ai_api_unified.completions.ai_google_gemini_completions import (
+            GoogleGeminiCompletions,
+        )
+
+        with patch.object(
+            GoogleGeminiCompletions,
+            "_initialize_client",
+            lambda self: setattr(self, "client", Mock()),
+        ):
+            client = GoogleGeminiCompletions(model="gemini-2.5-flash")
+        client.client.models.generate_content.side_effect = exception
+        with patch("ai_api_unified.ai_google_base.time.sleep"):
+            with pytest.raises(AiProviderRequestError) as exc_info:
+                client.send_prompt("hi")
+        assert exc_info.value.fallback_reason is reason
+        assert exc_info.value.status_code is None
 
     def test_backoff_loop_still_retries_a_rate_limit(self) -> None:
         genai_errors = pytest.importorskip("google.genai.errors")

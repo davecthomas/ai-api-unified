@@ -4,6 +4,29 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.34.0
+
+### Added
+
+- `AiFallbackReason.TIMEOUT`: the caller's deadline passed before the
+  provider answered. It is off by default; add `timeout` to
+  `COMPLETIONS_FALLBACK_ON` or `fallback_on` to treat a provider that hangs
+  under load as an outage. It is neither transient (no in-engine backoff
+  on top of the SDK's own timeout retries) nor account-wide (a hung model
+  says nothing about the account's other models). Pair it with a short
+  `request_timeout_seconds` and `retry_policy="none"`; the README explains
+  why.
+- Gemini now maps the SDK's unwrapped httpx transport errors
+  (`httpx.TransportError`: a timeout, a refused connection, a reset
+  mid-response) to `AiProviderRequestError`, so a Gemini timeout or failed
+  connection reaches the fallback layer like the other engines' do.
+
+### Changed
+
+- A client-side timeout's `fallback_reason` is now `TIMEOUT` rather than
+  `None`. Callers that inspect the reason see the change; the fallback
+  layer's default behavior does not change.
+
 ## 2.33.0
 
 ### Added

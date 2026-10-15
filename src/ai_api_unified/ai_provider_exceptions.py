@@ -17,7 +17,7 @@ class AiFallbackReason(str, Enum):
     Set on AiProviderRequestError by each engine from the provider's own error
     codes, since an HTTP status alone does not separate a rate limit from an
     exhausted quota. Errors that a different model would not fix (validation,
-    a content refusal, a caller-set timeout) carry no reason. Account-level
+    a content refusal) carry no reason. Account-level
     failures (a rejected key, a spend cap) do carry one: a candidate on
     another provider uses another account.
 
@@ -31,6 +31,11 @@ class AiFallbackReason(str, Enum):
             (401/403, an invalid or expired key, a disabled organization).
             Retrying the same provider is pointless; another provider's
             account can still serve.
+        TIMEOUT: The caller's own deadline passed before the provider
+            answered. Off by default in the fallback layer: the deadline is
+            a caller setting, and failing over adds the next candidate's
+            wait on top of it. A caller with a short deadline turns it on
+            to treat a hung provider as an outage.
         MODEL_UNAVAILABLE: The model id is unknown, retired, or not offered
             in the configured region. Usually a configuration error, so a
             fallback layer should not act on it unless told to.
@@ -41,6 +46,7 @@ class AiFallbackReason(str, Enum):
     QUOTA_EXHAUSTED = "quota_exhausted"
     MODEL_UNAVAILABLE = "model_unavailable"
     AUTH_REJECTED = "auth_rejected"
+    TIMEOUT = "timeout"
 
 
 class _DeriveFallbackReason:
@@ -72,8 +78,8 @@ def classify_fallback_reason_by_status(
 
     Engines refine this with provider error codes; this is the shared
     baseline for statuses whose meaning does not vary by provider. A missing
-    status is not a trigger here: it covers connection failures, which are
-    one, but also client-side timeouts, missing credentials, and malformed
+    status is not a trigger here: it covers connection failures and
+    timeouts, which are, but also missing credentials and malformed
     responses, which are not. Engines that can tell them apart pass the
     reason explicitly (see classify_transport_fallback_reason).
 
@@ -106,17 +112,18 @@ def classify_transport_fallback_reason(bool_timeout: bool) -> AiFallbackReason |
     """
     Classifies a failure that happened before any HTTP status arrived.
 
-    A timeout is the caller's own limit, so it is no reason to change model;
-    a failed connection means the host is unreachable.
+    A timeout is the caller's own deadline, reported as TIMEOUT so a caller
+    that opts in can fail over; a failed connection means the host is
+    unreachable.
 
     Args:
         bool_timeout: True when the failure was a client-side timeout.
 
     Returns:
-        None for a timeout, UNAVAILABLE for a connection failure.
+        TIMEOUT for a timeout, UNAVAILABLE for a connection failure.
     """
     # Normal return with the transport classification.
-    return None if bool_timeout else AiFallbackReason.UNAVAILABLE
+    return AiFallbackReason.TIMEOUT if bool_timeout else AiFallbackReason.UNAVAILABLE
 
 
 class AiProviderError(RuntimeError):

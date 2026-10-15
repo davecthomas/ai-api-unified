@@ -72,7 +72,8 @@ COMPLETIONS_MODEL_NAME=gemini-3.7-flash
 # COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
 # Reasons that trigger a fallback (AiFallbackReason values). Default:
 # unavailable,rate_limited,quota_exhausted,auth_rejected. Add
-# model_unavailable to also fail over on an unknown model id.
+# model_unavailable to also fail over on an unknown model id, or timeout to
+# fail over when request_timeout_seconds passes with no answer.
 # COMPLETIONS_FALLBACK_ON=unavailable,rate_limited,quota_exhausted,auth_rejected
 # Embedding dimensions (1536 for OpenAI | 1024 for Titan | 3072 default for Gemini)
 # Leave unset to use the provider default for the selected engine.
