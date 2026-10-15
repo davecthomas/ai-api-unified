@@ -16,7 +16,7 @@ import logging
 import os
 from collections.abc import Iterator
 from typing import Any, Type
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 import httpx
 import pytest
@@ -573,6 +573,20 @@ class TestFailover:
         assert wrapper.send_prompt("hi") == "t:ok"
         wrapper.send_prompt("hi")
         assert wrapper.builder.call_count == 2
+
+    def test_price_per_1k_tokens_is_a_property_of_the_serving_candidate(
+        self,
+    ) -> None:
+        fallback = _FakeEngine("f")
+        wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), fallback)
+        wrapper.send_prompt("hi")
+        # The base declares a property; the wrapper used to expose a method
+        # that called the property as a function and raised TypeError.
+        with patch.object(
+            type(fallback), "price_per_1k_tokens", new_callable=PropertyMock
+        ) as mock_price:
+            mock_price.return_value = 0.25
+            assert wrapper.price_per_1k_tokens == 0.25
 
     def test_cost_helpers_price_at_the_serving_candidate(self) -> None:
         fallback = _FakeEngine("f")

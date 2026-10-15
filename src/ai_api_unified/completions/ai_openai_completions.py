@@ -56,6 +56,13 @@ from ..pricing.pricing_registry import (
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
+# Error codes OpenAI sends when the account cannot pay for the request: an
+# exhausted quota, exhausted prepaid credits (a 429 whose `type` is also
+# insufficient_quota), and a reached billing hard limit (a 400).
+FROZENSET_OPENAI_QUOTA_CODES: frozenset[str] = frozenset(
+    {"insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached"}
+)
+
 
 class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
     """OpenAI-specific completions capabilities.
@@ -446,7 +453,8 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         Maps one OpenAI status error to a fallback reason.
 
         Reads the error code, because OpenAI returns 429 both for a rate
-        limit and for an exhausted quota (`insufficient_quota`), and a 400
+        limit and for an exhausted quota (`insufficient_quota`, or
+        `credit_balance_exhausted` when prepaid credits run out), and a 400
         when the account's billing hard limit is reached.
 
         Args:
@@ -456,7 +464,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             The fallback reason, or None when another model would not help.
         """
         str_code: str = str(getattr(exception, "code", None) or "")
-        if str_code in ("insufficient_quota", "billing_hard_limit_reached"):
+        if str_code in FROZENSET_OPENAI_QUOTA_CODES:
             # Early return: the account cannot pay for the request.
             return AiFallbackReason.QUOTA_EXHAUSTED
         if str_code == "model_not_found":
