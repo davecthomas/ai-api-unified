@@ -261,8 +261,25 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_local_install_command='poetry install --extras "bedrock"',
         set_str_dependency_roots={"boto3", "botocore"},
     ),
-    # Classification through structured output: one spec per completions
-    # engine whose models can answer a JSON schema. Bedrock vendor tokens
+    # Classification: OpenAI's native Decisions API, then structured output
+    # through each completions engine whose models can answer a JSON schema.
+    (
+        AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        "openai-decisions",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        str_engine="openai-decisions",
+        str_module_path=(
+            "ai_api_unified.classification.ai_openai_decisions_classifier"
+        ),
+        str_class_name="AiOpenAIDecisionsClassifier",
+        str_required_extra="openai",
+        str_consumer_install_command=("poetry add 'ai-api-unified[openai]'"),
+        str_local_install_command='poetry install --extras "openai"',
+        set_str_dependency_roots={"openai"},
+    ),
+    # Structured output: one spec per completions engine whose models can
+    # answer a JSON schema. Bedrock vendor tokens
     # without structured output (nova, llama, ...) are deliberately absent.
     (
         AI_PROVIDER_CAPABILITY_CLASSIFICATION,

@@ -27,7 +27,6 @@ from ai_api_unified.classification.ai_structured_output_classifier import (
 
 BASE_SETTINGS: dict[str, str] = {
     "ANTHROPIC_API_KEY": "test-key",
-    "OPENAI_API_KEY": "test-key",
 }
 
 
@@ -74,9 +73,28 @@ class TestRegistry:
 
 
 class TestResolution:
-    def test_unset_engine_fails_loudly(self) -> None:
+    def test_unset_engine_without_openai_key_fails_loudly(self) -> None:
         with _settings({}), pytest.raises(ValueError, match="CLASSIFIER_ENGINE"):
             AIFactory.get_ai_classifier_client()
+
+    def test_unset_engine_with_openai_key_uses_decisions(self) -> None:
+        pytest.importorskip("openai")
+        with _settings({"OPENAI_API_KEY": "test-key"}):
+            client = AIFactory.get_ai_classifier_client()
+        assert type(client).__name__ == "AiOpenAIDecisionsClassifier"
+        assert client.model_name == "gpt-6-luna"
+
+    def test_configured_engine_wins_over_the_openai_key(self) -> None:
+        pytest.importorskip("anthropic")
+        with _settings({"OPENAI_API_KEY": "test-key", "CLASSIFIER_ENGINE": "claude"}):
+            client = AIFactory.get_ai_classifier_client()
+        assert isinstance(client, AiStructuredOutputClassifier)
+
+    def test_decisions_is_registered(self) -> None:
+        spec = get_ai_provider_spec(
+            AI_PROVIDER_CAPABILITY_CLASSIFICATION, "openai-decisions"
+        )
+        assert spec.str_class_name == "AiOpenAIDecisionsClassifier"
 
     def test_unknown_engine_fails_loudly(self) -> None:
         with (

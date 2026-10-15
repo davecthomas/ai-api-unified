@@ -21,9 +21,17 @@ version lives in `pyproject.toml` (see the README release section).
   the PII middleware, truncates the input to `capabilities.max_input_chars`
   (head and tail), and is metered: structured-output classifiers inherit
   the wrapped engine's cost events and tag them `classifier_role`; a call
-  that cannot be metered logs `classifier_unmetered`. A native OpenAI
-  Decisions engine and the model router that consumes classifiers land in
-  the next releases of this feature.
+  that cannot be metered logs `classifier_unmetered`.
+- `openai-decisions`: classification through OpenAI's Decisions API
+  (`POST /v1/decisions`, model `gpt-6-luna`), with native choice, predicate,
+  and score answers and their probabilities. It is the default classifier
+  when `CLASSIFIER_ENGINE` is unset and `OPENAI_API_KEY` is set. The call
+  goes through the SDK's generic `post`, so the pinned 2.x SDK serves it.
+  Cost events price it under the new registry key `decisions/gpt-6-luna`
+  ($0.10 per 1M input tokens, output free); a response without `usage` is
+  estimated from the request text and reported as `token_source=estimated`.
+  The model router that consumes classifiers lands in the next PR of this
+  feature.
 
 ## 2.35.1
 
