@@ -425,10 +425,11 @@ class AiFallbackCompletions(AIBaseCompletions):
         # Normal return with the primary's capability.
         return self.primary.get_org_info_capability()
 
+    @property
     def price_per_1k_tokens(self) -> float:
         """Blended rate of the candidate that served the most recent call."""
         # Normal return priced at the last route.
-        return self.last_route_client.price_per_1k_tokens()
+        return self.last_route_client.price_per_1k_tokens
 
     def compute_completion_cost(
         self,

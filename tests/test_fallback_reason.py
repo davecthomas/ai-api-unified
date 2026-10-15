@@ -226,6 +226,7 @@ class TestOpenAI:
         ("status", "code", "reason"),
         [
             (429, "insufficient_quota", R.QUOTA_EXHAUSTED),
+            (429, "credit_balance_exhausted", R.QUOTA_EXHAUSTED),
             (400, "billing_hard_limit_reached", R.QUOTA_EXHAUSTED),
             (401, "invalid_api_key", R.AUTH_REJECTED),
             (403, "unsupported_country_region_territory", R.AUTH_REJECTED),

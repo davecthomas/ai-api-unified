@@ -4,6 +4,21 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.35.1
+
+### Fixed
+
+- OpenAI reports exhausted prepaid credits as a 429 with
+  `code: credit_balance_exhausted` (and `type: insufficient_quota`). Only
+  the `insufficient_quota` code was recognized, so that response classified
+  as `RATE_LIMITED`: the engine backed off and retried before the fallback
+  layer moved on, and the same-account skip did not apply. It now
+  classifies as `QUOTA_EXHAUSTED`.
+- `AiFallbackCompletions.price_per_1k_tokens` was a method that called the
+  base class's property as a function, so it raised `TypeError`. It is now
+  a property, like the base, priced at the candidate that served the most
+  recent call.
+
 ## 2.35.0
 
 ### Added
