@@ -131,6 +131,16 @@ class TestLoad:
         assert list_denied == ["claude:claude-fable-5-1"]
         assert config.policy.is_allowed("claude", "claude-opus-5-5")
 
+    def test_missing_model_fixture_file_validates(self) -> None:
+        config = load_models_config(
+            str(REPO_ROOT / "tests" / "fixtures" / "models_missing_test.json")
+        )
+        assert "claude:claude-nope-9" in config.completions.fallbacks
+        assert (
+            config.router is not None
+            and config.router.tiers[0].candidates[0].model == "gemini-nope-1"
+        )
+
     def test_setting_mapping_and_unset_keys(self) -> None:
         config = AIModelsConfig.model_validate(
             {

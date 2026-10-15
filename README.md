@@ -1573,11 +1573,21 @@ engine fails on its own at build.
 ### Checking your own configuration
 
 ```bash
-poetry run pytest -m nonmock tests/test_configured_models_nonmock.py -q -s
+poetry run pytest -m nonmock tests/test_configured_models_nonmock.py -q -s --models-config ./models.json
 ```
 
-prints every model your `.env` and router config name with its status and
-fails on any the provider reports missing.
+prints every model the file names with its status and fails on any the
+provider reports missing. To watch the pruning itself:
+
+```bash
+poetry run pytest -m nonmock tests/test_model_check_nonmock.py -q -s
+```
+
+reads `tests/fixtures/models_missing_test.json`, whose chain and easy tier
+each list an id no provider serves, and proves both are reported missing
+and pruned with the warning while the configuration still builds; with
+`--models-config ./models.json` it does the same against your file,
+injecting a bogus id in memory.
 
 ## Configuration
 
