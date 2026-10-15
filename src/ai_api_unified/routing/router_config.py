@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -185,6 +186,10 @@ class AIRouterConfig(BaseModel):
     default_tier: str | None = None
     on_exhausted: Literal["escalate", "raise"] = "escalate"
     fallback_on: frozenset[AiFallbackReason] | None = None
+    # Tiers the model check removed, each mapped to the next higher tier that
+    # survived (None means the default route). A call that still names one
+    # goes there. Filled by prune_router_config; not part of the JSON schema.
+    pruned_tiers: dict[str, str | None] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -212,6 +217,24 @@ class AIRouterConfig(BaseModel):
         # Normal return with the validated config.
         return self
 
+    def resolve_tier_name(self, str_name: str) -> str | None:
+        """
+        A tier name as the router should use it: itself when it survived the
+        model check, else the next higher surviving tier, else None for the
+        default route.
+
+        Args:
+            str_name: A configured tier name, possibly pruned.
+
+        Returns:
+            The effective tier name, or None.
+        """
+        if str_name in self.pruned_tiers:
+            # Early return with the remap.
+            return self.pruned_tiers[str_name]
+        # Normal return: the name as given.
+        return str_name
+
     def tier_index(self, str_name: str) -> int | None:
         """Position of a tier by name, or None."""
         # Loop over tiers for the name.
@@ -221,6 +244,64 @@ class AIRouterConfig(BaseModel):
                 return int_index
         # Normal return: no such tier.
         return None
+
+
+def prune_router_config(
+    config: AIRouterConfig,
+    callable_keep: "Callable[[AIFallbackCandidate], bool]",
+) -> AIRouterConfig | None:
+    """
+    Drops candidates the model check rejected, and tiers left with none.
+
+    A dropped tier maps to the next higher surviving tier (routing goes up,
+    never down); a default_tier that was dropped moves the same way.
+
+    Args:
+        config: The configured router.
+        callable_keep: True for a candidate that survives.
+
+    Returns:
+        The pruned config, or None when no tier survived.
+    """
+    list_kept: list[AIRouterTier] = []
+    list_dropped_names: list[str] = []
+    # Loop over tiers so each keeps only its surviving candidates.
+    for tier in config.tiers:
+        list_candidates: list[AIFallbackCandidate] = [
+            candidate for candidate in tier.candidates if callable_keep(candidate)
+        ]
+        if list_candidates:
+            list_kept.append(tier.model_copy(update={"candidates": list_candidates}))
+        else:
+            list_dropped_names.append(tier.name)
+    if not list_kept:
+        # Early return: nothing left to route to.
+        return None
+    dict_pruned: dict[str, str | None] = dict(config.pruned_tiers)
+    list_names: list[str] = [tier.name for tier in config.tiers]
+    set_kept_names: set[str] = {tier.name for tier in list_kept}
+    # Loop over dropped tiers to find the next higher survivor for each.
+    for str_dropped in list_dropped_names:
+        str_next: str | None = next(
+            (
+                str_name
+                for str_name in list_names[list_names.index(str_dropped) + 1 :]
+                if str_name in set_kept_names
+            ),
+            None,
+        )
+        dict_pruned[str_dropped] = str_next
+    str_default: str | None = config.default_tier
+    if str_default is not None and str_default in dict_pruned:
+        str_default = dict_pruned[str_default]
+    # Normal return with the pruned config.
+    return config.model_copy(
+        update={
+            "tiers": list_kept,
+            "default_tier": str_default,
+            "pruned_tiers": dict_pruned,
+        }
+    )
 
 
 def load_router_config(str_value: str) -> AIRouterConfig:

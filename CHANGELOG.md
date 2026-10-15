@@ -4,6 +4,38 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.1.0
+
+### Added
+
+- Configured-model check. When a fallback chain or a router is configured,
+  the factory verifies every model it names (the completions LLM, each
+  chain candidate, each tier candidate, and the router's classifier) with
+  one free metadata call per model, in parallel, memoized for the life of
+  the process so a model is probed once however many clients reference it.
+  A model the provider reports missing is pruned from the effective
+  configuration with a WARNING (`ai_model_check_event=model_missing`:
+  "configured model X is not available and will be ignored"); a router
+  tier left with no models is dropped and requests for it go to the next
+  higher surviving tier, never a lower one (`router_tier_pruned`). A
+  missing classifier model degrades the router to its default route. The
+  primary completions model cannot be pruned: when it is missing the
+  factory raises. Models the probe cannot ask about (no credentials, no
+  extra, an auth rejection, a server without a model catalog) are kept and
+  logged at INFO as `model_unverifiable`; a probe error keeps the model
+  and logs `model_check_error`. `AI_MODEL_CHECK` selects `prune`
+  (default), `strict` (raise on any missing model), or `off`.
+  `AIFactory.last_model_check_report()` returns the results.
+- Probes: OpenAI and Responses `models.retrieve`; the Decisions API's
+  fixed model set plus `models.retrieve`; OpenAI-compatible servers'
+  `/models` list (unverifiable when the server has none); Anthropic
+  `models.retrieve`; Gemini `models.get` on the raw id (the Gemini engine
+  substitutes its default for an unknown id, which the probe catches);
+  Bedrock `get_foundation_model`, or `get_inference_profile` for geo-prefixed
+  ids, in `AWS_REGION`.
+- `tests/test_configured_models_nonmock.py`: a live test that checks every
+  model named by your own `.env` and router config.
+
 ## 3.0.0
 
 A major release: classification becomes a capability of the library, and a

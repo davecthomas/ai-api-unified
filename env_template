@@ -91,6 +91,9 @@ COMPLETIONS_MODEL_NAME=gemini-3.7-flash
 # classification factory's resolution (CLASSIFIER_ENGINE, then
 # openai-decisions when OPENAI_API_KEY is set).
 # COMPLETIONS_ROUTER_CLASSIFIER=openai-decisions:gpt-6-luna
+# Configured-model check, run when a chain or router is configured: prune
+# (default) drops missing models with a warning, strict raises, off skips.
+# AI_MODEL_CHECK=prune
 # Embedding dimensions (1536 for OpenAI | 1024 for Titan | 3072 default for Gemini)
 # Leave unset to use the provider default for the selected engine.
 # EMBEDDING_DIMENSIONS=1024

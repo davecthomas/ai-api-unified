@@ -1,4 +1,4 @@
-# ai-api-unified 3.0.0
+# ai-api-unified 3.1.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1515,6 +1515,70 @@ cost by tier needs no extra work. The classifier call itself carries
 Exports: `AiRouterCompletions`, `AIRouterConfig`, `AIRouterTier`,
 `AIRouterClassifierConfig`, `load_router_config`.
 
+## Configured-model check
+
+A fallback chain or a router names models the process expects to call
+later. A typo, a retired id, or a model not offered in your region would
+otherwise surface only when that model is finally tried, in the middle of
+a failover. So whenever you configure a chain or a router, the factory
+verifies every configured model before it builds the client: the
+completions LLM, each chain candidate, each tier candidate, and the
+router's classifier.
+
+### What it does
+
+- One free metadata call per model, never a completion: OpenAI
+  `models.retrieve`, Anthropic `models.retrieve`, Gemini `models.get` on
+  the raw id, Bedrock `get_foundation_model` (or `get_inference_profile`
+  for `us.`, `eu.`, `apac.`, and `global.` ids) in `AWS_REGION`, an
+  OpenAI-compatible server's `/models` list, and the Decisions API's fixed
+  model set.
+- Calls run in parallel, and the checker probes each `(engine, model,
+  base_url)` once per process however many clients, chains, or tiers name
+  it. Startup
+  pays one round trip, and later factory calls pay nothing.
+- The factory prunes a model the provider reports **missing** from the
+  effective configuration with a WARNING: `configured model openai:gpt-nope
+  is not available and will be ignored`. A chain drops the candidate; a
+  router tier drops the candidate, and the router drops a tier left with no
+  models. A request for a dropped tier (by the classifier, a `route`
+  override, or `for_tier`) goes to the next **higher** surviving tier, never
+  a lower one, and to the default route when nothing is above. A dropped
+  `default_tier` moves the same way.
+- The primary completions model cannot be pruned: it is the default
+  route, so when it is missing the factory raises.
+- A missing classifier model logs `classifier_unavailable`, and the router
+  degrades to its default route.
+- A model the probe cannot ask about (no credentials, no extra installed,
+  credentials rejected, a server with no model catalog, Vertex auth) is
+  **unverifiable** and kept, logged at INFO. A probe error (network, 5xx)
+  keeps the model and logs a WARNING. Neither counts as missing.
+
+Log records go to `ai_api_unified.util.ai_model_checker` with an
+`ai_model_check_event` field: `model_missing` (WARNING), `model_check_error`
+(WARNING), `model_unverifiable` (INFO), `model_available` (DEBUG); the
+factory adds `router_tier_pruned` and `router_disabled` (WARNING) on
+`ai_api_unified.ai_factory`. `AIFactory.last_model_check_report()` returns
+the results of the most recent check.
+
+### Configuration
+
+| Setting | Meaning |
+| ------- | ------- |
+| `AI_MODEL_CHECK` | `prune` (default): drop missing models with a warning. `strict`: raise on any missing model. `off`: skip the check. |
+
+A client with only a primary and no chain or router runs no check: the
+engine fails on its own at build.
+
+### Checking your own configuration
+
+```bash
+poetry run pytest -m nonmock tests/test_configured_models_nonmock.py -q -s
+```
+
+prints every model your `.env` and router config name with its status and
+fails on any the provider reports missing.
+
 ## Configuration
 
 ### Required Engine Selectors
@@ -1539,6 +1603,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted,auth_rejected` |
 | `COMPLETIONS_ROUTER_CONFIG` | Optional complexity router: a JSON file path or inline JSON mapping tiers to `engine:model` chains (see Model routing) |
 | `COMPLETIONS_ROUTER_CLASSIFIER` | Optional `engine:model` for the router's classifier, or `none`; default is the classification factory's resolution |
+| `AI_MODEL_CHECK` | Optional: `prune` (default), `strict`, or `off` for the configured-model check (see Configured-model check) |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
 | `CLASSIFIER_MODEL_NAME`     | Optional classification model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine default |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |

@@ -716,6 +716,75 @@ class TestPinnedHistory:
         assert message["engine"] == "h"
 
 
+# ── Pruned tiers ────────────────────────────────────────────────────────────
+
+
+class TestPrunedTiers:
+    """A tier the model check removed routes to the next higher survivor."""
+
+    def _router(
+        self,
+        engines: dict[str, _FakeEngine],
+        classifier: AIBaseClassifier | None,
+        **kwargs: Any,
+    ) -> AiRouterCompletions:
+        config = AIRouterConfig(
+            tiers=[_tier("easy", "claude:e"), _tier("hard", "claude:h")],
+            pruned_tiers={"medium": "hard", "expert": None},
+            **kwargs,
+        )
+        builder = Mock(side_effect=lambda c: engines[c.label])
+        return AiRouterCompletions(
+            default_client=_FakeEngine("d"),
+            config=config,
+            classifier=classifier,
+            client_builder=builder,
+            fallback_on=DEFAULT_FALLBACK_REASONS,
+        )
+
+    def test_override_naming_a_pruned_tier_goes_up(self) -> None:
+        engines = _engines("e", "h")
+        router = self._router(engines, _FakeClassifier("easy"))
+        turn = router.send_conversation(
+            "s",
+            [{"role": "user", "content": "p"}],
+            provider_options={"route": "medium"},
+        )
+        assert turn.text == "h:turn"
+
+    def test_override_naming_a_pruned_top_tier_goes_to_the_default_route(self) -> None:
+        router = self._router(_engines("e", "h"), _FakeClassifier("easy"))
+        turn = router.send_conversation(
+            "s",
+            [{"role": "user", "content": "p"}],
+            provider_options={"route": "expert"},
+        )
+        assert turn.text == "d:turn"
+
+    def test_classifier_naming_a_pruned_tier_goes_up(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engines = _engines("e", "h")
+        router = self._router(engines, _FakeClassifier("medium"))
+        with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+            assert router.send_prompt("p") == "h:ok"
+        routed = [
+            r for r in caplog.records if getattr(r, "ai_router_event", None) == "routed"
+        ][0]
+        assert routed.tier == "hard" and routed.method == "classifier"
+        assert not [
+            r
+            for r in caplog.records
+            if getattr(r, "ai_router_event", None) == "classifier_failed"
+        ]
+
+    def test_for_tier_follows_the_remap(self) -> None:
+        engines = _engines("e", "h")
+        router = self._router(engines, None)
+        assert router.for_tier("medium").send_prompt("p") == "h:ok"
+        assert router.for_tier("expert") is router.default_client
+
+
 # ── Factory ─────────────────────────────────────────────────────────────────
 
 BASE_SETTINGS: dict[str, str] = {

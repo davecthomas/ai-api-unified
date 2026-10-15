@@ -55,6 +55,22 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     # Core factory/registry/config surface
     "test_ai_api.py": ("core",),
     "test_env_settings_extra_keys.py": ("core",),
+    "test_ai_model_checker.py": ("core",),
+    "test_ai_model_probes.py": (
+        "core",
+        "engine_openai",
+        "engine_anthropic",
+        "engine_gemini",
+        "engine_bedrock",
+    ),
+    "test_configured_model_check.py": ("core", "completions"),
+    "test_configured_models_nonmock.py": (
+        "core",
+        "completions",
+        "engine_openai",
+        "engine_anthropic",
+        "engine_gemini",
+    ),
     "test_base_url_override.py": (
         "core",
         "engine_anthropic",
