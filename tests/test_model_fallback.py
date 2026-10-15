@@ -211,40 +211,60 @@ class _FakeEngine(AIBaseCompletions):
 LOGGER_NAME: str = "ai_api_unified.completions.ai_fallback_completions"
 
 
+def _anthropic_history() -> list[dict[str, Any]]:
+    """A history shaped by the Messages API, so it is pinned to that family."""
+    return [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "x"}]},
+        {"role": "user", "content": "more"},
+    ]
+
+
 def _chain_primary_503() -> _FakeEngine:
     return _FakeEngine("p", fail=_err(R.UNAVAILABLE, 503))
 
 
 def _chain(
-    *engines: _FakeEngine, shared_account: bool = False, **kwargs: Any
+    *engines: _FakeEngine,
+    shared_account: bool = False,
+    tokens: tuple[str, ...] | None = None,
+    **kwargs: Any,
 ) -> AiFallbackCompletions:
     """
     Builds a wrapper whose builder hands out the given engines in order.
 
     Each candidate gets its own base_url, so they count as separate provider
-    accounts, unless shared_account puts them all on one.
+    accounts, unless shared_account puts them all on one. Candidates use
+    the engine token "fake" unless tokens names one per engine, which lets a
+    test exercise the static token-to-family map.
     """
 
     def _base_url(engine: _FakeEngine) -> str | None:
         return None if shared_account else f"https://{engine.model}.test"
 
+    def _token(int_index: int) -> str:
+        return tokens[int_index] if tokens is not None else "fake"
+
     list_rest: list[_FakeEngine] = list(engines[1:])
     dict_by_label: dict[str, _FakeEngine] = {
-        f"fake:{engine.model}": engine for engine in list_rest
+        f"{_token(int_index + 1)}:{engine.model}": engine
+        for int_index, engine in enumerate(list_rest)
     }
     builder: Mock = Mock(side_effect=lambda c: dict_by_label[c.label])
     wrapper = AiFallbackCompletions(
         primary=engines[0],
         primary_candidate=AIFallbackCandidate(
-            engine="fake",
+            engine=_token(0),
             model=str(engines[0].model),
             base_url=_base_url(engines[0]),
         ),
         fallback_candidates=[
             AIFallbackCandidate(
-                engine="fake", model=str(engine.model), base_url=_base_url(engine)
+                engine=_token(int_index + 1),
+                model=str(engine.model),
+                base_url=_base_url(engine),
             )
-            for engine in list_rest
+            for int_index, engine in enumerate(list_rest)
         ],
         client_builder=builder,
         **kwargs,
@@ -708,16 +728,113 @@ class TestConversations:
         with pytest.raises(AiProviderCapabilityUnsupportedError):
             asyncio.run(wrapper.asend_conversation("sys", list_messages))
 
-    def test_engine_shaped_history_does_not_fail_over(self) -> None:
+    def test_engine_shaped_history_fails_over_within_its_family(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Both fakes are in the "anthropic" family, like opus then sonnet.
         wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("f"))
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            turn = wrapper.send_conversation("sys", _anthropic_history())
+        assert turn.text == "f:turn"
+        served = [
+            r for r in caplog.records if r.ai_fallback_event == "served_by_fallback"
+        ]
+        assert served[0].fallback_from == "fake:p"
+
+    def test_cross_family_candidate_is_left_out_without_being_built(self) -> None:
+        gemini = _FakeEngine("g", family="gemini")
+        sibling = _FakeEngine("s")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.UNAVAILABLE)),
+            gemini,
+            sibling,
+            tokens=("claude", "google-gemini", "claude"),
+        )
+        assert wrapper.send_conversation("sys", _anthropic_history()).text == "s:turn"
+        # The token names Gemini's family, so it is never built for this turn.
+        assert [c.args[0].model for c in wrapper.builder.call_args_list] == ["s"]
+        assert gemini.calls == []
+
+    def test_unknown_token_candidate_is_built_then_filtered(self) -> None:
+        other = _FakeEngine("o", family="openai")
+        sibling = _FakeEngine("s")
+        wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), other, sibling)
+        assert wrapper.send_conversation("sys", _anthropic_history()).text == "s:turn"
+        # "fake" is not in the token map, so "o" is built to read its family,
+        # then left out.
+        assert other.calls == []
+        assert wrapper.builder.call_count == 2
+
+    def test_pinned_turn_honors_the_same_account_skip(self) -> None:
+        sibling = _FakeEngine("s")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.AUTH_REJECTED, 401)),
+            sibling,
+            shared_account=True,
+        )
+        with pytest.raises(AiProviderRequestError) as exc_info:
+            wrapper.send_conversation("sys", _anthropic_history())
+        assert exc_info.value.fallback_reason is R.AUTH_REJECTED
+        assert sibling.calls == []
+
+    def test_sibling_rejecting_the_history_raises_the_first_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        first = _err(R.UNAVAILABLE, 529)
+        rejection = _err(None, 400)
+        wrapper = _chain(_FakeEngine("p", fail=first), _FakeEngine("s", fail=rejection))
+        with caplog.at_level(logging.ERROR, logger=LOGGER_NAME):
+            with pytest.raises(AiProviderRequestError) as exc_info:
+                wrapper.send_conversation("sys", _anthropic_history())
+        assert exc_info.value is first
+        assert exc_info.value.__cause__ is rejection
+        assert "candidate_rejected_history" in [
+            r.ai_fallback_event for r in caplog.records
+        ]
+
+    def test_neutral_call_sibling_rejection_is_its_own_error(self) -> None:
+        rejection = _err(None, 400)
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("s", fail=rejection)
+        )
+        with pytest.raises(AiProviderRequestError) as exc_info:
+            wrapper.send_conversation("sys", [{"role": "user", "content": "hi"}])
+        assert exc_info.value is rejection
+
+    def test_next_turn_routes_back_to_the_first_family_candidate(self) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
+        sibling = _FakeEngine("s")
+        wrapper = _chain(primary, sibling)
+        list_messages = _anthropic_history()
+        wrapper.extend_messages_with_turn(
+            list_messages, wrapper.send_conversation("sys", list_messages)
+        )
+        primary.fail = None
+        assert wrapper.send_conversation("sys", list_messages).text == "p:turn"
+
+    def test_pinned_turn_reason_set_still_applies(self) -> None:
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.MODEL_UNAVAILABLE, 404)), _FakeEngine("s")
+        )
+        with pytest.raises(AiProviderRequestError):
+            wrapper.send_conversation("sys", _anthropic_history())
+        wrapper.builder.assert_not_called()
+
+    def test_unrecognized_shape_stays_pinned(self) -> None:
+        wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("s"))
         list_messages: list[dict[str, Any]] = [
             {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": [{"type": "text", "text": "x"}]},
+            {"role": "assistant", "content": "x", "vendor_field": 1},
             {"role": "user", "content": "more"},
         ]
         with pytest.raises(AiProviderRequestError):
             wrapper.send_conversation("sys", list_messages)
         wrapper.builder.assert_not_called()
+
+    def test_async_pinned_turn_fails_over_within_its_family(self) -> None:
+        wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("s"))
+        turn = asyncio.run(wrapper.asend_conversation("sys", _anthropic_history()))
+        assert turn.text == "s:turn"
 
     def test_async_conversation_fails_over(self) -> None:
         wrapper = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("f"))

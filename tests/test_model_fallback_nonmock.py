@@ -26,6 +26,7 @@ import pytest
 
 from ai_api_unified import (
     AIFactory,
+    AITool,
     AiFallbackCompletions,
     AiFallbackReason,
     AiProviderRequestError,
@@ -196,3 +197,91 @@ def test_second_turn_after_failover_replays_on_the_fallback(
     assert turn2.provider_engine == FALLBACK_ENGINE
     assert turn2.text is not None and turn2.text.strip()
     assert set(list_messages[1]) <= {"role", "content"}
+
+
+# ── Same-family replay after a tool turn ────────────────────────────────────
+
+# One (engine, model A, model B, credential) per family. A serves the tool
+# turn; B must replay A's engine-shaped history on the next turn. The
+# Anthropic pair uses a model with always-on thinking, so the replayed turn
+# carries a signed thinking block, the shape most likely to be rejected.
+TUPLE_FAMILY_REPLAY_CASES: tuple[tuple[str, str, str, str], ...] = (
+    ("claude", "claude-opus-5-5", "claude-sonnet-5", "ANTHROPIC_API_KEY"),
+    ("openai", "gpt-4.1-mini", "gpt-4o-mini", "OPENAI_API_KEY"),
+    ("openai-responses", "gpt-4.1-mini", "gpt-5.6-luna", "OPENAI_API_KEY"),
+    (
+        "google-gemini",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "GOOGLE_GEMINI_API_KEY",
+    ),
+)
+
+WEATHER_TOOL = AITool(
+    name="get_weather",
+    description="Returns the current temperature for a city.",
+    input_schema={
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+)
+
+
+@pytest.mark.parametrize(
+    ("str_engine", "str_model_a", "str_model_b", "str_key"),
+    TUPLE_FAMILY_REPLAY_CASES,
+    ids=[case[0] for case in TUPLE_FAMILY_REPLAY_CASES],
+)
+def test_tool_turn_replays_on_a_family_sibling(
+    str_engine: str,
+    str_model_a: str,
+    str_model_b: str,
+    str_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if str_key not in os.environ:
+        pytest.skip(f"Skipping: {str_key} not set")
+    client = AIFactory.get_ai_completions_client(
+        model_name=str_model_a,
+        completions_engine=str_engine,
+        fallbacks=[(str_engine, str_model_b)],
+    )
+    assert isinstance(client, AiFallbackCompletions)
+    list_messages: list[dict] = [
+        {"role": "user", "content": "What is the temperature in Paris? Use the tool."}
+    ]
+    turn = client.send_conversation(
+        "Always call get_weather before answering.",
+        list_messages,
+        tools=[WEATHER_TOOL],
+        max_response_tokens=512,
+    )
+    assert turn.model_name == str_model_a
+    assert turn.tool_calls, f"{str_model_a} did not call the tool: {turn.text!r}"
+    client.extend_messages_with_turn(list_messages, turn)
+    for call in turn.tool_calls:
+        list_messages.append(
+            client.build_tool_result_message(
+                tool_call_id=call.id,
+                result={"temperature_c": 21},
+                messages=list_messages,
+            )
+        )
+
+    def _overloaded(*args: object, **kwargs: object) -> None:
+        raise AiProviderRequestError(
+            "simulated overload", status_code=529, provider_engine=str_engine
+        )
+
+    # Model A is overloaded on the next turn; B must replay A's history.
+    monkeypatch.setattr(client.primary, "send_conversation", _overloaded)
+    turn2 = client.send_conversation(
+        "Always call get_weather before answering.",
+        list_messages,
+        tools=[WEATHER_TOOL],
+        max_response_tokens=512,
+    )
+    assert turn2.model_name == str_model_b
+    assert turn2.text or turn2.tool_calls
+    assert turn2.text is None or "21" in turn2.text

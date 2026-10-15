@@ -1,4 +1,4 @@
-# ai-api-unified 2.34.0
+# ai-api-unified 2.35.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1167,6 +1167,7 @@ log processor can count and alert on them without parsing the message:
 | WARNING | `served_by_fallback` | A fallback answered a request the primary could not. Once per request that moved. Fields: `operation`, `fallback_from`, `fallback_to`, `fallback_reason`. |
 | ERROR | `chain_exhausted` | Every candidate failed; the last error is about to be raised. |
 | ERROR | `candidate_unbuildable` | A fallback could not be constructed and is out of the chain for this process. |
+| ERROR | `candidate_rejected_history` | On a family-bound turn, a sibling failed with no trigger reason, so it likely rejected the history. The failure that moved the call is about to be raised with this one as its cause. Fields: `operation`, `fallback_candidate`, `status_code`. |
 | WARNING | `candidate_skipped` | A fallback lacks a capability the call needs, or its account already failed the call with `QUOTA_EXHAUSTED` or `AUTH_REJECTED`. |
 
 The messages start with `FALLBACK`, `FALLBACK SERVED`, or `FALLBACK
@@ -1195,14 +1196,26 @@ call. `client.capabilities` reports the primary's capabilities.
 
 The engines shape their requests differently, and three consequences follow.
 
-**Conversations fail over on the first turn, then stay put.** A history that
-holds engine-shaped entries (replayed `raw_content`, tool results) cannot be
-sent to another engine. While the history is plain user, assistant, and
-system text, a turn can fail over. After that the client reads which engine
-family shaped the history and sends the turn to a candidate of that family,
-with fallback off; a failure there propagates. Because routing is read from
-the history, one client can serve conversations on different engines at the
-same time.
+**Conversations fail over freely on the first turn, then only within a
+family.** A history that holds engine-shaped entries (replayed
+`raw_content`, tool results) cannot be sent to another engine family: Gemini
+cannot read Claude's tool blocks. While the history is plain user,
+assistant, and system text, a turn can fail over to any candidate. After
+that the client reads which family shaped the history, sends the turn to
+the first candidate of that family, and on a trigger failure tries the
+family's later candidates in chain order. With the chain `claude:opus,
+claude:sonnet, google-gemini:flash`, a 529 from Opus after a tool call goes
+to Sonnet; Gemini is left out of that turn. The reason set and the
+same-account skip apply as on any call. The next turn starts again at the
+family's first candidate. Because the history decides the routing, one
+client can serve conversations on different engines at the same time.
+
+A family shares a request format. A sibling may still reject a block only
+the model that produced it can read (a signed thinking block, a reasoning
+item bound to one model).
+When that happens the client raises the failure that moved the call, with
+the sibling's rejection chained as its `__cause__`, and logs
+`candidate_rejected_history`.
 
 ```python
 messages = [{"role": "user", "content": "Summarize ticket VL-123."}]
