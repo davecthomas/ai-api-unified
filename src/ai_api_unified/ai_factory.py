@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from .ai_base import (
@@ -35,9 +35,16 @@ from .routing.router_config import (
     load_router_config,
     prune_router_config,
 )
+from .ai_models_config import (
+    MODEL_POLICY_EVENT_DENIED,
+    AIModelPolicy,
+    AIModelsConfig,
+    model_label,
+)
 from .util import ai_model_probes  # noqa: F401  (registers the provider probes)
 from .util.ai_model_checker import (
     AI_MODEL_CHECK_KEY,
+    AI_MODEL_CHECK_TIMEOUT_SECONDS_KEY,
     MODEL_CHECK_MODE_OFF,
     MODEL_CHECK_MODE_STRICT,
     AiModelChecker,
@@ -379,8 +386,21 @@ class AIFactory:
                             AI_PROVIDER_CAPABILITY_COMPLETIONS,
                             candidate.engine,
                         ) from exception
-        str_classifier_missing: str | None = None
-        if router_config is not None or list_fallbacks:
+        policy: AIModelPolicy = AIFactory._model_policy(env_settings)
+        AIFactory._require_allowed(
+            policy, str_engine, str_model_name, "completions model"
+        )
+        list_fallbacks, router_config, str_classifier_missing = (
+            AIFactory._apply_model_policy(
+                env_settings=env_settings,
+                policy=policy,
+                list_fallbacks=list_fallbacks,
+                router_config=router_config,
+            )
+        )
+        if (
+            router_config is not None or list_fallbacks
+        ) and str_classifier_missing is None:
             list_fallbacks, router_config, str_classifier_missing = (
                 AIFactory._check_configured_models(
                     env_settings=env_settings,
@@ -436,6 +456,154 @@ class AIFactory:
         )
 
     _LIST_LAST_MODEL_CHECK: list[AiModelCheckResult] = []
+
+    @staticmethod
+    def _model_policy(env_settings: EnvSettings) -> AIModelPolicy:
+        """The allow/deny policy from models.json, or an open one."""
+        config: Any = env_settings.get_models_config()
+        # Normal return with the file's policy, or one that allows everything
+        # (also when a test double stands in for the settings).
+        return config.policy if isinstance(config, AIModelsConfig) else AIModelPolicy()
+
+    @staticmethod
+    def _require_allowed(
+        policy: AIModelPolicy, str_engine: str, str_model: str, str_what: str
+    ) -> None:
+        """
+        Raises when the policy denies a model that a call needs outright.
+
+        Args:
+            policy: The allow/deny policy.
+            str_engine: Engine token.
+            str_model: Model id (blank for the engine default).
+            str_what: What the model is, for the message.
+
+        Raises:
+            ValueError: The policy denies the model.
+        """
+        str_reason: str | None = policy.denial_reason(str_engine, str_model)
+        if str_reason is None:
+            # Normal return: permitted.
+            return None
+        raise ValueError(
+            f"The {str_what} {model_label(str_engine, str_model)} is {str_reason} "
+            "(models.json allow/deny)."
+        )
+
+    @staticmethod
+    def _log_denied(
+        policy: AIModelPolicy, candidate: AIFallbackCandidate, str_what: str
+    ) -> bool:
+        """Logs a denied candidate loudly; returns True when it is allowed."""
+        str_reason: str | None = policy.denial_reason(candidate.engine, candidate.model)
+        if str_reason is None:
+            # Early return: permitted.
+            return True
+        _LOGGER.warning(
+            "MODEL POLICY: configured %s %s is %s and will be ignored.",
+            str_what,
+            candidate.label,
+            str_reason,
+            extra={
+                "ai_model_policy_event": MODEL_POLICY_EVENT_DENIED,
+                "engine": candidate.engine,
+                "model": candidate.model,
+                "reason": str_reason,
+            },
+        )
+        # Normal return: denied.
+        return False
+
+    @staticmethod
+    def _apply_model_policy(
+        *,
+        env_settings: EnvSettings,
+        policy: AIModelPolicy,
+        list_fallbacks: list[AIFallbackCandidate],
+        router_config: AIRouterConfig | None,
+    ) -> tuple[list[AIFallbackCandidate], AIRouterConfig | None, str | None]:
+        """
+        Prunes denied fallback, tier, and classifier models; never raises.
+
+        Returns:
+            (pruned chain, pruned router config or None when no tier
+            survived, reason the router classifier is unusable or None).
+        """
+        if not policy.allow and not policy.deny:
+            # Early return: an open policy changes nothing.
+            return list_fallbacks, router_config, None
+        list_fallbacks = [
+            candidate
+            for candidate in list_fallbacks
+            if AIFactory._log_denied(policy, candidate, "fallback model")
+        ]
+        str_classifier_missing: str | None = None
+        if router_config is not None:
+            classifier_candidate: AIFallbackCandidate | None = (
+                AIFactory._router_classifier_candidate(
+                    env_settings=env_settings, router_config=router_config
+                )
+            )
+            if classifier_candidate is not None:
+                str_reason: str | None = policy.denial_reason(
+                    classifier_candidate.engine, classifier_candidate.model
+                )
+                if str_reason is not None:
+                    str_classifier_missing = (
+                        f"classifier model {classifier_candidate.label} is {str_reason}"
+                    )
+            # Loop over tiers so each denied tier model is logged once.
+            for tier in router_config.tiers:
+                for candidate in tier.candidates:
+                    AIFactory._log_denied(
+                        policy, candidate, f"tier {tier.name!r} model"
+                    )
+            router_config = AIFactory._prune_router_tiers(
+                router_config,
+                lambda candidate: policy.is_allowed(candidate.engine, candidate.model),
+                str_why="denied by policy",
+            )
+        # Normal return with the pruned configuration.
+        return list_fallbacks, router_config, str_classifier_missing
+
+    @staticmethod
+    def _prune_router_tiers(
+        router_config: AIRouterConfig,
+        callable_keep: Callable[[AIFallbackCandidate], bool],
+        *,
+        str_why: str,
+    ) -> AIRouterConfig | None:
+        """Prunes tiers through prune_router_config and logs what was dropped."""
+        pruned: AIRouterConfig | None = prune_router_config(
+            router_config, callable_keep
+        )
+        if pruned is None:
+            _LOGGER.warning(
+                "MODEL CHECK: every router tier lost all of its models (%s); "
+                "routing is off and every call goes to the default route.",
+                str_why,
+                extra={"ai_model_check_event": "router_disabled"},
+            )
+            # Early return: nothing survived.
+            return None
+        # Loop over newly pruned tiers so each is logged once.
+        for str_tier, str_next in pruned.pruned_tiers.items():
+            if str_tier in router_config.pruned_tiers:
+                continue
+            _LOGGER.warning(
+                "MODEL CHECK: router tier %r has no available model (%s) and will "
+                "be ignored; requests for it go to %s.",
+                str_tier,
+                str_why,
+                f"tier {str_next!r}" if str_next else "the default route",
+                extra={
+                    "ai_model_check_event": "router_tier_pruned",
+                    "tier": str_tier,
+                    "escalate_to": str_next,
+                },
+            )
+        # Normal return with the pruned config.
+        return pruned
 
     @classmethod
     def last_model_check_report(cls) -> list[AiModelCheckResult]:
@@ -495,9 +663,15 @@ class AIFactory:
             )
             if classifier_candidate is not None:
                 list_candidates.append(classifier_candidate)
-        list_results: list[AiModelCheckResult] = AiModelChecker().check_all(
-            list_candidates
+        raw_timeout: object = env_settings.get_setting(
+            AI_MODEL_CHECK_TIMEOUT_SECONDS_KEY, ""
         )
+        checker: AiModelChecker = (
+            AiModelChecker(float_timeout_seconds=float(str(raw_timeout)))
+            if str(raw_timeout or "").strip()
+            else AiModelChecker()
+        )
+        list_results: list[AiModelCheckResult] = checker.check_all(list_candidates)
         AIFactory._LIST_LAST_MODEL_CHECK = list(list_results)
         dict_results: dict[tuple[str, str, str | None], AiModelCheckResult] = {
             (result.engine, result.model, result.base_url): result
@@ -533,30 +707,9 @@ class AIFactory:
                 f"classifier model {classifier_candidate.label} is not available"
             )
         if router_config is not None:
-            pruned: AIRouterConfig | None = prune_router_config(router_config, _keep)
-            if pruned is None:
-                _LOGGER.warning(
-                    "MODEL CHECK: every router tier lost all of its models; "
-                    "routing is off and every call goes to the default route.",
-                    extra={"ai_model_check_event": "router_disabled"},
-                )
-            elif pruned.pruned_tiers != router_config.pruned_tiers:
-                # Loop over newly pruned tiers so each is logged once.
-                for str_tier, str_next in pruned.pruned_tiers.items():
-                    if str_tier in router_config.pruned_tiers:
-                        continue
-                    _LOGGER.warning(
-                        "MODEL CHECK: router tier %r has no available model and "
-                        "will be ignored; requests for it go to %s.",
-                        str_tier,
-                        f"tier {str_next!r}" if str_next else "the default route",
-                        extra={
-                            "ai_model_check_event": "router_tier_pruned",
-                            "tier": str_tier,
-                            "escalate_to": str_next,
-                        },
-                    )
-            router_config = pruned
+            router_config = AIFactory._prune_router_tiers(
+                router_config, _keep, str_why="not available"
+            )
         # Normal return with the pruned configuration.
         return list_fallbacks, router_config, str_classifier_missing
 
@@ -898,6 +1051,12 @@ class AIFactory:
         else:
             str_model_name = model_name
 
+        AIFactory._require_allowed(
+            AIFactory._model_policy(env_settings),
+            str_engine,
+            str_model_name,
+            "embeddings model",
+        )
         raw_embedding_dimensions: str | int | None = env_settings.get_setting(
             EMBEDDING_DIMENSIONS_KEY, DEFAULT_EMBEDDING_DIMENSIONS
         )
@@ -1097,7 +1256,12 @@ class AIFactory:
                 str_image_model_name = raw_image_model_name
         else:
             str_image_model_name = image_model
-
+        AIFactory._require_allowed(
+            AIFactory._model_policy(env_settings),
+            str_image_engine,
+            str_image_model_name or "",
+            "image model",
+        )
         try:
             # Resolve provider metadata first so engine-to-module mapping is centralized
             # in the registry and does not require hardcoded imports in the factory.
@@ -1163,7 +1327,12 @@ class AIFactory:
                 str_model_name = raw_model_name
         else:
             str_model_name = model_name
-
+        AIFactory._require_allowed(
+            AIFactory._model_policy(env_settings),
+            str_video_engine,
+            str_model_name or "",
+            "video model",
+        )
         try:
             ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
                 AI_PROVIDER_CAPABILITY_VIDEOS,

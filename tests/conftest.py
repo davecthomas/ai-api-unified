@@ -266,3 +266,5 @@ def _isolate_from_developer_wrappers(monkeypatch: pytest.MonkeyPatch) -> None:
     # The configured-model check probes real providers; mocked tests must
     # not. Checker tests set AI_MODEL_CHECK themselves with fake probes.
     monkeypatch.setenv("AI_MODEL_CHECK", "off")
+    # A developer's models.json must not become every test's configuration.
+    monkeypatch.setenv("AI_MODELS_CONFIG", "")

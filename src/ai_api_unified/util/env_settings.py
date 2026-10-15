@@ -66,8 +66,61 @@ class EnvSettings(BaseSettings):
         if self.model_extra and str_dotenv_key in self.model_extra:
             # Early return with the .env value.
             return self.model_extra[str_dotenv_key]
+        str_from_file: str | None = self._models_config_setting(setting)
+        if str_from_file is not None:
+            # Early return with the models-file value.
+            return str_from_file
         # Normal return with the default.
         return default
+
+    def _models_config_setting(self, setting: str) -> str | None:
+        """
+        The value models.json supplies for a selection key, consulted after
+        the process environment and .env.
+
+        Args:
+            setting: A settings key.
+
+        Returns:
+            The file's value, or None when the file does not set it, there
+            is no file, or the key is not file-backed.
+        """
+        # Local import: the config module imports the router config, whose
+        # imports reach back to this module.
+        from ..ai_models_config import FROZENSET_FILE_BACKED_SETTINGS
+
+        if setting not in FROZENSET_FILE_BACKED_SETTINGS:
+            # Early return: not a key the file can supply.
+            return None
+        config = self.get_models_config()
+        if config is None:
+            # Early return: no file.
+            return None
+        # Normal return with the file's value for this key.
+        return config.setting(setting)
+
+    def get_models_config(self) -> Any:
+        """
+        The loaded models config (AIModelsConfig), or None when there is none.
+
+        AI_MODELS_CONFIG from the process environment or .env names the file
+        (or holds inline JSON); unset means ./models.json when it exists;
+        blank means no file.
+        """
+        from ..ai_models_config import AI_MODELS_CONFIG_KEY, resolve_models_config
+
+        str_dotenv_key: str = AI_MODELS_CONFIG_KEY.lower()
+        bool_in_dotenv: bool = bool(
+            self.model_extra and str_dotenv_key in self.model_extra
+        )
+        bool_configured: bool = AI_MODELS_CONFIG_KEY in os.environ or bool_in_dotenv
+        str_configured: str | None = (
+            os.environ[AI_MODELS_CONFIG_KEY]
+            if AI_MODELS_CONFIG_KEY in os.environ
+            else (str(self.model_extra[str_dotenv_key]) if bool_in_dotenv else None)
+        )
+        # Normal return with the resolved config, or None.
+        return resolve_models_config(str_configured, bool_configured=bool_configured)
 
     # Alias
     def get(self, setting: str, default: Any = None) -> Any:

@@ -1,4 +1,4 @@
-# ai-api-unified 3.1.0
+# ai-api-unified 3.2.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1581,9 +1581,78 @@ fails on any the provider reports missing.
 
 ## Configuration
 
+### models.json: one file for model selections
+
+Engines, models, the fallback chain, the router, the classifier, the
+configured-model check, and the allow/deny policy live in one file,
+`models.json` (or `.yaml`). Copy `models_sample.json`, which sets every
+section, and point `AI_MODELS_CONFIG` at it (or leave it unset: the library
+picks up `./models.json` when it exists; a blank value turns the file off;
+the value may also be inline JSON).
+
+```json
+{
+  "allow": ["claude:*", "google-gemini:*", "openai-decisions:*"],
+  "deny":  ["openai:gpt-4*", "bedrock"],
+  "completions": {"engine": "google-gemini", "model": "gemini-2.5-flash",
+                  "fallbacks": ["claude:claude-sonnet-5"],
+                  "fallback_on": "unavailable,rate_limited,quota_exhausted,auth_rejected"},
+  "classifier":  {"engine": "openai-decisions", "model": "gpt-6-luna"},
+  "router":      {"tiers": [{"name": "easy", "models": ["google-gemini:gemini-2.5-flash-lite"]},
+                            {"name": "hard", "models": ["claude:claude-opus-5-5"]}],
+                  "default_tier": "easy"},
+  "model_check": {"mode": "prune", "timeout_seconds": 10},
+  "embeddings":  {"engine": "google-gemini", "model": "gemini-embedding-001"},
+  "images":      {"engine": "google-gemini", "model": "gemini-3.1-flash-image"},
+  "videos":      {"engine": "google-gemini", "model": "veo-3.1-lite-generate-preview"},
+  "voice":       {"engine": "google", "tts_model": "gemini-2.5-pro-tts", "language": "en-US"}
+}
+```
+
+To convert an existing `.env`, run
+
+```bash
+poetry run python scripts/migrate2json.py            # writes ./models.json
+poetry run python scripts/migrate2json.py --comment-env   # and comments the moved keys out of .env
+```
+
+It places each selection key in its section, embeds the router file named
+by `COMPLETIONS_ROUTER_CONFIG`, fills structural defaults from
+`models_sample.json`, leaves the allow and deny lists empty, and never
+touches secrets.
+
+Each section stands in for the `.env` keys of the same capability
+(`completions.model` for `COMPLETIONS_MODEL_NAME`, `embeddings.engine` for
+`EMBEDDING_ENGINE`, `router` for `COMPLETIONS_ROUTER_CONFIG`, and so on),
+so nothing else in the library changes. Precedence, highest first: an
+explicit factory argument, a process environment variable, a `.env` value,
+the file, the library default. Every key in the tables below still works
+and overrides the file when set, which lets a deployment pin one value
+without editing the file. Secrets (API keys, AWS credentials), `AWS_REGION`,
+base-URL overrides, and `AI_MIDDLEWARE_CONFIG_PATH` stay in `.env`.
+
+### Allow and deny lists
+
+`allow` and `deny` hold `engine:model` globs: `claude:*`, `*:gpt-4*`,
+`openai-decisions:gpt-6-luna`; a bare engine token (`bedrock`) means
+`bedrock:*`. Deny wins over allow, and an empty allow list allows every
+model. The policy applies wherever a model enters: the completions LLM,
+each fallback candidate, each router tier candidate, the router's
+classifier, and the embeddings, image, and video selections.
+
+- The factory prunes a denied fallback, tier, or classifier model the way
+  it prunes a missing one (see Configured-model check) and warns
+  `configured fallback model openai:gpt-4o is denied by policy pattern 'openai:gpt-4*' and will be ignored`
+  (`ai_model_policy_event=model_denied`). A tier left with no models
+  routes to the next higher surviving tier.
+- A denied primary, or an explicit `model_name=` argument for a denied
+  model, raises `ValueError` naming the pattern. Runtime never calls a
+  denied model.
+
 ### Required Engine Selectors
 
-There is no implicit default provider. Set the selector for each capability you use.
+There is no implicit default provider. Set the selector for each capability
+you use, in `models.json` or as a variable:
 
 | Environment variable | Valid values                                                                                                                  |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -1601,9 +1670,11 @@ There is no implicit default provider. Set the selector for each capability you 
 | `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
 | `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
 | `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted,auth_rejected` |
-| `COMPLETIONS_ROUTER_CONFIG` | Optional complexity router: a JSON file path or inline JSON mapping tiers to `engine:model` chains (see Model routing) |
+| `AI_MODELS_CONFIG` | Path to `models.json`/`.yaml`, or inline JSON; unset uses `./models.json` when present; blank turns the file off |
+| `COMPLETIONS_ROUTER_CONFIG` | Override of the file's `router` section: a JSON file path or inline JSON mapping tiers to `engine:model` chains (see Model routing) |
 | `COMPLETIONS_ROUTER_CLASSIFIER` | Optional `engine:model` for the router's classifier, or `none`; default is the classification factory's resolution |
 | `AI_MODEL_CHECK` | Optional: `prune` (default), `strict`, or `off` for the configured-model check (see Configured-model check) |
+| `AI_MODEL_CHECK_TIMEOUT_SECONDS` | Optional per-probe timeout for the configured-model check (default 10) |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
 | `CLASSIFIER_MODEL_NAME`     | Optional classification model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine default |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
