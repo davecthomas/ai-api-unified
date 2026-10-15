@@ -184,6 +184,12 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_classification_base.py": ("classification",),
     "test_structured_output_classifier.py": ("classification", "completions"),
     "test_ai_factory_classifier.py": ("classification", "core"),
+    "test_openai_decisions_classifier.py": (
+        "classification",
+        "engine_openai",
+        "pricing",
+        "middleware",
+    ),
     # Embeddings
     "test_embeddings_capabilities.py": ("embeddings",),
     "test_voyage_embeddings.py": ("embeddings",),

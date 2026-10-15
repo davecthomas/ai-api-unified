@@ -69,6 +69,10 @@ EMBEDDING_ENGINE_KEY: str = "EMBEDDING_ENGINE"
 EMBEDDING_DIMENSIONS_KEY: str = "EMBEDDING_DIMENSIONS"
 CLASSIFIER_ENGINE_KEY: str = "CLASSIFIER_ENGINE"
 CLASSIFIER_MODEL_NAME_KEY: str = "CLASSIFIER_MODEL_NAME"
+# Classification engine used when CLASSIFIER_ENGINE is unset and an OpenAI
+# key is present: the native Decisions API.
+DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY: str = "openai-decisions"
+OPENAI_API_KEY_SETTING: str = "OPENAI_API_KEY"
 IMAGE_MODEL_NAME_KEY: str = "IMAGE_MODEL_NAME"
 IMAGE_ENGINE_KEY: str = "IMAGE_ENGINE"
 VIDEO_MODEL_NAME_KEY: str = "VIDEO_MODEL_NAME"
@@ -584,6 +588,50 @@ class AIFactory:
         return client.list_model_names
 
     @staticmethod
+    def _resolve_classifier_engine(
+        *, env_settings: EnvSettings, str_engine_override: str | None
+    ) -> str:
+        """
+        Resolves the classification engine: argument, CLASSIFIER_ENGINE, then
+        the Decisions API when an OpenAI key is present.
+
+        Args:
+            env_settings: Loaded settings.
+            str_engine_override: Explicit engine from the caller, if any.
+
+        Returns:
+            Normalized engine token.
+
+        Raises:
+            ValueError: Nothing names an engine and no OpenAI key is set.
+        """
+        if str_engine_override is not None and str_engine_override.strip():
+            # Early return with the caller's choice.
+            return str_engine_override.strip().lower()
+        str_configured: str = (
+            str(env_settings.get_setting(CLASSIFIER_ENGINE_KEY, "") or "")
+            .strip()
+            .lower()
+        )
+        if str_configured:
+            # Early return with the configured engine.
+            return str_configured
+        if str(env_settings.get_setting(OPENAI_API_KEY_SETTING, "") or "").strip():
+            _LOGGER.info(
+                "%s is unset; using %s because %s is set.",
+                CLASSIFIER_ENGINE_KEY,
+                DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY,
+                OPENAI_API_KEY_SETTING,
+            )
+            # Early return with the key-backed default.
+            return DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY
+        raise ValueError(
+            f"{CLASSIFIER_ENGINE_KEY} must be configured explicitly, or set "
+            f"{OPENAI_API_KEY_SETTING} to use the default "
+            f"{DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY} classifier."
+        )
+
+    @staticmethod
     def get_ai_classifier_client(
         classifier_engine: str | None = None,
         model_name: str | None = None,
@@ -593,10 +641,10 @@ class AIFactory:
         Builds a classification client.
 
         Args:
-            classifier_engine: Engine token override; defaults to CLASSIFIER_ENGINE.
-                Tokens named after a completions engine (openai, claude,
-                google-gemini, ...) classify through that engine's structured
-                output.
+            classifier_engine: Engine token override; defaults to CLASSIFIER_ENGINE,
+                then to openai-decisions when OPENAI_API_KEY is set. Tokens named
+                after a completions engine (openai, claude, google-gemini, ...)
+                classify through that engine's structured output.
             model_name: Model override; defaults to CLASSIFIER_MODEL_NAME, then
                 COMPLETIONS_MODEL_NAME, then the engine's own default.
             base_url: Optional API base-URL override for engines that accept one.
@@ -605,14 +653,12 @@ class AIFactory:
             Concrete AIBaseClassifier implementation for the engine.
 
         Raises:
-            ValueError: No engine was configured, or the registry has no
-                classification spec for the token.
+            ValueError: No engine was configured and no OpenAI key is set, or
+                the registry has no classification spec for the token.
         """
         env_settings: EnvSettings = EnvSettings()
-        str_engine: str = AIFactory._resolve_required_engine(
-            env_settings=env_settings,
-            str_engine_key=CLASSIFIER_ENGINE_KEY,
-            str_engine_override=classifier_engine,
+        str_engine: str = AIFactory._resolve_classifier_engine(
+            env_settings=env_settings, str_engine_override=classifier_engine
         )
         str_model_name: str = (
             model_name

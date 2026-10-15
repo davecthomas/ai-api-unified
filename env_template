@@ -46,11 +46,11 @@ COMPLETIONS_ENGINE=google-gemini
 # Generic AI settings
 # Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001 | voyage-3 | voyage-4)
 EMBEDDING_MODEL_NAME=gemini-embedding-001
-# Classification engine (openai | openai-responses | openai-compatible | claude |
-# google-gemini | bedrock | anthropic). Required to use
-# AIFactory.get_ai_classifier_client(); each token classifies through that
-# completions engine's structured output. See README "Classification".
-# CLASSIFIER_ENGINE=claude
+# Classification engine (openai-decisions | openai | openai-responses |
+# openai-compatible | claude | google-gemini | bedrock | anthropic). When unset,
+# openai-decisions is used if OPENAI_API_KEY is set. A completions engine token
+# classifies through that engine's structured output. See README "Classification".
+# CLASSIFIER_ENGINE=openai-decisions
 # Optional classification model; blank falls back to COMPLETIONS_MODEL_NAME,
 # then the engine's default.
 # CLASSIFIER_MODEL_NAME=

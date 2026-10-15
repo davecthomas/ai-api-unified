@@ -111,7 +111,7 @@ The public entry points are the stable base interfaces and factories:
 | ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | Completions | `AIBaseCompletions` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `anthropic`, `google_gemini`, `bedrock`    |
 | Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`, `voyage`                                                                                  | `openai`, `bedrock`, `google_gemini`, `voyage`       |
-| Classification | `AIBaseClassifier` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, `anthropic` (through structured output) | `openai`, `anthropic`, `google_gemini`, `bedrock` |
+| Classification | `AIBaseClassifier` | `openai-decisions`, and `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, `anthropic` through structured output | `openai`, `anthropic`, `google_gemini`, `bedrock` |
 | Images      | `AIBaseImages`      | `openai`, `google-gemini`, `nova-canvas` and Bedrock image aliases                                                            | `openai`, `google_gemini`, `bedrock`                 |
 | Videos      | `AIBaseVideos`      | `openai`, `google-gemini`, `nova-reel` and Bedrock video aliases                                                              | `openai`, `google_gemini`, `bedrock`                 |
 | Voice TTS   | `AIVoiceBase`       | `openai`, `google`, `azure`, `elevenlabs`                                                                                     | `openai`, `google_gemini`, `azure_tts`, `elevenlabs` |
@@ -1095,6 +1095,7 @@ bills every input token.
 
 | Engine | How it classifies | Models |
 | ------ | ----------------- | ------ |
+| `openai-decisions` | OpenAI's Decisions API (`POST /v1/decisions`). Native choice, predicate, and score answers with probabilities. About ten times faster than a chat completion. Bills input tokens only, at $0.10 per 1M. | `gpt-6-luna` (public beta) |
 | `openai`, `openai-responses`, `openai-compatible` | Structured output (a one-field enum schema) | Every model the engine lists |
 | `claude` | Structured output | Every model the engine lists |
 | `google-gemini` | Structured output | Every model the engine lists |
@@ -1111,7 +1112,11 @@ Picking an engine without structured output fails at build with
 Every classification call runs inside the same observability lifecycle as
 completions, so with observability on it emits the usual input, output,
 error, and cost events, with `operation` set to `classify_choice`,
-`classify_predicate`, or `classify_score`. The completions engine a
+`classify_predicate`, or `classify_score`. The Decisions engine prices
+under the registry key `decisions/gpt-6-luna`, since its rates differ from
+the model's chat rates; when a response carries no `usage` block the engine
+estimates input tokens from the request text and reports
+`token_source="estimated"`. The completions engine a
 structured-output classifier wraps meters the call, and that call carries
 the tag `classifier_role` (`choice`, `predicate`, or `score`) so a dashboard can
 split classifier spend from the engine's other traffic. `token_source` on
@@ -1124,7 +1129,7 @@ logger; it is never a silent zero.
 
 | Setting | Meaning |
 | ------- | ------- |
-| `CLASSIFIER_ENGINE` | Engine token. Required; there is no implicit default. |
+| `CLASSIFIER_ENGINE` | Engine token. When unset, `openai-decisions` is used if `OPENAI_API_KEY` is set; otherwise the factory raises. |
 | `CLASSIFIER_MODEL_NAME` | Model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine's default. |
 | `AIFactory.get_ai_classifier_client(classifier_engine=, model_name=, base_url=)` | Arguments override the settings. |
 
@@ -1391,7 +1396,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
 | `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
-| `CLASSIFIER_ENGINE`  | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, `anthropic` (see Classification)      |
+| `CLASSIFIER_ENGINE`  | `openai-decisions`, `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, `anthropic` (see Classification) |
 | `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
 | `VIDEO_ENGINE`       | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel`                                                                     |
 | `AI_VOICE_ENGINE`    | `openai`, `google`, `azure`, `elevenlabs`                                                                                     |

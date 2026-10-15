@@ -52,6 +52,7 @@ _SRC_BEDROCK_PRICING_API: str = (
 _SRC_ANTHROPIC: str = "https://platform.claude.com/docs/en/about-claude/models/overview"
 _SRC_VOYAGE: str = "https://docs.voyageai.com/docs/pricing"
 _SRC_OPENAI_DEP: str = "https://developers.openai.com/api/docs/deprecations"
+_SRC_OPENAI_DECISIONS: str = "https://developers.openai.com/api/docs/guides/decisions"
 _SRC_ANTHROPIC_PRICING: str = "https://platform.claude.com/docs/en/about-claude/pricing"
 
 # Cache-write rate for providers that charge nothing to populate a cache.
@@ -260,6 +261,22 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 ],
                 notes="Base rates apply to <=272K input tokens; above that the "
                 "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
+        # The Decisions API (classification) bills input only, at its own
+        # rate; keyed apart from the model's chat rates.
+        _info(
+            PROVIDER_OPENAI,
+            "decisions/gpt-6-luna",
+            _tok(
+                "0.10",
+                "0",
+                "0",
+                _SRC_OPENAI_DECISIONS,
+                effective=_EFFECTIVE_SEP,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                notes="Decisions API: no cache-read, cache-write, or output charges.",
             ),
         ),
         _info(
