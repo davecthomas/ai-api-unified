@@ -4,6 +4,27 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.36.0
+
+### Added
+
+- Classification as a capability. `AIFactory.get_ai_classifier_client()`
+  (settings `CLASSIFIER_ENGINE`, `CLASSIFIER_MODEL_NAME`) returns an
+  `AIBaseClassifier` with `classify_choice`, `classify_predicate`, and
+  `classify_score`, plus async twins, all returning an
+  `AIClassificationResult`. The first engine family classifies through
+  structured output: the registry maps `openai`, `openai-responses`,
+  `openai-compatible`, `claude`, `google-gemini`, `bedrock`, and
+  `anthropic` to `AiStructuredOutputClassifier`, which wraps that
+  completions engine and asks it for a one-field enum answer. Bedrock
+  vendor models without structured output are not offered. Every call runs
+  the PII middleware, truncates the input to `capabilities.max_input_chars`
+  (head and tail), and is metered: structured-output classifiers inherit
+  the wrapped engine's cost events and tag them `classifier_role`; a call
+  that cannot be metered logs `classifier_unmetered`. A native OpenAI
+  Decisions engine and the model router that consumes classifiers land in
+  the next releases of this feature.
+
 ## 2.35.1
 
 ### Fixed

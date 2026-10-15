@@ -18,10 +18,12 @@ AI_PROVIDER_CAPABILITY_EMBEDDINGS: str = "embeddings"
 AI_PROVIDER_CAPABILITY_IMAGES: str = "images"
 AI_PROVIDER_CAPABILITY_VIDEOS: str = "videos"
 AI_PROVIDER_CAPABILITY_VOICE: str = "voice"
+AI_PROVIDER_CAPABILITY_CLASSIFICATION: str = "classification"
 
 TypeAiProviderCapability = Literal[
     "completions",
     "embeddings",
+    "classification",
     "images",
     "videos",
     "voice",
@@ -254,6 +256,114 @@ DICT_TUPLE_AI_PROVIDER_REGISTRY: dict[TypeAiProviderRegistryKey, AiProviderSpec]
         str_engine="canvas",
         str_module_path=("ai_api_unified.completions.ai_bedrock_completions"),
         str_class_name="AiBedrockCompletions",
+        str_required_extra="bedrock",
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
+        str_local_install_command='poetry install --extras "bedrock"',
+        set_str_dependency_roots={"boto3", "botocore"},
+    ),
+    # Classification through structured output: one spec per completions
+    # engine whose models can answer a JSON schema. Bedrock vendor tokens
+    # without structured output (nova, llama, ...) are deliberately absent.
+    (
+        AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        "openai",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        str_engine="openai",
+        str_module_path=(
+            "ai_api_unified.classification.ai_structured_output_classifier"
+        ),
+        str_class_name="AiStructuredOutputClassifier",
+        str_required_extra="openai",
+        str_consumer_install_command=("poetry add 'ai-api-unified[openai]'"),
+        str_local_install_command='poetry install --extras "openai"',
+        set_str_dependency_roots={"openai"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        "openai-responses",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        str_engine="openai-responses",
+        str_module_path=(
+            "ai_api_unified.classification.ai_structured_output_classifier"
+        ),
+        str_class_name="AiStructuredOutputClassifier",
+        str_required_extra="openai",
+        str_consumer_install_command=("poetry add 'ai-api-unified[openai]'"),
+        str_local_install_command='poetry install --extras "openai"',
+        set_str_dependency_roots={"openai"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        "openai-compatible",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        str_engine="openai-compatible",
+        str_module_path=(
+            "ai_api_unified.classification.ai_structured_output_classifier"
+        ),
+        str_class_name="AiStructuredOutputClassifier",
+        str_required_extra="openai",
+        str_consumer_install_command=("poetry add 'ai-api-unified[openai]'"),
+        str_local_install_command='poetry install --extras "openai"',
+        set_str_dependency_roots={"openai"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        "claude",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        str_engine="claude",
+        str_module_path=(
+            "ai_api_unified.classification.ai_structured_output_classifier"
+        ),
+        str_class_name="AiStructuredOutputClassifier",
+        str_required_extra="anthropic",
+        str_consumer_install_command=("poetry add 'ai-api-unified[anthropic]'"),
+        str_local_install_command='poetry install --extras "anthropic"',
+        set_str_dependency_roots={"anthropic"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        "google-gemini",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        str_engine="google-gemini",
+        str_module_path=(
+            "ai_api_unified.classification.ai_structured_output_classifier"
+        ),
+        str_class_name="AiStructuredOutputClassifier",
+        str_required_extra="google_gemini",
+        str_consumer_install_command=("poetry add 'ai-api-unified[google_gemini]'"),
+        str_local_install_command='poetry install --extras "google_gemini"',
+        set_str_dependency_roots={"google", "google.genai", "google.api_core"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        "bedrock",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        str_engine="bedrock",
+        str_module_path=(
+            "ai_api_unified.classification.ai_structured_output_classifier"
+        ),
+        str_class_name="AiStructuredOutputClassifier",
+        str_required_extra="bedrock",
+        str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
+        str_local_install_command='poetry install --extras "bedrock"',
+        set_str_dependency_roots={"boto3", "botocore"},
+    ),
+    (
+        AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        "anthropic",
+    ): AiProviderSpec(
+        str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+        str_engine="anthropic",
+        str_module_path=(
+            "ai_api_unified.classification.ai_structured_output_classifier"
+        ),
+        str_class_name="AiStructuredOutputClassifier",
         str_required_extra="bedrock",
         str_consumer_install_command=("poetry add 'ai-api-unified[bedrock]'"),
         str_local_install_command='poetry install --extras "bedrock"',

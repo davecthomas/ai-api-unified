@@ -1,4 +1,4 @@
-# ai-api-unified 2.35.1
+# ai-api-unified 2.36.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -111,6 +111,7 @@ The public entry points are the stable base interfaces and factories:
 | ----------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | Completions | `AIBaseCompletions` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` | `openai`, `anthropic`, `google_gemini`, `bedrock`    |
 | Embeddings  | `AIBaseEmbeddings`  | `openai`, `titan`, `google-gemini`, `voyage`                                                                                  | `openai`, `bedrock`, `google_gemini`, `voyage`       |
+| Classification | `AIBaseClassifier` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, `anthropic` (through structured output) | `openai`, `anthropic`, `google_gemini`, `bedrock` |
 | Images      | `AIBaseImages`      | `openai`, `google-gemini`, `nova-canvas` and Bedrock image aliases                                                            | `openai`, `google_gemini`, `bedrock`                 |
 | Videos      | `AIBaseVideos`      | `openai`, `google-gemini`, `nova-reel` and Bedrock video aliases                                                              | `openai`, `google_gemini`, `bedrock`                 |
 | Voice TTS   | `AIVoiceBase`       | `openai`, `google`, `azure`, `elevenlabs`                                                                                     | `openai`, `google_gemini`, `azure_tts`, `elevenlabs` |
@@ -821,6 +822,22 @@ Anthropic serves none.
   `AiProviderRequestError` carrying `status_code`, matching the completions
   clients.
 
+
+### Classification
+
+```python
+from ai_api_unified import AIFactory, AIClassificationChoice
+
+client = AIFactory.get_ai_classifier_client(classifier_engine="claude")
+result = client.classify_choice(
+    "Summarize this ticket in one line.",
+    [AIClassificationChoice(value="easy"), AIClassificationChoice(value="hard")],
+)
+print(result.choice)  # "easy"
+```
+
+See the Classification section for the question types and the engines that
+support them.
 ### Multimodal Embeddings
 
 Every embeddings client exposes a `capabilities` descriptor stating which input
@@ -1028,6 +1045,91 @@ than ignoring them.
 
 A blank retry-policy setting (`COMPLETIONS_RETRY_POLICY=`) is treated as
 unconfigured and falls back to `default` across every OpenAI-backed capability.
+
+## Classification
+
+A classifier answers one narrow question about a piece of text: which of
+your options fits it, whether a condition holds, or where it sits on a
+scale. It stands beside completions and embeddings as its own capability,
+so you can use it for routing, triage, or moderation without writing a
+prompt and parsing an answer. The model router (a later section) is one consumer.
+
+### Quickstart
+
+```python
+from ai_api_unified import AIFactory, AIClassificationChoice
+
+client = AIFactory.get_ai_classifier_client()   # CLASSIFIER_ENGINE from env
+result = client.classify_choice(
+    "My invoice shows two charges for one order.",
+    [
+        AIClassificationChoice(value="billing", description="Payments, invoices, refunds."),
+        AIClassificationChoice(value="technical", description="Errors using the product."),
+        AIClassificationChoice(value="other", description="Anything else."),
+    ],
+    instructions="Which team should handle this message?",
+)
+print(result.choice, result.confidence, result.usage.input_tokens)
+```
+
+Three question types share one result model, `AIClassificationResult`:
+
+| Method | Question | Result fields |
+| ------ | -------- | ------------- |
+| `classify_choice(text, choices)` | Which option fits? | `choice`, `confidence`, `probabilities` |
+| `classify_predicate(text, instructions=...)` | Does the condition hold? | `probability` |
+| `classify_score(text, levels)` | Where on the scale, lowest level first? | `score` in [0, 1], `choice` (the level label) |
+
+Every result also carries `refused` (the model declined), `usage`,
+`token_source`, `provider_engine`, `model_name`, and `latency_ms`. Async
+twins (`aclassify_choice` and so on) exist where `capabilities.supports_async`
+is True. `capabilities` reports which question types the engine answers,
+`max_choices`, `max_input_chars`, and `pricing`.
+
+Before the call, the text goes through the PII middleware when it is
+enabled, then is cut to `capabilities.max_input_chars` (6,000 by default)
+keeping its head and tail: a label rarely needs more, and the provider
+bills every input token.
+
+### Models that can classify
+
+| Engine | How it classifies | Models |
+| ------ | ----------------- | ------ |
+| `openai`, `openai-responses`, `openai-compatible` | Structured output (a one-field enum schema) | Every model the engine lists |
+| `claude` | Structured output | Every model the engine lists |
+| `google-gemini` | Structured output | Every model the engine lists |
+| `bedrock`, `anthropic` | Structured output | Models whose capabilities include `supports_structured_output` (Claude, DeepSeek, Qwen, GLM); Nova cannot classify |
+
+Through structured output, a predicate answer is a hard yes or no
+(`probability` 1.0 or 0.0) and a score is the picked level's position on the
+scale; engines with native classification report real probabilities.
+Picking an engine without structured output fails at build with
+`AiProviderCapabilityUnsupportedError`.
+
+### Cost and metering
+
+Every classification call runs inside the same observability lifecycle as
+completions, so with observability on it emits the usual input, output,
+error, and cost events, with `operation` set to `classify_choice`,
+`classify_predicate`, or `classify_score`. The completions engine a
+structured-output classifier wraps meters the call, and that call carries
+the tag `classifier_role` (`choice`, `predicate`, or `score`) so a dashboard can
+split classifier spend from the engine's other traffic. `token_source` on
+the result says where the counts came from: `provider`, `estimated`, or
+`none`. A call that could not be metered logs a WARNING with
+`ai_classifier_event=classifier_unmetered` on the `ai_api_unified.ai_base`
+logger; it is never a silent zero.
+
+### Configuration
+
+| Setting | Meaning |
+| ------- | ------- |
+| `CLASSIFIER_ENGINE` | Engine token. Required; there is no implicit default. |
+| `CLASSIFIER_MODEL_NAME` | Model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine's default. |
+| `AIFactory.get_ai_classifier_client(classifier_engine=, model_name=, base_url=)` | Arguments override the settings. |
+
+Exports: `AIBaseClassifier`, `AIClassifierCapabilitiesBase`,
+`AIClassificationChoice`, `AIClassificationLevel`, `AIClassificationResult`.
 
 ## Model fallback
 
@@ -1289,6 +1391,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
 | `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
+| `CLASSIFIER_ENGINE`  | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, `anthropic` (see Classification)      |
 | `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
 | `VIDEO_ENGINE`       | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel`                                                                     |
 | `AI_VOICE_ENGINE`    | `openai`, `google`, `azure`, `elevenlabs`                                                                                     |
@@ -1301,6 +1404,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
 | `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted,auth_rejected` |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
+| `CLASSIFIER_MODEL_NAME`     | Optional classification model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine default |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
 | `VIDEO_MODEL_NAME`          | Optional video model override                                                               |
 | `VIDEO_OUTPUT_DIR`          | Optional local output directory for materialized video artifacts                            |
