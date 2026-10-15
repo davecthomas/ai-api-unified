@@ -263,12 +263,17 @@ class AiModelChecker:
         self, probe: TypeModelProbe, candidate: AIFallbackCandidate
     ) -> tuple[AiModelCheckStatus, str]:
         """Runs one probe on a helper thread so a hung SDK cannot stall startup."""
-        with ThreadPoolExecutor(
+        # Not a context manager: __exit__ would wait for the probe thread,
+        # so a hung SDK call would stall startup for as long as it hangs.
+        pool: ThreadPoolExecutor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="ai-model-probe"
-        ) as pool:
+        )
+        try:
             future = pool.submit(probe, candidate.model, candidate.base_url)
             # Normal return with the probe's answer, or TimeoutError.
             return future.result(timeout=self.float_timeout_seconds)
+        finally:
+            pool.shutdown(wait=False)
 
     @staticmethod
     def _log(result: AiModelCheckResult) -> None:

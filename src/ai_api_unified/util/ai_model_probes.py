@@ -144,10 +144,12 @@ def probe_openai(str_model: str, base_url: str | None) -> TypeProbeAnswer:
 def probe_openai_decisions(str_model: str, base_url: str | None) -> TypeProbeAnswer:
     """The Decisions API serves a fixed set; the id must also exist as a model."""
     from ..classification.ai_openai_decisions_classifier import (
+        DECISIONS_DEFAULT_MODEL,
         FROZENSET_DECISIONS_MODELS,
     )
 
-    str_id: str = str_model or next(iter(sorted(FROZENSET_DECISIONS_MODELS)))
+    # A blank id means the classifier's own default, not the first in the set.
+    str_id: str = str_model or DECISIONS_DEFAULT_MODEL
     if str_id not in FROZENSET_DECISIONS_MODELS:
         # Early return: not a Decisions model, whatever the catalog says.
         return _missing(

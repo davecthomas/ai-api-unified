@@ -583,6 +583,10 @@ class AIFactory:
             str_engine_part, _, str_model_part = str_setting.partition(":")
             str_engine = str_engine_part.strip().lower()
             str_model = str_model_part.strip() or None
+            # The setting overrides engine and model; the config's base_url
+            # still applies, as in _resolve_router_classifier.
+            if router_config.classifier is not None:
+                str_base_url = router_config.classifier.base_url
         elif router_config.classifier is not None:
             if router_config.classifier.disabled:
                 # Early return: no classifier at all.
@@ -600,13 +604,15 @@ class AIFactory:
                 ).strip()
                 else ""
             )
-            if not str_model:
-                str_model = (
-                    str(
-                        env_settings.get_setting(CLASSIFIER_MODEL_NAME_KEY, "") or ""
-                    ).strip()
-                    or None
-                )
+        if not str_model:
+            # get_ai_classifier_client reads CLASSIFIER_MODEL_NAME whenever no
+            # model is passed, whichever way the engine was named.
+            str_model = (
+                str(
+                    env_settings.get_setting(CLASSIFIER_MODEL_NAME_KEY, "") or ""
+                ).strip()
+                or None
+            )
         if not str_engine or str_engine == "none":
             # Early return: nothing to probe.
             return None

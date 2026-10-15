@@ -291,6 +291,12 @@ def prune_router_config(
             None,
         )
         dict_pruned[str_dropped] = str_next
+    # Loop over earlier remaps so one that pointed at a tier dropped in this
+    # pass follows it upward instead of naming a tier that no longer exists.
+    for str_name, str_target in list(dict_pruned.items()):
+        while str_target is not None and str_target not in set_kept_names:
+            str_target = dict_pruned.get(str_target)
+        dict_pruned[str_name] = str_target
     str_default: str | None = config.default_tier
     if str_default is not None and str_default in dict_pruned:
         str_default = dict_pruned[str_default]
