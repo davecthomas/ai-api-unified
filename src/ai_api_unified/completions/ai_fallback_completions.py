@@ -99,8 +99,9 @@ DICT_ENGINE_FAMILY_BY_TOKEN: dict[str, str] = {
     "openai-compatible": "openai",
     "openai-responses": "openai-responses",
     "claude": "anthropic",
-    "anthropic": "anthropic",
     "google-gemini": "gemini",
+    # "anthropic" is Claude on Bedrock (AiBedrockCompletions): Converse shapes.
+    "anthropic": "bedrock",
     "bedrock": "bedrock",
     "nova": "bedrock",
     "llama": "bedrock",
@@ -889,9 +890,13 @@ class AiFallbackCompletions(AIBaseCompletions):
                     str_operation=str_operation,
                     set_failed_accounts=set_failed_accounts,
                 ):
-                    raise self._first_failure(
+                    raised: AiProviderRequestError = self._first_failure(
                         error, last_error, int_index, str_operation, str_family
-                    ) from error
+                    )
+                    if raised is error:
+                        # Bare re-raise keeps the engine's own cause chain.
+                        raise
+                    raise raised from error
                 last_error = error
                 continue
             if last_error is not None:
@@ -934,9 +939,13 @@ class AiFallbackCompletions(AIBaseCompletions):
                     str_operation=str_operation,
                     set_failed_accounts=set_failed_accounts,
                 ):
-                    raise self._first_failure(
+                    raised: AiProviderRequestError = self._first_failure(
                         error, last_error, int_index, str_operation, str_family
-                    ) from error
+                    )
+                    if raised is error:
+                        # Bare re-raise keeps the engine's own cause chain.
+                        raise
+                    raise raised from error
                 last_error = error
                 continue
             if last_error is not None:

@@ -794,12 +794,32 @@ class TestConversations:
 
     def test_neutral_call_sibling_rejection_is_its_own_error(self) -> None:
         rejection = _err(None, 400)
+        sdk_error = RuntimeError("sdk")
+        rejection.__cause__ = sdk_error
         wrapper = _chain(
             _FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("s", fail=rejection)
         )
         with pytest.raises(AiProviderRequestError) as exc_info:
             wrapper.send_conversation("sys", [{"role": "user", "content": "hi"}])
         assert exc_info.value is rejection
+        # The engine's own cause survives; the error is not chained to itself.
+        assert exc_info.value.__cause__ is sdk_error
+
+    def test_anthropic_token_is_the_bedrock_family(self) -> None:
+        # "anthropic" builds AiBedrockCompletions (Converse shapes), so it is
+        # a sibling of "nova", not of "claude".
+        sibling = _FakeEngine("s", family="bedrock")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.UNAVAILABLE), family="bedrock"),
+            sibling,
+            tokens=("nova", "anthropic"),
+        )
+        list_messages: list[dict[str, Any]] = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"text": "x"}]},
+            {"role": "user", "content": "more"},
+        ]
+        assert wrapper.send_conversation("sys", list_messages).text == "s:turn"
 
     def test_next_turn_routes_back_to_the_first_family_candidate(self) -> None:
         primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
