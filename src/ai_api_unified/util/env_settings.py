@@ -54,9 +54,20 @@ class EnvSettings(BaseSettings):
             setting_value: Any = getattr(self, setting)
             if setting_value is not None:
                 return setting_value
-        if self.model_extra and setting in self.model_extra:
-            return self.model_extra[setting]
-        return os.environ.get(setting, default)
+        if setting in os.environ:
+            # Early return: the process environment beats .env for undeclared
+            # keys, as it does for declared fields.
+            return os.environ[setting]
+        # pydantic-settings stores undeclared .env keys lowercased, so a setting
+        # read by its documented upper-case name must match the lowercased key.
+        # Exact-case extras (init kwargs, override_setting) are attributes and
+        # were already served by the hasattr branch above.
+        str_dotenv_key: str = setting.lower()
+        if self.model_extra and str_dotenv_key in self.model_extra:
+            # Early return with the .env value.
+            return self.model_extra[str_dotenv_key]
+        # Normal return with the default.
+        return default
 
     # Alias
     def get(self, setting: str, default: Any = None) -> Any:
