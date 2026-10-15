@@ -17,9 +17,9 @@ version lives in `pyproject.toml` (see the README release section).
   `request_timeout_seconds` and `retry_policy="none"`; the README explains
   why.
 - Gemini now maps the SDK's unwrapped httpx transport errors
-  (`httpx.TimeoutException`, `httpx.ConnectError`) to
-  `AiProviderRequestError`, so a Gemini timeout or failed connection reaches
-  the fallback layer like the other engines' do.
+  (`httpx.TransportError`: a timeout, a refused connection, a reset
+  mid-response) to `AiProviderRequestError`, so a Gemini timeout or failed
+  connection reaches the fallback layer like the other engines' do.
 
 ### Changed
 

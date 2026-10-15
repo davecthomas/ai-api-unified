@@ -492,6 +492,8 @@ class TestGemini:
         [
             (httpx.ReadTimeout("read timed out"), R.TIMEOUT),
             (httpx.ConnectError("connection refused"), R.UNAVAILABLE),
+            (httpx.ReadError("connection reset"), R.UNAVAILABLE),
+            (httpx.RemoteProtocolError("peer closed connection"), R.UNAVAILABLE),
         ],
     )
     def test_httpx_transport_errors_are_typed(

@@ -1142,9 +1142,10 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                     # Gemini model on the same key can still serve.
                     account_wide=reason is AiFallbackReason.AUTH_REJECTED,
                 ) from exception
-        if isinstance(exception, httpx.TimeoutException | httpx.ConnectError):
-            # The SDK raises its httpx transport errors unwrapped, so map
-            # them the way the other engines map theirs.
+        if isinstance(exception, httpx.TransportError):
+            # The SDK raises its httpx transport errors unwrapped (a timeout,
+            # a refused connection, a reset mid-response), so map them the
+            # way the other engines' SDKs map theirs to a connection error.
             raise AiProviderRequestError(
                 f"Google Gemini request failed before a status was available: "
                 f"{exception}",
