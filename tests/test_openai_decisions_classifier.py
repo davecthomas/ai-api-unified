@@ -122,6 +122,10 @@ class TestBuild:
         assert pricing is not None
         assert pricing.token_rates.output_per_1m == Decimal("0")
 
+    def test_org_info_hooks_come_from_the_openai_base(self) -> None:
+        classifier = _classifier()
+        assert classifier._get_org_info_capability_provider().supports_org_id is True
+
     def test_missing_key_fails_at_build(self) -> None:
         with _settings(OPENAI_API_KEY=""), pytest.raises(ValueError):
             AiOpenAIDecisionsClassifier()
@@ -232,7 +236,13 @@ class TestPredicateAndScore:
                         "name": "answer",
                         "score": 1.2,
                         "confidence": 0.7,
-                        "probabilities": {"low": 0.1, "mid": 0.6, "high": 0.3},
+                        # The API keys score entries by level index in
+                        # "value" and by level name in "label".
+                        "probabilities": [
+                            {"value": 0, "label": "low", "probability": 0.1},
+                            {"value": 1, "label": "mid", "probability": 0.6},
+                            {"value": 2, "label": "high", "probability": 0.3},
+                        ],
                     }
                 ]
             }
@@ -241,6 +251,7 @@ class TestPredicateAndScore:
         # Expected index 0*0.1 + 1*0.6 + 2*0.3 = 1.2, over 2 steps.
         assert result.score == pytest.approx(0.6)
         assert result.choice == "mid" and result.confidence == 0.7
+        assert result.probabilities == {"low": 0.1, "mid": 0.6, "high": 0.3}
         question = classifier.client.post.call_args.kwargs["body"]["questions"][0]
         assert question["type"] == "score"
         assert [level["label"] for level in question["levels"]] == [
@@ -255,6 +266,33 @@ class TestPredicateAndScore:
         )
         result = classifier.classify_score("hi", LEVELS)
         assert result.score == 1.0 and result.choice == "high"
+
+    def test_score_without_distribution_normalizes_the_raw_score(self) -> None:
+        classifier = _classifier(
+            {"answers": [{"type": "score", "name": "answer", "score": 1.2}]}
+        )
+        result = classifier.classify_score("hi", LEVELS)
+        # 1.2 is the weighted level index; over 2 steps that is 0.6.
+        assert result.score == pytest.approx(0.6) and result.refused is False
+
+    def test_choice_probabilities_list_shape(self) -> None:
+        classifier = _classifier(
+            {
+                "answers": [
+                    {
+                        "type": "choice",
+                        "name": "answer",
+                        "choice": "easy",
+                        "probabilities": [
+                            {"value": "easy", "probability": 0.8},
+                            {"value": "hard", "probability": 0.2},
+                        ],
+                    }
+                ]
+            }
+        )
+        result = classifier.classify_choice("hi", CHOICES)
+        assert result.probabilities == {"easy": 0.8, "hard": 0.2}
 
     def test_score_refusal(self) -> None:
         classifier = _classifier({"answers": [{"type": "refusal", "name": "answer"}]})

@@ -95,7 +95,10 @@ def decisions_pricing_key(str_model: str) -> str:
     return f"{DECISIONS_PRICING_MODEL_PREFIX}{str_model}"
 
 
-class AiOpenAIDecisionsClassifier(AIBaseClassifier, AIOpenAIBase):
+# AIOpenAIBase comes first so its org-identity hooks override AIBase's
+# no-op defaults, and so AIBase.__init__ does not chain into it with no
+# arguments and build a second SDK client.
+class AiOpenAIDecisionsClassifier(AIOpenAIBase, AIBaseClassifier):
     """
     Classifies through the OpenAI Decisions API.
 
@@ -443,7 +446,9 @@ class AiOpenAIDecisionsClassifier(AIBaseClassifier, AIOpenAIBase):
             # Loop over list entries of the {value|label, probability} shape.
             for item in answer.probabilities:
                 if isinstance(item, dict):
-                    str_key: Any = item.get("value", item.get("label"))
+                    # Score entries carry the level index in "value" and the
+                    # level name in "label"; choice entries carry only "value".
+                    str_key: Any = item.get("label", item.get("value"))
                     raw_probability: Any = item.get("probability")
                     if str_key is not None and isinstance(
                         raw_probability, (int, float)
@@ -525,8 +530,11 @@ class AiOpenAIDecisionsClassifier(AIBaseClassifier, AIOpenAIBase):
         elif str_label in list_labels:
             float_score = list_labels.index(str_label) / (len(list_labels) - 1)
         elif isinstance(answer.score, (int, float)):
-            # The API's own scale is not documented; clamp into [0, 1].
-            float_score = min(max(float(answer.score), 0.0), 1.0)
+            # The API's score is the probability-weighted average level index,
+            # so normalize it over the scale and clamp into [0, 1].
+            float_score = min(
+                max(float(answer.score) / (len(list_labels) - 1), 0.0), 1.0
+            )
         bool_refused: bool = (
             answer.type == STR_ANSWER_TYPE_REFUSAL or float_score is None
         )

@@ -1130,7 +1130,7 @@ logger; it is never a silent zero.
 | Setting | Meaning |
 | ------- | ------- |
 | `CLASSIFIER_ENGINE` | Engine token. When unset, `openai-decisions` is used if `OPENAI_API_KEY` is set; otherwise the factory raises. |
-| `CLASSIFIER_MODEL_NAME` | Model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine's default. |
+| `CLASSIFIER_MODEL_NAME` | Model override; blank falls back to `COMPLETIONS_MODEL_NAME` for structured-output engines, then the engine's default (`gpt-6-luna` for `openai-decisions`). |
 | `AIFactory.get_ai_classifier_client(classifier_engine=, model_name=, base_url=)` | Arguments override the settings. |
 
 Exports: `AIBaseClassifier`, `AIClassifierCapabilitiesBase`,
