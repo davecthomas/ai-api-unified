@@ -244,3 +244,22 @@ def placeholder_provider_keys(
             monkeypatch.setenv(str_var_name, str_placeholder)
     # Normal return after seeding placeholders for this test.
     return None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_developer_wrappers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Keeps a developer's .env router or fallback chain out of the suite.
+
+    The factory wraps clients when COMPLETIONS_ROUTER_CONFIG or
+    COMPLETIONS_FALLBACKS is set, and tests that assert on the concrete
+    engine type would then see a wrapper. A blank process variable beats the
+    .env value; tests that want a wrapper set the variable themselves.
+    """
+    for str_key in (
+        "COMPLETIONS_ROUTER_CONFIG",
+        "COMPLETIONS_ROUTER_CLASSIFIER",
+        "COMPLETIONS_FALLBACKS",
+        "COMPLETIONS_FALLBACK_ON",
+    ):
+        monkeypatch.setenv(str_key, "")

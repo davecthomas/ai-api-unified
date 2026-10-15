@@ -38,9 +38,13 @@ def test_undeclared_dotenv_keys_resolve_by_upper_case_name(dotenv_dir: Path) -> 
     assert env_settings.get_setting("CLASSIFIER_ENGINE", "") == "claude"
 
 
-def test_process_environment_still_wins_over_default(
+def test_process_environment_wins_over_dotenv_and_default(
     dotenv_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("COMPLETIONS_ROUTER_CLASSIFIER", "none")
     assert EnvSettings().get_setting("COMPLETIONS_ROUTER_CLASSIFIER", "") == "none"
+    # An exported blank disables a .env value, so a developer's router config
+    # can be switched off per process (the test suite relies on this).
+    monkeypatch.setenv("COMPLETIONS_ROUTER_CONFIG", "")
+    assert EnvSettings().get_setting("COMPLETIONS_ROUTER_CONFIG", "x") == ""
     assert EnvSettings().get_setting("NOT_A_SETTING", "fallback") == "fallback"
