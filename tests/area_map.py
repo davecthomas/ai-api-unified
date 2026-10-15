@@ -54,6 +54,7 @@ AREAS: tuple[str, ...] = (
 DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     # Core factory/registry/config surface
     "test_ai_api.py": ("core",),
+    "test_env_settings_extra_keys.py": ("core",),
     "test_base_url_override.py": (
         "core",
         "engine_anthropic",

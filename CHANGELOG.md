@@ -13,6 +13,15 @@ marks the new public surface (`AIBaseClassifier`, `AiRouterCompletions`,
 and their configuration) and the new default classifier behavior when
 `OPENAI_API_KEY` is set.
 
+### Fixed
+
+- Settings that `EnvSettings` does not declare as fields (`COMPLETIONS_FALLBACKS`,
+  `COMPLETIONS_FALLBACK_ON`, `COMPLETIONS_RETRY_POLICY`, and the new
+  `CLASSIFIER_*` and `COMPLETIONS_ROUTER_*` keys) were only read from the
+  process environment, never from `.env`: pydantic-settings stores undeclared
+  `.env` keys lowercased and `get_setting` looked them up by their upper-case
+  name. `.env` values now resolve as documented.
+
 ### Added
 
 - Model routing. `AIFactory.get_ai_completions_client(router=...)`, or the

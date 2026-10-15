@@ -54,8 +54,14 @@ class EnvSettings(BaseSettings):
             setting_value: Any = getattr(self, setting)
             if setting_value is not None:
                 return setting_value
-        if self.model_extra and setting in self.model_extra:
-            return self.model_extra[setting]
+        if self.model_extra:
+            # pydantic-settings stores undeclared .env keys lowercased, so a
+            # setting read by its documented upper-case name must match both.
+            for str_key in (setting, setting.lower()):
+                if str_key in self.model_extra:
+                    # Early return with the .env value.
+                    return self.model_extra[str_key]
+        # Normal return from the process environment, or the default.
         return os.environ.get(setting, default)
 
     # Alias
