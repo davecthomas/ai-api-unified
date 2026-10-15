@@ -1,4 +1,4 @@
-# ai-api-unified 3.3.0
+# ai-api-unified 3.4.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1231,7 +1231,8 @@ Rules for the chain:
 | `AUTH_REJECTED` | yes | 401/403, a revoked or invalid API key, a disabled organization, expired AWS credentials |
 | `MODEL_UNAVAILABLE` | no | 404, an unknown or retired model id, a model not offered in the region |
 | `TIMEOUT` | no | the call's `request_timeout_seconds` passed with no answer |
-| `None` | never | validation errors, a safety refusal |
+| `INVALID_OUTPUT` | no | a structured answer that is not valid JSON, not a JSON object, or fails the response model (`StructuredOutputValidationError`) |
+| `None` | never | a safety refusal, request validation before any call |
 
 `MODEL_UNAVAILABLE` is off by default because an unknown model id usually
 means a configuration typo, and a working fallback would hide it. Turn it on
@@ -1256,6 +1257,15 @@ reports which case a given error is. A rejected key is
 often a configuration error too; the `failover` and `served_by_fallback` log
 events (below) record it while traffic keeps flowing. Remove
 `auth_rejected` from `fallback_on` to make it fail loudly instead.
+
+`INVALID_OUTPUT` is off by default because the provider billed the bad answer, and
+failing over buys a second billed answer on another model: a spending
+decision. The error is `StructuredOutputValidationError`, a `ValueError` (so
+existing handlers keep working) that carries the discarded answer's `usage`,
+`raw_text`, and `finish_reason`. Turn the reason on to let the chain try the
+next model, and the router escalate, on bad output; each discarded answer
+then shows on the request's cost report as a wasted line item (see
+"Per-request cost").
 
 A safety refusal is never a trigger: retrying a
 refused request on another model is a policy decision, not a reliability one,
@@ -2152,7 +2162,12 @@ for item in report.calls:                  # AIRequestCostLineItem, in call orde
 ```
 
 A failed attempt is a line item with no cost and no tokens; it still counts
-as a call. A model with no registry pricing counts as billed but unpriced
+as a call. A failed attempt the provider billed, a structured answer that
+could not be parsed or validated (`StructuredOutputValidationError`) or a
+truncated one (`StructuredResponseTokenLimitError`), keeps the usage the
+exception carries, so the report prices it and counts it in `billed_calls`
+and `wasted_usd`; its per-call cost event carries `outcome: "error"`. A model
+with no registry pricing counts as billed but unpriced
 (`unpriced_calls`), so `total_usd` understates the request by its cost.
 The ledger records calls whether or not the observability middleware is on.
 

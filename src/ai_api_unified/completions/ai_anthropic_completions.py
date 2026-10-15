@@ -1704,33 +1704,12 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         usage: AITokenUsage = self._usage_from_tuple(
             tuple_usage, dict_cache_write=dict_cache_write
         )
-        if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
-            # Early return so callers branch on finish_reason instead of parsing.
-            # raw_text passes through output redaction like every other model
-            # output surface, so truncated bodies follow the same PII policy.
-            return AIStructuredOutputResult(
-                data=None,
-                finish_reason=finish_reason,
-                usage=usage,
-                raw_text=self.pii_middleware.process_output(raw_output_text),
-            )
-        str_content: str = self.pii_middleware.process_output(raw_output_text)
-        if not str_content:
-            raise ValueError("Empty response from Anthropic Messages API")
-        try:
-            parsed_data: Any = json.loads(str_content)
-        except json.JSONDecodeError as json_error:
-            raise ValueError(f"Invalid JSON response: {json_error}") from json_error
-        if not isinstance(parsed_data, dict):
-            raise ValueError(
-                "Structured response was valid JSON but not a JSON object."
-            )
-        # Normal return with the parsed structured output result.
-        return AIStructuredOutputResult(
-            data=parsed_data,
+        # Normal return with the parsed result, or a billed failure raised.
+        return self._parse_structured_output_json(
+            raw_output_text=raw_output_text,
             finish_reason=finish_reason,
             usage=usage,
-            raw_text=str_content,
+            provider_label="Anthropic Messages API",
         )
 
     def _build_structured_observability_metadata(

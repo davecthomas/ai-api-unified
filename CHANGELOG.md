@@ -4,6 +4,26 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.4.0
+
+### Added
+
+- Billed failures are costed. A structured answer that is not valid JSON,
+  not a JSON object, or fails the response model now raises
+  `StructuredOutputValidationError` (a `ValueError`, so existing handlers
+  keep working) carrying the discarded answer's `usage`, `raw_text`, and
+  `finish_reason`; `StructuredResponseTokenLimitError` gains `usage`. The
+  observed-call runtime reads the usage off the exception, so the request's
+  line item is billed and priced, `billed_calls` and `wasted_usd` count it,
+  and the per-call cost event fires with `outcome: "error"` and
+  `error_type` (successful calls carry `outcome: "ok"`). A new
+  `on_billed_error` hook on `AiApiObservabilityMiddleware` (non-abstract)
+  carries it.
+- `AiFallbackReason.INVALID_OUTPUT`, off by default: with it in
+  `fallback_on`, the chain tries the next model and the router escalates on
+  bad structured output, and each discarded answer is a wasted line item on
+  the request's cost report.
+
 ## 3.3.0
 
 ### Added

@@ -176,6 +176,31 @@ class AiApiObservabilityMiddleware(ABC):
         # Normal return because the default implementation ignores request reports.
         return None
 
+    def on_billed_error(
+        self,
+        call_context: AiApiCallContextModel,
+        call_result_summary: AiApiCallResultSummaryModel,
+        exception: Exception,
+    ) -> None:
+        """
+        Observes a failed call the provider still billed: the exception
+        carried usage (a structured answer that could not be parsed or
+        validated, a truncated structured answer). Fires after `on_error`.
+
+        Not abstract, so external middleware keeps working. The logger-backed
+        implementation emits a cost event with `outcome: "error"`.
+
+        Args:
+            call_context: Immutable provider-boundary call metadata.
+            call_result_summary: Usage reconstructed from the exception.
+            exception: The failure that carried the usage.
+
+        Returns:
+            None after the middleware finishes its billed-error work.
+        """
+        # Normal return because the default implementation ignores billed errors.
+        return None
+
 
 class NoOpObservabilityMiddleware(AiApiObservabilityMiddleware):
     """
@@ -363,11 +388,38 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         # Normal return after output-side observability handling.
         return None
 
+    def on_billed_error(
+        self,
+        call_context: AiApiCallContextModel,
+        call_result_summary: AiApiCallResultSummaryModel,
+        exception: Exception,
+    ) -> None:
+        """
+        Emits a cost event for a failed call the provider billed, marked
+        `outcome: "error"` with the exception type.
+
+        Args:
+            call_context: Immutable provider-boundary call metadata.
+            call_result_summary: Usage reconstructed from the exception.
+            exception: The failure that carried the usage.
+
+        Returns:
+            None after the cost event has been logged or skipped.
+        """
+        self._maybe_emit_cost_event(
+            call_context=call_context,
+            call_result_summary=call_result_summary,
+            exception=exception,
+        )
+        # Normal return after billed-error cost handling.
+        return None
+
     def _maybe_emit_cost_event(
         self,
         *,
         call_context: AiApiCallContextModel,
         call_result_summary: AiApiCallResultSummaryModel,
+        exception: Exception | None = None,
     ) -> None:
         """
         Emits one financial-ops cost event when cost enrichment is enabled.
@@ -380,6 +432,8 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         Args:
             call_context: Immutable provider-boundary call metadata for the call.
             call_result_summary: Scalar provider-result metadata for the call output.
+            exception: The failure, when the billed call raised; the event
+                then carries `outcome: "error"` and `error_type`.
 
         Returns:
             None after the cost event has been logged or intentionally skipped.
@@ -429,6 +483,10 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             "pricing_effective_date": pricing.effective_date.isoformat(),
             "pricing_source": pricing.source,
             "pricing_confidence": pricing.confidence,
+            "outcome": "error" if exception is not None else "ok",
+            "error_type": (
+                exception.__class__.__name__ if exception is not None else None
+            ),
         }
         self._merge_context_tag_fields(
             dict_event_fields=dict_cost_fields,

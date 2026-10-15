@@ -1685,31 +1685,12 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         )
         usage: AITokenUsage = self._usage_from_gemini(response)
         raw_output_text: str = str(getattr(response, "text", "") or "")
-        if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
-            # Early return so callers branch on finish_reason instead of parsing.
-            return AIStructuredOutputResult(
-                data=None,
-                finish_reason=finish_reason,
-                usage=usage,
-                raw_text=self.pii_middleware.process_output(raw_output_text),
-            )
-        str_content: str = self.pii_middleware.process_output(raw_output_text)
-        if not str_content:
-            raise ValueError("Empty response from Gemini API")
-        try:
-            parsed_data: Any = json.loads(str_content)
-        except json.JSONDecodeError as json_error:
-            raise ValueError(f"Invalid JSON response: {json_error}") from json_error
-        if not isinstance(parsed_data, dict):
-            raise ValueError(
-                "Structured response was valid JSON but not a JSON object."
-            )
-        # Normal return with the parsed structured output result.
-        return AIStructuredOutputResult(
-            data=parsed_data,
+        # Normal return with the parsed result, or a billed failure raised.
+        return self._parse_structured_output_json(
+            raw_output_text=raw_output_text,
             finish_reason=finish_reason,
             usage=usage,
-            raw_text=str_content,
+            provider_label="Gemini API",
         )
 
     def _observed_gemini_structured_result(

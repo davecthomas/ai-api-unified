@@ -39,6 +39,13 @@ class AiFallbackReason(str, Enum):
         MODEL_UNAVAILABLE: The model id is unknown, retired, or not offered
             in the configured region. Usually a configuration error, so a
             fallback layer should not act on it unless told to.
+        INVALID_OUTPUT: The model answered a structured request, and was
+            billed for it, but the answer is not valid JSON, not a JSON
+            object, or fails the response model. Off by default: a bad
+            answer then costs a second billed call on another model, which
+            is a spending decision. Turn it on to let the chain try the next
+            model and the router escalate on bad output; each discarded
+            answer is a wasted line item on the request's cost report.
     """
 
     UNAVAILABLE = "unavailable"
@@ -47,6 +54,7 @@ class AiFallbackReason(str, Enum):
     MODEL_UNAVAILABLE = "model_unavailable"
     AUTH_REJECTED = "auth_rejected"
     TIMEOUT = "timeout"
+    INVALID_OUTPUT = "invalid_output"
 
 
 class _DeriveFallbackReason:

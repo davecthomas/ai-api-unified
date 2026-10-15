@@ -71,10 +71,15 @@ Derived from: GitHub issue #78 (2026-10-15)
 - Failed attempts are visible on the cost topic for the first time, as
   zero-cost line items inside the request event.
 - Billed failures that raise inside the observed callable (invalid JSON, a
-  refusal, a truncated structured answer) are still recorded with no usage,
-  since the exception carries none. Capturing their usage, and escalating on
-  bad output (`AiFallbackReason.INVALID_OUTPUT`), is the second half of issue
-  #78, planned for 3.4.0.
+  truncated structured answer) are costed from 3.4.0: the exception carries
+  the provider's `usage` (`StructuredOutputValidationError`,
+  `StructuredResponseTokenLimitError`), the runtime builds the line item and
+  a cost event (`outcome: "error"`) from it through the non-abstract
+  `on_billed_error` hook, and `AiFallbackReason.INVALID_OUTPUT` (opt-in) lets
+  the chain and the router move on, leaving the discarded answer as a wasted
+  line item. Exceptions carrying usage were chosen over restructuring every
+  engine to parse outside the observed call: one shared parser in the base
+  raises the typed error, and the engines' observed callables are unchanged.
 - The scope is a contextvar, so a streaming request holds it open between
   chunks in the consumer's context; a library call interleaved with stream
   consumption joins that request. The scope resets when the stream ends or is

@@ -25,6 +25,7 @@ from typing import Any, ClassVar, Generic, Iterator, Literal, NoReturn, Type, Ty
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from ai_api_unified.ai_completions_exceptions import (
+    StructuredOutputValidationError,
     StructuredResponseTokenLimitError,
 )
 from ai_api_unified.ai_provider_exceptions import (
@@ -51,7 +52,9 @@ from ai_api_unified.middleware.observability_runtime import (
 )
 from ai_api_unified.middleware.request_cost import (
     AIRequestCostReport,
+    JoinedRequestCostScope,
     RequestCostScope,
+    current_request_cost_scope,
     request_cost_scope,
 )
 from ai_api_unified.pricing.model_pricing import AIModelPricing
@@ -823,7 +826,7 @@ class AIBase(ABC):
         Returns:
             Whatever `callable_run` returns.
         """
-        scope: RequestCostScope | None = None
+        scope: RequestCostScope | JoinedRequestCostScope | None = None
         try:
             with request_cost_scope(operation, request_id=request_id) as scope:
                 result: ProviderCallReturnType = callable_run()
@@ -842,7 +845,7 @@ class AIBase(ABC):
         request_id: str | None = None,
     ) -> Any:
         """Async twin of _with_request_cost_scope; `callable_run` returns an awaitable."""
-        scope: RequestCostScope | None = None
+        scope: RequestCostScope | JoinedRequestCostScope | None = None
         try:
             with request_cost_scope(operation, request_id=request_id) as scope:
                 result: Any = await callable_run()
@@ -864,7 +867,7 @@ class AIBase(ABC):
         Streaming twin of _with_request_cost_scope: the scope spans the
         stream's consumption and closes when it ends or is abandoned.
         """
-        scope: RequestCostScope | None = None
+        scope: RequestCostScope | JoinedRequestCostScope | None = None
         try:
             with request_cost_scope(operation, request_id=request_id) as scope:
                 yield from callable_open_stream()
@@ -3873,12 +3876,92 @@ class AIBaseCompletions(AIBase):
         try:
             response_model.model_validate(structured_result.data)
         except ValidationError as exception:
-            raise ValueError(
+            # The provider call already marked this answer served; it is
+            # being discarded, so it counts as wasted on the request report.
+            scope: RequestCostScope | None = current_request_cost_scope()
+            if scope is not None:
+                scope.discard_last_served()
+            raise StructuredOutputValidationError(
                 f"Response validation failed with {exception.error_count()} "
-                "validation errors."
+                "validation errors.",
+                usage=structured_result.usage,
+                raw_text=structured_result.raw_text,
+                finish_reason=structured_result.finish_reason.value,
             ) from exception
         # Normal return with the validated structured result.
         return structured_result
+
+    def _parse_structured_output_json(
+        self,
+        *,
+        raw_output_text: str,
+        finish_reason: AIFinishReason,
+        usage: AITokenUsage,
+        provider_label: str,
+    ) -> AIStructuredOutputResult:
+        """
+        Maps one COMPLETE structured answer onto the result model, or raises
+        a billed failure.
+
+        Shared by every engine's structured-output builder so an unusable
+        answer raises the same StructuredOutputValidationError everywhere,
+        carrying the usage the provider reported for it.
+
+        Args:
+            raw_output_text: Provider output text before output redaction.
+            finish_reason: Normalized finish reason; LENGTH and REFUSAL return
+                data=None without parsing.
+            usage: Provider-reported token usage for the answer.
+            provider_label: Provider name for the empty-response message.
+
+        Returns:
+            AIStructuredOutputResult with parsed data on a COMPLETE turn.
+
+        Raises:
+            StructuredOutputValidationError: Empty, invalid JSON, or not an
+                object. A ValueError and an INVALID_OUTPUT fallback trigger.
+        """
+        if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
+            # Early return so callers branch on finish_reason instead of parsing.
+            # raw_text passes through output redaction like every other model
+            # output surface, so truncated bodies follow the same PII policy.
+            return AIStructuredOutputResult(
+                data=None,
+                finish_reason=finish_reason,
+                usage=usage,
+                raw_text=self.pii_middleware.process_output(raw_output_text),
+            )
+        str_content: str = self.pii_middleware.process_output(raw_output_text)
+        if not str_content:
+            raise StructuredOutputValidationError(
+                f"Empty response from {provider_label}",
+                usage=usage,
+                raw_text=str_content,
+                finish_reason=finish_reason.value,
+            )
+        try:
+            parsed_data: Any = json.loads(str_content)
+        except json.JSONDecodeError as json_error:
+            raise StructuredOutputValidationError(
+                f"Invalid JSON response: {json_error}",
+                usage=usage,
+                raw_text=str_content,
+                finish_reason=finish_reason.value,
+            ) from json_error
+        if not isinstance(parsed_data, dict):
+            raise StructuredOutputValidationError(
+                "Structured response was valid JSON but not a JSON object.",
+                usage=usage,
+                raw_text=str_content,
+                finish_reason=finish_reason.value,
+            )
+        # Normal return with the parsed structured output result.
+        return AIStructuredOutputResult(
+            data=parsed_data,
+            finish_reason=finish_reason,
+            usage=usage,
+            raw_text=str_content,
+        )
 
     def _send_structured_output_provider(
         self,

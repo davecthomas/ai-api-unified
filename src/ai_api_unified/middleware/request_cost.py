@@ -109,9 +109,13 @@ class AIRequestCostLineItem(BaseModel):
 
     @property
     def billed(self) -> bool:
-        """True when the provider answered and reported usage, priced or not."""
-        # Normal return: a successful call with any usage is a billed call.
-        return self.outcome == LINE_ITEM_OUTCOME_OK and any(
+        """
+        True when the provider reported usage, priced or not. A failed call
+        whose exception carried usage (a billed answer the library could not
+        use) is billed too; a 529 or a connection error is not.
+        """
+        # Normal return: any usage means the provider charged for the call.
+        return any(
             value is not None
             for value in (
                 self.input_tokens,
@@ -331,8 +335,21 @@ def build_line_item(
         if dict_tags.get(TAG_ROUTER_ROLE) == TAG_VALUE_CLASSIFIER_ROLE
         else LINE_ITEM_ROLE_ATTEMPT
     )
-    if exception is not None or call_result_summary is None:
+    str_outcome: str = LINE_ITEM_OUTCOME_OK
+    str_error_type: str | None = None
+    str_fallback_reason: str | None = None
+    if exception is not None:
         reason: Any = getattr(exception, "fallback_reason", None)
+        str_outcome = LINE_ITEM_OUTCOME_ERROR
+        str_error_type = type(exception).__name__
+        str_fallback_reason = getattr(reason, "value", reason)
+        if call_result_summary is None:
+            # A billed failure (an answer the library could not use) carries
+            # the provider's usage on the exception; a 529 carries none.
+            call_result_summary = summary_from_exception_usage(
+                exception, float_elapsed_ms
+            )
+    if call_result_summary is None:
         # Early return with a failed attempt: a call, but nothing billed.
         return AIRequestCostLineItem(
             call_id=call_context.call_id,
@@ -343,16 +360,16 @@ def build_line_item(
             role=str_role,
             route_tier=dict_tags.get(TAG_ROUTE_TIER),
             route_method=dict_tags.get(TAG_ROUTE_METHOD),
-            outcome=LINE_ITEM_OUTCOME_ERROR,
-            error_type=type(exception).__name__ if exception is not None else None,
-            fallback_reason=getattr(reason, "value", reason),
+            outcome=str_outcome,
+            error_type=str_error_type,
+            fallback_reason=str_fallback_reason,
             elapsed_ms=float_elapsed_ms,
         )
     pricing: AIModelPricing | None = resolve_call_pricing(call_context)
     usd_cost: Decimal | None = (
         compute_call_cost(pricing, call_result_summary) if pricing else None
     )
-    # Normal return with the priced (or unpriced) successful call.
+    # Normal return with the priced (or unpriced) billed call.
     return AIRequestCostLineItem(
         call_id=call_context.call_id,
         provider=call_context.provider_vendor,
@@ -368,7 +385,62 @@ def build_line_item(
         cache_write_5m_tokens=call_result_summary.provider_cache_write_5m_tokens,
         cache_write_1h_tokens=call_result_summary.provider_cache_write_1h_tokens,
         usd_cost=usd_cost,
+        outcome=str_outcome,
+        error_type=str_error_type,
+        fallback_reason=str_fallback_reason,
         elapsed_ms=float_elapsed_ms,
+    )
+
+
+def summary_from_exception_usage(
+    exception: BaseException,
+    float_elapsed_ms: float,
+) -> AiApiCallResultSummaryModel | None:
+    """
+    Builds a usage summary from the `usage` an exception carries, when a
+    billed answer was discarded (invalid structured output, a truncated
+    structured answer).
+
+    Args:
+        exception: The failure; its `usage` attribute, when present, is an
+            AITokenUsage-shaped object (input_tokens, output_tokens, ...).
+        float_elapsed_ms: Wall-clock provider time for the call.
+
+    Returns:
+        The summary, or None when the exception carries no usage or the usage
+        reports no tokens at all.
+    """
+    from ai_api_unified.middleware.observability_runtime import (
+        AiApiCallResultSummaryModel,
+    )
+
+    usage: Any = getattr(exception, "usage", None)
+    if usage is None:
+        # Early return: a transport failure carries nothing billable.
+        return None
+    tuple_counts: tuple[int | None, ...] = tuple(
+        getattr(usage, str_field, None)
+        for str_field in (
+            "input_tokens",
+            "output_tokens",
+            "cached_input_tokens",
+            "total_tokens",
+            "cache_write_5m_tokens",
+            "cache_write_1h_tokens",
+        )
+    )
+    if all(value is None for value in tuple_counts):
+        # Early return: usage present but empty, so nothing was billed.
+        return None
+    # Normal return with the discarded answer's usage.
+    return AiApiCallResultSummaryModel(
+        provider_elapsed_ms=float_elapsed_ms,
+        provider_prompt_tokens=tuple_counts[0],
+        provider_completion_tokens=tuple_counts[1],
+        provider_cached_input_tokens=tuple_counts[2],
+        provider_total_tokens=tuple_counts[3],
+        provider_cache_write_5m_tokens=tuple_counts[4],
+        provider_cache_write_1h_tokens=tuple_counts[5],
     )
 
 
@@ -379,9 +451,10 @@ class RequestCostScope:
     Attributes:
         request_id: Correlation id pushed as the `request_id` tag.
         operation: Public operation the request started with.
-        bool_owner: True for the outermost scope, the one that closes and
-            emits. A nested `request_cost_scope()` call yields the outer scope
-            with this False, so only the owner stores the report.
+        bool_owner: True on the scope itself, the outermost one that closes
+            and emits. A nested `request_cost_scope()` call receives a
+            JoinedRequestCostScope view with this False, so only the owner
+            stores the report.
         report: The finished report once the owner's scope has closed.
     """
 
@@ -432,6 +505,23 @@ class RequestCostScope:
                 # Early return after marking the served call.
                 return None
         # Normal return: no successful attempt to mark.
+        return None
+
+    def discard_last_served(self) -> None:
+        """
+        Clears the served mark on the most recent served item: the answer
+        was marked when the provider call returned, and the library then
+        rejected it (a failed response-model validation), so it is wasted.
+        """
+        # Loop backward for the item most recently marked served.
+        for int_index in range(len(self._items) - 1, -1, -1):
+            if self._items[int_index].served:
+                self._items[int_index] = self._items[int_index].model_copy(
+                    update={"served": False}
+                )
+                # Early return after clearing the mark.
+                return None
+        # Normal return: nothing was marked.
         return None
 
     def classifier_cost(self) -> Decimal | None:
@@ -494,6 +584,22 @@ class RequestCostScope:
             ),
             calls=list(self._items),
         )
+
+
+class JoinedRequestCostScope:
+    """
+    What a nested `request_cost_scope()` call receives: a view of the outer
+    scope that records into it and reads from it, with `bool_owner` False so
+    the joiner knows it neither closes the request nor stores the report.
+    """
+
+    def __init__(self, outer: RequestCostScope) -> None:
+        self._outer: RequestCostScope = outer
+        self.bool_owner: bool = False
+
+    def __getattr__(self, str_name: str) -> Any:
+        # Normal return: everything but ownership comes from the outer scope.
+        return getattr(self._outer, str_name)
 
 
 REQUEST_COST_SCOPE: ContextVar[RequestCostScope | None] = ContextVar(
@@ -560,15 +666,16 @@ def request_cost_scope(
     operation: str,
     *,
     request_id: str | None = None,
-) -> Iterator[RequestCostScope]:
+) -> Iterator[RequestCostScope | JoinedRequestCostScope]:
     """
     Opens (or joins) the request that provider calls are charged to.
 
     The outermost call owns the scope: on exit it totals the line items into
     `scope.report`, emits `ai_api_request_cost` when cost events are on, and
     restores the observability context. A nested call joins the outer scope
-    and yields it unchanged. Use it directly to roll several library calls
-    into one logical request, such as a workflow step:
+    and receives a view of it with `bool_owner` False. Use it directly to
+    roll several library calls into one logical request, such as a workflow
+    step:
 
         with request_cost_scope("summarize-contract") as scope:
             client.send_structured_output(...)
@@ -582,8 +689,9 @@ def request_cost_scope(
             its `route_id`.
 
     Yields:
-        The active scope. `scope.bool_owner` tells the caller whether it
-        opened the scope; `scope.report` is set when the owner's block ends.
+        The active scope, or a joined view of it. `scope.bool_owner` tells
+        the caller whether it opened the scope; `scope.report` is set when
+        the owner's block ends.
     """
     from ai_api_unified.middleware.observability_runtime import (
         get_observability_context,
@@ -594,7 +702,7 @@ def request_cost_scope(
     existing: RequestCostScope | None = REQUEST_COST_SCOPE.get()
     if existing is not None:
         # Early yield: join the outer request; its owner closes it.
-        yield existing
+        yield JoinedRequestCostScope(existing)
         return
     scope: RequestCostScope = RequestCostScope(operation, request_id=request_id)
     token_scope: Token[RequestCostScope | None] = REQUEST_COST_SCOPE.set(scope)

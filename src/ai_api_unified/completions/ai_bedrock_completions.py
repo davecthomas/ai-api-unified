@@ -2045,33 +2045,14 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 for dict_block in list_content
                 if "text" in dict_block
             )
-            if finish_reason in (AIFinishReason.LENGTH, AIFinishReason.REFUSAL):
-                structured_result = AIStructuredOutputResult(
-                    data=None,
+            structured_result: AIStructuredOutputResult = (
+                self._parse_structured_output_json(
+                    raw_output_text=str_raw_text,
                     finish_reason=finish_reason,
                     usage=usage,
-                    raw_text=self.pii_middleware.process_output(str_raw_text),
+                    provider_label="Bedrock Converse API",
                 )
-            else:
-                str_content: str = self.pii_middleware.process_output(str_raw_text)
-                if not str_content:
-                    raise ValueError("Empty response from Bedrock Converse API")
-                try:
-                    parsed_data: Any = json.loads(str_content)
-                except json.JSONDecodeError as json_error:
-                    raise ValueError(
-                        f"Invalid JSON response: {json_error}"
-                    ) from json_error
-                if not isinstance(parsed_data, dict):
-                    raise ValueError(
-                        "Structured response was valid JSON but not a JSON object."
-                    )
-                structured_result = AIStructuredOutputResult(
-                    data=parsed_data,
-                    finish_reason=finish_reason,
-                    usage=usage,
-                    raw_text=str_content,
-                )
+            )
             # Normal return with the observed structured output result.
             return AiApiObservedCompletionsResultModel(
                 return_value=structured_result,
