@@ -1,4 +1,4 @@
-# ai-api-unified 3.2.0
+# ai-api-unified 3.3.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -2127,6 +2127,58 @@ capability.supports_org_id, capability.supports_org_name, capability.requirement
 # e.g. on Bedrock: (True, True, "org_name is the AWS account alias and needs
 #                    iam:ListAccountAliases; identity falls back to id-only without it")
 ```
+
+#### Per-request cost
+
+A request's total cost includes every call it made: classification, failed
+attempts, fallbacks, and escalations. One routed structured-output request
+can be four provider calls: the classifier, a 529 on the first tier, a
+fallback on the same tier, and an escalation that answers. Each call still
+emits its own `ai_api_call_cost` event; the request adds one total on top.
+
+Every client keeps the report for the last request it ran as the outermost
+call:
+
+```python
+result = client.send_structured_output(prompt, response_model=Summary)
+report = client.last_request_cost          # AIRequestCostReport
+report.total_usd                           # Decimal, every priced call
+report.classifier_usd                      # the router's classifier call
+report.wasted_usd                          # billed answers nobody used
+report.billed_calls, report.failed_calls   # 3 and 1 in the example above
+report.served_by                           # "claude:claude-opus-5"
+for item in report.calls:                  # AIRequestCostLineItem, in call order
+    item.role, item.route_tier, item.outcome, item.usd_cost, item.served
+```
+
+A failed attempt is a line item with no cost and no tokens; it still counts
+as a call. A model with no registry pricing counts as billed but unpriced
+(`unpriced_calls`), so `total_usd` understates the request by its cost.
+The ledger records calls whether or not the observability middleware is on.
+
+To roll several library calls into one logical request, such as a workflow
+step, open the scope yourself. Nested scopes join the outer one, and the
+clients inside keep no report of their own:
+
+```python
+from ai_api_unified import request_cost_scope
+
+with request_cost_scope("summarize-contract") as scope:
+    router.send_structured_output(prompt, response_model=Summary)
+    router.send_prompt("One-line title for this summary.")
+scope.report.total_usd      # both calls, every attempt behind them
+```
+
+When `emit_cost` is on, the outermost scope emits one `ai_api_request_cost`
+event on the cost topic as it closes (normally or on an exception):
+`request_id`, `operation`, `status`, `caller_id`, `session_id`,
+`workflow_id`, `served_by`, `served_by_tier`, `served_by_method`,
+`total_usd`, `classifier_usd`, `wasted_usd`, `billed_calls`,
+`failed_calls`, `unpriced_calls`, `elapsed_ms`, and `calls` (a compact list
+with `call_id`, `role`, `model`, `outcome`, `usd_cost`, `served`). The
+`request_id` is the router's `route_id` when routed, and every per-call
+event under the request carries it as `tag_request_id`, so the per-call
+events and the total join on one key.
 
 ### PII Redaction
 

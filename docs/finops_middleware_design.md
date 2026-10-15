@@ -157,9 +157,19 @@ topic.
    falls back to the base input rate, under-reporting the premium instead of
    dropping the cost entirely.
 
-5. **Aggregation: none in-library.** Per-call events only, correlated via the
-   `caller_id` / session / workflow ids already on the context. Rollups are the
-   consumer's job.
+5. **Aggregation: per-request only, in-library (amended 2026-10-15, 3.3.0,
+   ADR-0020).** The original decision was no in-library aggregation: per-call
+   events only, rollups the consumer's job. That left the one number the
+   routing and fallback layers are judged by, what a request cost across the
+   classifier, failed attempts, fallbacks, and escalations, to be rebuilt
+   from four events per request. A request scope (contextvar, opened by the
+   outermost public call or by a caller's `request_cost_scope()`) now records
+   one line item per provider call from the same summary and the same cost
+   function as the per-call event, totals them when it closes, exposes the
+   report as `client.last_request_cost`, and emits one `ai_api_request_cost`
+   event on the cost topic when `emit_cost` is on. Per-call events are
+   unchanged and carry `tag_request_id`. Rollups across requests (per day,
+   per team, per workflow) stay the consumer's job.
 
 ## Phased plan
 
@@ -175,4 +185,9 @@ topic.
 - **Phase 4 (shipped, 2.24.0)** — cache-write billing. Per-TTL cache-write rates
   in the pricing registry, per-TTL write counts on the result summary, and the
   premium folded into the emitted cost.
+- **Phase 5 (shipped, 3.3.0)** — per-request cost. A request scope records a
+  line item per provider call (classifier, failed attempts, fallbacks,
+  escalations), `client.last_request_cost` and `request_cost_scope()` expose
+  the report, and one `ai_api_request_cost` event per request joins the
+  per-call events on `request_id`.
 - **Later** — budgets/alerting on the event stream, if wanted.
