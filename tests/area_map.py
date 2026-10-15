@@ -180,6 +180,9 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_observability_embeddings_phase_d.py": ("middleware", "embeddings"),
     "test_observability_images_phase_e.py": ("middleware", "images"),
     "test_observability_tts_phase_f.py": ("middleware", "voice"),
+    # Routing
+    "test_model_router_config.py": ("completions",),
+    "test_model_router.py": ("completions", "core"),
     # Classification
     "test_classification_base.py": ("classification",),
     "test_structured_output_classifier.py": ("classification", "completions"),
@@ -266,6 +269,11 @@ LIST_SOURCE_AREA_RULES: list[tuple[str, tuple[str, ...] | str]] = [
     # Capability packages
     ("src/ai_api_unified/embeddings/", ("embeddings",)),
     ("src/ai_api_unified/classification/", ("classification",)),
+    ("src/ai_api_unified/routing/", ("completions", "core")),
+    (
+        "src/ai_api_unified/completions/ai_router_completions.py",
+        ("completions", "core"),
+    ),
     ("src/ai_api_unified/images/", ("images",)),
     ("src/ai_api_unified/videos/", ("videos",)),
     ("src/ai_api_unified/voice/", ("voice",)),

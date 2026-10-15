@@ -67,6 +67,13 @@ from .ai_provider_exceptions import (
     AiProviderRequestError,
 )
 from .ai_factory import AIFactory
+from .completions.ai_router_completions import AiRouterCompletions
+from .routing.router_config import (
+    AIRouterClassifierConfig,
+    AIRouterConfig,
+    AIRouterTier,
+    load_router_config,
+)
 from .completions.ai_fallback_completions import (
     DEFAULT_FALLBACK_REASONS,
     AIFallbackCandidate,
@@ -90,6 +97,11 @@ __all__: list[str] = [
     "AIFactory",
     "AIFallbackCandidate",
     "AiFallbackCompletions",
+    "AiRouterCompletions",
+    "AIRouterClassifierConfig",
+    "AIRouterConfig",
+    "AIRouterTier",
+    "load_router_config",
     "DEFAULT_FALLBACK_REASONS",
     "AIBase",
     "AIBaseClassifier",

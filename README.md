@@ -1,4 +1,4 @@
-# ai-api-unified 2.36.0
+# ai-api-unified 3.0.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1386,6 +1386,135 @@ poetry run pytest -m nonmock tests/test_model_fallback_nonmock.py -q
 It needs `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in `.env` and skips without
 them.
 
+## Model routing
+
+A router sends each request to a tier of models that matches how demanding
+the request is. A cheap classifier reads the latest user message, places it
+in one of your tiers (easy, medium, hard, or names of your own), and the
+request runs on that tier's model chain. A trivial question stops costing
+flagship rates; a hard one still gets the strongest model.
+
+### Why it exists
+
+One configured model serves every prompt, whatever its difficulty. Routing
+by complexity lowers cost and latency on the easy majority without giving
+up quality on the hard minority, and it does so in the library, so an
+application changes nothing but configuration.
+
+### Setting up a router
+
+Write the tiers as JSON, ascending capability. Each tier lists an ordered
+`engine:model` chain: the first entry is the tier's primary and the rest
+are its fallback chain. Tiers named `easy`, `medium`, and `hard` have
+built-in descriptions; any other name needs a `description` the classifier
+can read.
+
+```json
+{
+  "tiers": [
+    {"name": "easy",   "models": ["openai:gpt-4.1-mini", "google-gemini:gemini-2.5-flash-lite"]},
+    {"name": "medium", "models": ["claude:claude-sonnet-5", "openai:gpt-5.6-luna"]},
+    {"name": "hard",   "description": "Multi-step reasoning, long synthesis, cross-file code, or anything where a wrong answer is costly.",
+                       "models": ["claude:claude-opus-5-5"]}
+  ],
+  "classifier": {"engine": "openai-decisions", "model": "gpt-6-luna", "timeout_seconds": 5},
+  "default_tier": "medium",
+  "on_exhausted": "escalate"
+}
+```
+
+Point `COMPLETIONS_ROUTER_CONFIG` at the file (or set it to the JSON
+itself), keep `COMPLETIONS_ENGINE` and `COMPLETIONS_MODEL_NAME` as they
+are, and call the factory as usual:
+
+```python
+client = AIFactory.get_ai_completions_client()      # an AiRouterCompletions
+print(client.send_prompt("What is 2 + 2?"))          # routed to the easy tier
+print(client.last_tier, client.last_decision)
+```
+
+In code, pass `router=AIRouterConfig(...)` instead. The configured
+completions LLM, with its `COMPLETIONS_FALLBACKS` chain, is the **default
+route**: where calls go when no classifier is available, when the
+classifier fails, or when `default_tier` is unset.
+
+### The classifier
+
+The router uses a classification engine (see Classification). Resolution
+order: `COMPLETIONS_ROUTER_CLASSIFIER` (`engine:model`), then the config's
+`classifier`, then the classification factory's own resolution
+(`CLASSIFIER_ENGINE`, then `openai-decisions` when `OPENAI_API_KEY` is
+set). Set either to `none` to route without a classifier; if the
+classifier cannot be built, the router logs `classifier_unavailable` once
+and degrades to the default route, and never raises at startup.
+
+The classifier reads the latest user message only, cut to the engine's
+`max_input_chars`. The system prompt is left out: it is long, constant,
+and carries no complexity signal. The tier descriptions carry the policy,
+and `classifier.instructions` prepends your own guidance.
+
+### What happens on a request
+
+1. A per-call `route` option or `for_tier()` pins the tier (method
+   `override`).
+2. A history that already holds engine-shaped entries (tool turns) skips
+   the classifier and stays in a tier whose engines share that family,
+   preferring the tier that served the previous turn (method `pinned`).
+3. Otherwise the classifier names a tier (method `classifier`). No
+   classifier, an error, a refusal, or an unknown tier name routes to
+   `default_tier` or the default route (method `default`) and logs
+   `classifier_failed`.
+4. The call runs on the tier's chain, which fails over inside the tier as
+   any chain does.
+5. If the chain runs out of candidates on a trigger reason
+   (`fallback_on`), the router escalates to the next tier up and logs
+   `tier_exhausted`; with `on_exhausted: raise`, on a non-trigger error, or
+   on the top tier, the error propagates; if a tier's primary cannot be
+   built, the router logs `tier_unbuildable` once and skips the tier the
+   same way.
+
+### Seeing where a request went
+
+Every call logs a `routed` record at INFO before it runs, on the logger
+`ai_api_unified.completions.ai_router_completions`, with an
+`ai_router_event` field so a log processor can count and alert without
+parsing the message:
+
+| Level | `ai_router_event` | When |
+| ----- | ----------------- | ---- |
+| INFO | `routed` | Every call. Fields: `route_id`, `tier`, `tier_index`, `method`, `operation`, `classifier_engine`, `classifier_model`, `confidence`, `probabilities`, `classifier_latency_ms`, `classifier_input_tokens`, `classifier_token_source`, `classifier_usd_cost`, `caller_id`, `session_id`, `workflow_id`. |
+| WARNING | `classifier_unavailable` | Once at build: no classifier, with `reason` and `routed_to`. |
+| WARNING | `classifier_failed` | The classifier raised, refused, or named no tier; the call went to `routed_to`. Fields: `error`, `fallback_reason`, `latency_ms`. |
+| ERROR | `tier_exhausted` | A tier's chain ran out of candidates on a trigger reason; `escalate_to` names the next tier. |
+| ERROR | `tier_unbuildable` | A tier's primary could not be built; the tier is out for this process. |
+
+The router also pushes `route_id`, `route_tier`, and `route_method` onto
+the observability context around the downstream call, so the engine's own
+input, output, and cost events carry them as `tag_route_tier` and so on:
+cost by tier needs no extra work. The classifier call itself carries
+`tag_router_role=classifier`.
+
+### Per-call control
+
+- `provider_options={"route": "hard"}` pins one structured-output or
+  conversation call to a tier; `"default"` pins it to the default route.
+  The router removes the key before options reach the engine.
+- `client.for_tier("hard")` returns that tier's chain client, for
+  `send_prompt` and streaming, which take no `provider_options`.
+- `client.last_tier`, `client.last_decision`, and `client.last_route_client`
+  report the most recent call.
+
+### Configuration reference
+
+| Setting | Meaning |
+| ------- | ------- |
+| `COMPLETIONS_ROUTER_CONFIG` | Path to a JSON file, or inline JSON, with `tiers`, optional `classifier`, `default_tier`, `on_exhausted`, `fallback_on`. |
+| `COMPLETIONS_ROUTER_CLASSIFIER` | `engine:model` for the router's classifier, or `none`. Overrides the config's `classifier`. |
+| `AIFactory.get_ai_completions_client(router=AIRouterConfig(...))` | Code-first configuration; overrides the setting. |
+
+Exports: `AiRouterCompletions`, `AIRouterConfig`, `AIRouterTier`,
+`AIRouterClassifierConfig`, `load_router_config`.
+
 ## Configuration
 
 ### Required Engine Selectors
@@ -1408,6 +1537,8 @@ There is no implicit default provider. Set the selector for each capability you 
 | `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
 | `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
 | `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted,auth_rejected` |
+| `COMPLETIONS_ROUTER_CONFIG` | Optional complexity router: a JSON file path or inline JSON mapping tiers to `engine:model` chains (see Model routing) |
+| `COMPLETIONS_ROUTER_CLASSIFIER` | Optional `engine:model` for the router's classifier, or `none`; default is the classification factory's resolution |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
 | `CLASSIFIER_MODEL_NAME`     | Optional classification model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine default |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
