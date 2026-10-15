@@ -74,15 +74,6 @@ def _skip_on_quota(exception: AiProviderRequestError) -> None:
     raise exception
 
 
-class _CaptureHandler(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-
-
 @pytest.mark.parametrize(
     ("str_engine", "str_model", "str_key", "str_host"),
     [
@@ -110,18 +101,17 @@ def test_structured_output_classifier_separates_easy_from_hard(
         hard = classifier.classify_choice(
             STR_HARD, CHOICES, instructions="Rate the difficulty."
         )
+        predicate = classifier.classify_predicate(
+            STR_EASY, instructions="Is this a question about geography?"
+        )
+        scored = classifier.classify_score(STR_HARD, LEVELS)
     except AiProviderRequestError as exception:
         _skip_on_quota(exception)
     assert easy.choice == "easy" and hard.choice == "hard"
     assert easy.refused is False
     assert easy.token_source == "provider" and easy.usage.input_tokens
     assert easy.provider_engine == str_engine and easy.model_name == str_model
-
-    predicate = classifier.classify_predicate(
-        STR_EASY, instructions="Is this a question about geography?"
-    )
     assert predicate.probability == 1.0
-    scored = classifier.classify_score(STR_HARD, LEVELS)
     assert scored.score is not None and scored.score >= 0.5
 
 
@@ -156,7 +146,9 @@ def test_decisions_classifier_choice_predicate_score_and_usage_shape() -> None:
     assert easy.usage.input_tokens
 
 
-def test_decisions_classification_emits_a_cost_event() -> None:
+def test_decisions_classification_emits_a_cost_event(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     _skip_without("OPENAI_API_KEY", "api.openai.com")
     classifier = AIFactory.get_ai_classifier_client(
         classifier_engine="openai-decisions"
@@ -164,19 +156,14 @@ def test_decisions_classification_emits_a_cost_event() -> None:
     classifier._observability_middleware = LoggerBackedObservabilityMiddleware(
         ObservabilitySettingsModel(emit_cost=True)
     )
-    handler = _CaptureHandler()
-    logger = logging.getLogger(COST_LOGGER_NAME)
-    logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
-    try:
+    with caplog.at_level(logging.DEBUG, logger=COST_LOGGER_NAME):
         try:
             classifier.classify_choice(STR_EASY, CHOICES)
         except AiProviderRequestError as exception:
             _skip_on_quota(exception)
-    finally:
-        logger.removeHandler(handler)
-    assert handler.records, "no cost event"
-    fields = handler.records[-1].args[1]
+    list_cost = [r for r in caplog.records if r.name == COST_LOGGER_NAME]
+    assert list_cost, "no cost event"
+    fields = list_cost[-1].args[1]
     assert fields["model"] == "decisions/gpt-6-luna"
     assert fields["operation"] == "classify_choice"
     assert fields["input_tokens"] and float(fields["usd_cost"]) > 0

@@ -54,6 +54,15 @@ def _skip_without(str_key: str, str_host: str) -> None:
         pytest.skip(f"Skipping: DNS unavailable for {str_host}: {exception}")
 
 
+def _skip_on_quota(exception: AiProviderRequestError) -> None:
+    if exception.fallback_reason in (
+        AiFallbackReason.QUOTA_EXHAUSTED,
+        AiFallbackReason.AUTH_REJECTED,
+    ):
+        pytest.skip(f"Skipping: provider account cannot serve ({exception})")
+    raise exception
+
+
 def _config(classifier: AIRouterClassifierConfig | None) -> AIRouterConfig:
     return AIRouterConfig(
         tiers=[
@@ -115,14 +124,7 @@ def test_router_classified_by_decisions(
     try:
         client.classifier.classify_choice(STR_EASY, PROBE_CHOICES)
     except AiProviderRequestError as exception:
-        if exception.fallback_reason in (
-            AiFallbackReason.QUOTA_EXHAUSTED,
-            AiFallbackReason.AUTH_REJECTED,
-        ):
-            pytest.skip(
-                f"Skipping: OpenAI account cannot serve Decisions ({exception})"
-            )
-        raise
+        _skip_on_quota(exception)
     list_routed = _run_router(client, caplog)
     assert [r.tier for r in list_routed] == ["easy", "hard"]
     assert list_routed[0].classifier_engine == "openai-decisions"
