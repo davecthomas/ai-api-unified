@@ -286,7 +286,10 @@ class TestParsing:
         with pytest.raises(ValueError, match="bogus"):
             parse_fallback_reasons("bogus")
 
-    def test_default_reasons_exclude_model_unavailable(self) -> None:
+    def test_timeout_parses(self) -> None:
+        assert parse_fallback_reasons("timeout") == {R.TIMEOUT}
+
+    def test_default_reasons_exclude_model_unavailable_and_timeout(self) -> None:
         assert DEFAULT_FALLBACK_REASONS == {
             R.UNAVAILABLE,
             R.RATE_LIMITED,
@@ -404,6 +407,32 @@ class TestFailover:
         )
         assert list(wrapper.send_prompt_streaming("hi")) == ["other-1", "other-2"]
         assert sibling.calls == []
+
+    def test_timeout_does_not_fail_over_by_default(self) -> None:
+        wrapper = _chain(_FakeEngine("p", fail=_err(R.TIMEOUT, None)), _FakeEngine("f"))
+        with pytest.raises(AiProviderRequestError) as exc_info:
+            wrapper.send_prompt("hi")
+        assert exc_info.value.fallback_reason is R.TIMEOUT
+        wrapper.builder.assert_not_called()
+
+    def test_timeout_fails_over_when_configured(self) -> None:
+        sibling = _FakeEngine("sibling")
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.TIMEOUT, None)),
+            sibling,
+            shared_account=True,
+            fallback_on={*DEFAULT_FALLBACK_REASONS, R.TIMEOUT},
+        )
+        # A hung model says nothing about its account, so the sibling runs.
+        assert wrapper.send_prompt("hi") == "sibling:ok"
+
+    def test_timeout_fails_over_before_first_chunk_when_configured(self) -> None:
+        wrapper = _chain(
+            _FakeEngine("p", fail=_err(R.TIMEOUT, None)),
+            _FakeEngine("f"),
+            fallback_on={R.TIMEOUT},
+        )
+        assert list(wrapper.send_prompt_streaming("hi")) == ["f-1", "f-2"]
 
     def test_error_without_reason_propagates(self) -> None:
         wrapper = _chain(_FakeEngine("p", fail=_err(None, 400)), _FakeEngine("f"))

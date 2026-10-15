@@ -35,6 +35,7 @@ import time
 from collections.abc import Iterator
 from typing import Any, ClassVar, Type
 
+import httpx
 from google import genai
 from google.genai import errors as gerr
 from google.genai.types import GenerateContentResponse
@@ -67,7 +68,11 @@ from ..ai_base import (
     normalize_retry_policy,
     resolve_retry_policy,
 )
-from ..ai_provider_exceptions import AiFallbackReason, AiProviderRequestError
+from ..ai_provider_exceptions import (
+    AiFallbackReason,
+    AiProviderRequestError,
+    classify_transport_fallback_reason,
+)
 from ..middleware.observability_runtime import (
     AiApiCallResultSummaryModel,
     ObservabilityMetadataValue,
@@ -1137,6 +1142,18 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                     # Gemini model on the same key can still serve.
                     account_wide=reason is AiFallbackReason.AUTH_REJECTED,
                 ) from exception
+        if isinstance(exception, httpx.TimeoutException | httpx.ConnectError):
+            # The SDK raises its httpx transport errors unwrapped, so map
+            # them the way the other engines map theirs.
+            raise AiProviderRequestError(
+                f"Google Gemini request failed before a status was available: "
+                f"{exception}",
+                status_code=None,
+                provider_engine=self.PROVIDER_ENGINE_TOKEN,
+                fallback_reason=classify_transport_fallback_reason(
+                    isinstance(exception, httpx.TimeoutException)
+                ),
+            ) from exception
         # Normal return so non-Google exceptions propagate unchanged.
         return None
 

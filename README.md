@@ -1,4 +1,4 @@
-# ai-api-unified 2.33.0
+# ai-api-unified 2.34.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -636,7 +636,8 @@ reports a low credit balance or a reached spend cap as a 400):
 | `QUOTA_EXHAUSTED` | Billing, credit, quota, or a spend cap is used up; retrying the same model is pointless | OpenAI `insufficient_quota` / `billing_hard_limit_reached`, Anthropic "credit balance is too low" or a reached workspace spend cap ("API usage limits"), Bedrock `ServiceQuotaExceededException`, Gemini plan or daily quota |
 | `AUTH_REJECTED` | The provider rejected the credentials or the account; retrying the same provider is pointless | 401/403, Anthropic `authentication_error` / `permission_error` (including a disabled organization), Gemini "API key not valid" (a 400), Bedrock `AccessDeniedException` / `UnrecognizedClientException` / `ExpiredTokenException` |
 | `MODEL_UNAVAILABLE` | The model id is unknown, retired, or not offered in the region | 404, Bedrock `ResourceNotFoundException` or an invalid model identifier |
-| `None` | Another model would not help | Validation errors, missing local credentials, a client-side timeout, a refusal |
+| `TIMEOUT` | The caller's own deadline passed before the provider answered | `request_timeout_seconds` expired, botocore `read_timeout` on Bedrock |
+| `None` | Another model would not help | Validation errors, missing local credentials, a refusal |
 
 `is_transient` is True for `UNAVAILABLE` and `RATE_LIMITED`. Engines that run
 their own retry schedule (Bedrock, Gemini, and the OpenAI `strict_schema_prompt`
@@ -1122,12 +1123,23 @@ Rules for the chain:
 | `QUOTA_EXHAUSTED` | yes | OpenAI `insufficient_quota`, Anthropic low credit balance or workspace spend cap, Bedrock `ServiceQuotaExceededException`, a Gemini daily quota |
 | `AUTH_REJECTED` | yes | 401/403, a revoked or invalid API key, a disabled organization, expired AWS credentials |
 | `MODEL_UNAVAILABLE` | no | 404, an unknown or retired model id, a model not offered in the region |
-| `None` | never | validation errors, a client-side timeout, a safety refusal |
+| `TIMEOUT` | no | the call's `request_timeout_seconds` passed with no answer |
+| `None` | never | validation errors, a safety refusal |
 
 `MODEL_UNAVAILABLE` is off by default because an unknown model id usually
 means a configuration typo, and a working fallback would hide it. Turn it on
 with `fallback_on` or `COMPLETIONS_FALLBACK_ON` when you want an unknown or
 retired model to fail over.
+
+`TIMEOUT` is off by default because the deadline is yours, and a failover
+adds the next candidate's wait on top of it. Turn it on to treat a provider
+that hangs under load as an outage. It only helps with a short deadline:
+set `request_timeout_seconds` on the call and `retry_policy="none"`, since
+the Anthropic and OpenAI SDKs default to a 600-second timeout and retry a
+timeout twice before the error reaches the fallback layer. The worst case
+for one call is then the sum of the deadlines across the chain. Bedrock has
+no per-call timeout, so its `TIMEOUT` comes from the botocore `read_timeout`
+configured at client construction.
 
 `QUOTA_EXHAUSTED` and `AUTH_REJECTED` are usually account-level failures:
 every model on that provider's account fails the same way; the client skips
