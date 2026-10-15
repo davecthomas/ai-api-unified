@@ -1125,7 +1125,7 @@ logger; it is never a silent zero.
 | Setting | Meaning |
 | ------- | ------- |
 | `CLASSIFIER_ENGINE` | Engine token. Required; there is no implicit default. |
-| `CLASSIFIER_MODEL_NAME` | Model override; blank means the engine's default. |
+| `CLASSIFIER_MODEL_NAME` | Model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine's default. |
 | `AIFactory.get_ai_classifier_client(classifier_engine=, model_name=, base_url=)` | Arguments override the settings. |
 
 Exports: `AIBaseClassifier`, `AIClassifierCapabilitiesBase`,
@@ -1404,7 +1404,7 @@ There is no implicit default provider. Set the selector for each capability you 
 | `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
 | `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted,auth_rejected` |
 | `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
-| `CLASSIFIER_MODEL_NAME`     | Optional classification model override; blank means the engine's default model             |
+| `CLASSIFIER_MODEL_NAME`     | Optional classification model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine default |
 | `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
 | `VIDEO_MODEL_NAME`          | Optional video model override                                                               |
 | `VIDEO_OUTPUT_DIR`          | Optional local output directory for materialized video artifacts                            |

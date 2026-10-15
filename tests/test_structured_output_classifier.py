@@ -21,6 +21,7 @@ from ai_api_unified import (
     AIStructuredOutputResult,
     AITokenUsage,
 )
+from ai_api_unified.ai_completions_exceptions import StructuredResponseTokenLimitError
 from ai_api_unified.ai_provider_exceptions import (
     AiProviderCapabilityUnsupportedError,
     AiProviderConfigurationError,
@@ -203,6 +204,11 @@ class TestChoice:
     def test_answer_outside_the_enum_is_a_refusal(self) -> None:
         classifier, _ = _classifier(answer="bogus")
         assert classifier.classify_choice("hi", CHOICES).refused is True
+
+    def test_truncation_raises_instead_of_reporting_a_refusal(self) -> None:
+        classifier, _ = _classifier(answer=None, finish=AIFinishReason.LENGTH)
+        with pytest.raises(StructuredResponseTokenLimitError):
+            classifier.classify_choice("hi", CHOICES)
 
     def test_classifier_role_tag_is_visible_to_the_delegate_and_reset(self) -> None:
         classifier, engine = _classifier()

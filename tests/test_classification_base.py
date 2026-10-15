@@ -107,6 +107,9 @@ class TestTruncation:
         assert str_cut.endswith("T" * 10)
         assert "\n...\n" in str_cut
 
+    def test_zero_cap_drops_everything(self) -> None:
+        assert truncate_classification_text("abcdef", 0) == "\n...\n"
+
     def test_default_cap_applies(self) -> None:
         classifier = _FakeClassifier()
         classifier.classify_choice(

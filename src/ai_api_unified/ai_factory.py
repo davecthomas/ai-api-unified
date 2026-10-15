@@ -598,7 +598,7 @@ class AIFactory:
                 google-gemini, ...) classify through that engine's structured
                 output.
             model_name: Model override; defaults to CLASSIFIER_MODEL_NAME, then
-                the engine's own default.
+                COMPLETIONS_MODEL_NAME, then the engine's own default.
             base_url: Optional API base-URL override for engines that accept one.
 
         Returns:

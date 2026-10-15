@@ -1905,8 +1905,10 @@ def truncate_classification_text(str_text: str, int_max_chars: int | None) -> st
         return str_text
     int_head: int = (int_max_chars * 2) // 3
     int_tail: int = int_max_chars - int_head
+    # Slice the tail by start index: str_text[-0:] would return the whole text.
+    str_tail: str = str_text[len(str_text) - int_tail :]
     # Normal return with the head and tail around a marker.
-    return f"{str_text[:int_head]}\n...\n{str_text[-int_tail:]}"
+    return f"{str_text[:int_head]}\n...\n{str_tail}"
 
 
 class AIClassifierCapabilitiesBase(BaseModel):

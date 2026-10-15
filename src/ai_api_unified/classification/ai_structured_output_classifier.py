@@ -26,6 +26,7 @@ from ..ai_base import (
     AIFinishReason,
     AIStructuredOutputResult,
 )
+from ..ai_completions_exceptions import StructuredResponseTokenLimitError
 from ..ai_provider_exceptions import (
     AiProviderCapabilityUnsupportedError,
     AiProviderConfigurationError,
@@ -43,8 +44,12 @@ from ..middleware.observability_runtime import (
 # split classifier spend from the engine's other completions.
 OBSERVABILITY_TAG_CLASSIFIER_ROLE: str = "classifier_role"
 
-# Enough for one short JSON object; a label never needs more.
-DEFAULT_CLASSIFIER_MAX_RESPONSE_TOKENS: int = 32
+# The library's shared structured-output budget. The answer is one short JSON
+# object, but reasoning and always-on-thinking models spend thinking tokens
+# from the same budget, so a label-sized cap truncates them before the JSON.
+DEFAULT_CLASSIFIER_MAX_RESPONSE_TOKENS: int = (
+    AIBaseCompletions.STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS
+)
 
 STR_PREDICATE_YES: str = "yes"
 STR_PREDICATE_NO: str = "no"
@@ -60,7 +65,8 @@ class AiStructuredOutputClassifier(AIBaseClassifier):
     Classifies through a completions engine's structured output.
 
     Args:
-        model: Model for the completions engine; blank means its default.
+        model: Model for the completions engine; blank means that engine's
+            COMPLETIONS_MODEL_NAME, then its default.
         engine: Completions engine token the registry maps this classifier
             to (openai, claude, google-gemini, ...). Required unless a
             completions_client is given.
@@ -359,13 +365,38 @@ class AiStructuredOutputClassifier(AIBaseClassifier):
         # Normal return with the joined prompt.
         return "\n".join(list_lines)
 
-    @staticmethod
     def _map_choice(
+        self,
         result: AIStructuredOutputResult,
         str_question_type: str,
         list_allowed: list[str],
     ) -> AIClassificationResult:
-        """Reads the enum answer and the usage off a structured result."""
+        """
+        Reads the enum answer and the usage off a structured result.
+
+        Raises:
+            StructuredResponseTokenLimitError: The delegate truncated the
+                answer, so retrying with a larger budget is the fix, not a
+                refusal.
+        """
+        if result.finish_reason == AIFinishReason.LENGTH:
+            str_model: str = result.model_name or self.model_name or ""
+            raise StructuredResponseTokenLimitError(
+                message=(
+                    f"Classification on '{str_model}' was truncated before the "
+                    f"answer at {DEFAULT_CLASSIFIER_MAX_RESPONSE_TOKENS} "
+                    "response tokens."
+                ),
+                provider_name=(
+                    result.provider_engine
+                    or self._resolve_observability_provider_engine()
+                ),
+                model_name=str_model,
+                max_response_tokens=DEFAULT_CLASSIFIER_MAX_RESPONSE_TOKENS,
+                minimum_supported_tokens=DEFAULT_CLASSIFIER_MAX_RESPONSE_TOKENS,
+                finish_reason=str(result.finish_reason),
+                raw_output_char_count=len(result.raw_text),
+            )
         str_answer: str | None = None
         if isinstance(result.data, dict):
             raw_answer: Any = result.data.get("answer")
