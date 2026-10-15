@@ -661,6 +661,48 @@ class TestPinnedHistory:
         )
         assert router.send_conversation("s", list(ANTHROPIC_HISTORY)).text == "d:turn"
 
+    def test_pinned_escalation_skips_tiers_of_another_family(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engines = {
+            "claude:e": _FakeEngine("e", fail=_err(R.RATE_LIMITED, 429)),
+            "openai:o": _FakeEngine("o", family="openai"),
+            "claude:h": _FakeEngine("h"),
+        }
+        router = _router(
+            engines,
+            tiers=[
+                _tier("easy", "claude:e"),
+                _tier("medium", "openai:o"),
+                _tier("hard", "claude:h"),
+            ],
+            classifier=_FakeClassifier("easy"),
+        )
+        with caplog.at_level(logging.ERROR, logger=LOGGER_NAME):
+            turn = router.send_conversation("s", list(ANTHROPIC_HISTORY))
+        assert turn.text == "h:turn"
+        assert engines["openai:o"].calls == []
+        exhausted = [
+            r
+            for r in caplog.records
+            if getattr(r, "ai_router_event", None) == "tier_exhausted"
+        ][0]
+        assert exhausted.escalate_to == "hard"
+
+    def test_pinned_escalation_raises_when_no_family_tier_is_above(self) -> None:
+        engines = {
+            "claude:e": _FakeEngine("e", fail=_err(R.RATE_LIMITED, 429)),
+            "openai:o": _FakeEngine("o", family="openai"),
+        }
+        router = _router(
+            engines,
+            tiers=[_tier("easy", "claude:e"), _tier("hard", "openai:o")],
+            classifier=_FakeClassifier("easy"),
+        )
+        with pytest.raises(AiProviderRequestError):
+            router.send_conversation("s", list(ANTHROPIC_HISTORY))
+        assert engines["openai:o"].calls == []
+
     def test_tool_result_and_turn_extension_follow_the_producing_tier(self) -> None:
         engines = _engines("e", "h")
         router = _router(engines, classifier=_FakeClassifier("hard"))
@@ -760,6 +802,20 @@ class TestFactory:
         with _settings({}):
             client = AIFactory.get_ai_completions_client(router=config)
         assert isinstance(client, AiRouterCompletions) and client.classifier is not None
+
+    def test_config_classifier_model_without_engine_is_kept(self) -> None:
+        pytest.importorskip("anthropic")
+        config = AIRouterConfig(
+            tiers=[_tier("easy", "claude:claude-haiku-4-5")],
+            classifier=AIRouterClassifierConfig(model="claude-haiku-4-5"),
+        )
+        with _settings({"CLASSIFIER_ENGINE": "claude"}):
+            client = AIFactory.get_ai_completions_client(router=config)
+        assert isinstance(client, AiRouterCompletions)
+        assert (
+            client.classifier is not None
+            and client.classifier.model_name == "claude-haiku-4-5"
+        )
 
     def test_bad_tier_engine_fails_at_build(self) -> None:
         pytest.importorskip("anthropic")

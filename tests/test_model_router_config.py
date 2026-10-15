@@ -84,6 +84,16 @@ class TestLoad:
 
 
 class TestValidation:
+    def test_candidates_spelling_parses_fallback_on(self) -> None:
+        tier = AIRouterTier.model_validate(
+            {
+                "name": "easy",
+                "candidates": [{"engine": "claude", "model": "x"}],
+                "fallback_on": "unavailable, timeout",
+            }
+        )
+        assert tier.fallback_on == {R.UNAVAILABLE, R.TIMEOUT}
+
     def test_built_in_descriptions(self) -> None:
         tier = AIRouterTier(name="easy", models=["openai:gpt-4.1-mini"])  # type: ignore[call-arg]
         assert tier.description == DICT_DEFAULT_TIER_DESCRIPTIONS["easy"]

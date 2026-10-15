@@ -459,8 +459,13 @@ class AIFactory:
         if str_setting:
             str_engine_part, _, str_model_part = str_setting.partition(":")
             classifier_config = AIRouterClassifierConfig(
-                engine=str_engine_part.strip().lower(),
+                engine=str_engine_part.strip().lower() or None,
                 model=str_model_part.strip() or None,
+                base_url=(
+                    classifier_config.base_url
+                    if classifier_config is not None
+                    else None
+                ),
                 timeout_seconds=(
                     classifier_config.timeout_seconds
                     if classifier_config is not None
@@ -476,18 +481,19 @@ class AIFactory:
             # Early return: turned off on purpose.
             return None, "disabled"
         try:
-            if classifier_config is not None and classifier_config.engine:
-                # Early return with the configured classifier.
-                return (
-                    AIFactory.get_ai_classifier_client(
-                        classifier_engine=classifier_config.engine,
-                        model_name=classifier_config.model,
-                        base_url=classifier_config.base_url,
-                    ),
-                    None,
-                )
-            # Normal return with the factory-resolved classifier.
-            return AIFactory.get_ai_classifier_client(), None
+            if classifier_config is None:
+                # Early return with the factory-resolved classifier.
+                return AIFactory.get_ai_classifier_client(), None
+            # Normal return with the configured classifier; a None engine
+            # keeps the factory's resolution while the model and base_url hold.
+            return (
+                AIFactory.get_ai_classifier_client(
+                    classifier_engine=classifier_config.engine or None,
+                    model_name=classifier_config.model,
+                    base_url=classifier_config.base_url,
+                ),
+                None,
+            )
         except (ValueError, AiProviderError) as exception:
             _LOGGER.warning(
                 "Router classifier unavailable (%s: %s); routing to the default route.",

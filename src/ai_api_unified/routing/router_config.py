@@ -75,10 +75,15 @@ class AIRouterTier(BaseModel):
     @classmethod
     def _accept_models_key(cls, data: Any) -> Any:
         """Lets JSON spell the chain as `models` (strings or dicts)."""
-        if not isinstance(data, dict) or "models" not in data:
+        if not isinstance(data, dict):
             # Early return: nothing to translate.
             return data
         dict_data: dict[str, Any] = dict(data)
+        if dict_data.get("fallback_on") is not None:
+            dict_data["fallback_on"] = parse_fallback_reasons(dict_data["fallback_on"])
+        if "models" not in dict_data:
+            # Early return: the chain is spelled as candidates.
+            return dict_data
         raw_models: Any = dict_data.pop("models")
         if not isinstance(raw_models, list):
             raise ValueError("A tier's `models` must be a list.")
@@ -94,8 +99,6 @@ class AIRouterTier(BaseModel):
             else:
                 raise ValueError(f"Unrecognized model entry {item!r}.")
         dict_data["candidates"] = list_candidates
-        if "fallback_on" in dict_data and dict_data["fallback_on"] is not None:
-            dict_data["fallback_on"] = parse_fallback_reasons(dict_data["fallback_on"])
         # Normal return with the translated payload.
         return dict_data
 

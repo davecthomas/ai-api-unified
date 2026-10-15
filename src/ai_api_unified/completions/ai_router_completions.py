@@ -643,19 +643,42 @@ class AiRouterCompletions(AIBaseCompletions):
 
     # ── Dispatch ────────────────────────────────────────────────────────────
 
-    def _should_escalate(self, int_index: int | None, exception: BaseException) -> bool:
+    def _next_tier_up(self, int_index: int, str_family: str | None) -> int | None:
+        """
+        The next tier above one that may serve this call, or None.
+
+        A family-pinned history can only replay on a tier with a candidate
+        of that family, so tiers of other families are skipped.
+        """
+        # Loop upward for the first tier that can take the call.
+        for int_next in range(int_index + 1, len(self._config.tiers)):
+            if str_family is None or any(
+                self._candidate_family(candidate) == str_family
+                for candidate in self._config.tiers[int_next].candidates
+            ):
+                # Early return with the eligible tier.
+                return int_next
+        # Normal return: nothing above may serve the call.
+        return None
+
+    def _should_escalate(
+        self,
+        int_index: int | None,
+        exception: BaseException,
+        str_family: str | None,
+    ) -> bool:
         """
         True when a failed tier should hand the call to the next tier up.
 
-        Only a trigger failure on a tier that has a tier above it escalates;
-        the default chain, "raise" mode, a non-trigger error, and the top
-        tier all re-raise.
+        Only a trigger failure on a tier that has an eligible tier above it
+        escalates; the default chain, "raise" mode, a non-trigger error, and
+        the top tier all re-raise.
         """
         if int_index is None or self._config.on_exhausted == "raise":
             # Early return: nothing above the default chain, or raise mode.
             return False
-        if int_index >= len(self._config.tiers) - 1:
-            # Early return: the top tier has nowhere to go.
+        if self._next_tier_up(int_index, str_family) is None:
+            # Early return: no tier above may serve the call.
             return False
         reason: Any = getattr(exception, "fallback_reason", None)
         client: AiFallbackCompletions | None = self._tier_clients.get(int_index)
@@ -674,6 +697,7 @@ class AiRouterCompletions(AIBaseCompletions):
         str_method: str,
         decision: AIClassificationResult | None,
         str_route_id: str,
+        messages: list[dict[str, Any]] | None = None,
     ) -> T:
         """
         Runs one call on the selected tier, escalating on exhaustion.
@@ -685,17 +709,19 @@ class AiRouterCompletions(AIBaseCompletions):
             str_method: How the tier was chosen, for logs.
             decision: The classifier's result, if it ran.
             str_route_id: Correlation id for this call's events.
+            messages: The call's history, so escalation stays in its family.
 
         Returns:
             The first successful result.
         """
         self._log_routed(str_operation, str_route_id, int_index, str_method, decision)
+        str_family: str | None = history_family_of(messages or [])
         int_current: int | None = int_index
         while True:
             client: AIBaseCompletions | None = self._client_at(int_current)
             if client is None:
                 int_current = self._next_after_unbuildable(
-                    int_current, str_operation, str_route_id
+                    int_current, str_operation, str_route_id, str_family
                 )
                 continue
             token = self._push_tags(
@@ -708,13 +734,15 @@ class AiRouterCompletions(AIBaseCompletions):
             try:
                 result: T = call(client)
             except Exception as exception:
-                if not self._should_escalate(int_current, exception):
+                if not self._should_escalate(int_current, exception, str_family):
                     raise
-                self._log_tier_exhausted(
-                    str_operation, str_route_id, int_current, exception
-                )
                 assert int_current is not None
-                int_current += 1
+                int_next: int | None = self._next_tier_up(int_current, str_family)
+                assert int_next is not None
+                self._log_tier_exhausted(
+                    str_operation, str_route_id, int_current, int_next, exception
+                )
+                int_current = int_next
                 continue
             finally:
                 reset_observability_context(token)
@@ -732,15 +760,17 @@ class AiRouterCompletions(AIBaseCompletions):
         str_method: str,
         decision: AIClassificationResult | None,
         str_route_id: str,
+        messages: list[dict[str, Any]] | None = None,
     ) -> T:
         """Async twin of _run."""
         self._log_routed(str_operation, str_route_id, int_index, str_method, decision)
+        str_family: str | None = history_family_of(messages or [])
         int_current: int | None = int_index
         while True:
             client: AIBaseCompletions | None = self._client_at(int_current)
             if client is None:
                 int_current = self._next_after_unbuildable(
-                    int_current, str_operation, str_route_id
+                    int_current, str_operation, str_route_id, str_family
                 )
                 continue
             token = self._push_tags(
@@ -753,13 +783,15 @@ class AiRouterCompletions(AIBaseCompletions):
             try:
                 result: T = await call(client)
             except Exception as exception:
-                if not self._should_escalate(int_current, exception):
+                if not self._should_escalate(int_current, exception, str_family):
                     raise
-                self._log_tier_exhausted(
-                    str_operation, str_route_id, int_current, exception
-                )
                 assert int_current is not None
-                int_current += 1
+                int_next: int | None = self._next_tier_up(int_current, str_family)
+                assert int_next is not None
+                self._log_tier_exhausted(
+                    str_operation, str_route_id, int_current, int_next, exception
+                )
+                int_current = int_next
                 continue
             finally:
                 reset_observability_context(token)
@@ -769,11 +801,15 @@ class AiRouterCompletions(AIBaseCompletions):
             return result
 
     def _next_after_unbuildable(
-        self, int_index: int | None, str_operation: str, str_route_id: str
+        self,
+        int_index: int | None,
+        str_operation: str,
+        str_route_id: str,
+        str_family: str | None,
     ) -> int | None:
         """
         Picks where a call goes when its tier could not be built: the next
-        tier up in escalate mode, else the error propagates.
+        eligible tier up in escalate mode, else the error propagates.
         """
         if int_index is None:
             # Should not happen: the default client is always built.
@@ -782,10 +818,12 @@ class AiRouterCompletions(AIBaseCompletions):
                 status_code=None,
                 fallback_reason=None,
             )
-        if (
-            self._config.on_exhausted == "raise"
-            or int_index >= len(self._config.tiers) - 1
-        ):
+        int_next: int | None = (
+            None
+            if self._config.on_exhausted == "raise"
+            else self._next_tier_up(int_index, str_family)
+        )
+        if int_next is None:
             raise AiProviderRequestError(
                 f"Router tier {self._config.tiers[int_index].name!r} could not be "
                 "built and no tier above it may serve this call.",
@@ -796,18 +834,18 @@ class AiRouterCompletions(AIBaseCompletions):
             "ROUTER: %s cannot use tier %s (unbuildable); escalating to %s.",
             str_operation,
             self._config.tiers[int_index].name,
-            self._config.tiers[int_index + 1].name,
+            self._config.tiers[int_next].name,
             extra={
                 "ai_router_event": ROUTER_EVENT_TIER_EXHAUSTED,
                 "route_id": str_route_id,
                 "operation": str_operation,
                 "tier": self._config.tiers[int_index].name,
                 "fallback_reason": "unbuildable",
-                "escalate_to": self._config.tiers[int_index + 1].name,
+                "escalate_to": self._config.tiers[int_next].name,
             },
         )
-        # Normal return with the next tier.
-        return int_index + 1
+        # Normal return with the next eligible tier.
+        return int_next
 
     @staticmethod
     def _push_tags(dict_tags: dict[str, str]) -> Any:
@@ -946,6 +984,7 @@ class AiRouterCompletions(AIBaseCompletions):
         str_operation: str,
         str_route_id: str,
         int_index: int,
+        int_next: int,
         exception: BaseException,
     ) -> None:
         reason: Any = getattr(exception, "fallback_reason", None)
@@ -954,7 +993,7 @@ class AiRouterCompletions(AIBaseCompletions):
             str_operation,
             self._config.tiers[int_index].name,
             reason.value if isinstance(reason, AiFallbackReason) else reason,
-            self._config.tiers[int_index + 1].name,
+            self._config.tiers[int_next].name,
             exception,
             extra={
                 "ai_router_event": ROUTER_EVENT_TIER_EXHAUSTED,
@@ -964,7 +1003,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 "fallback_reason": (
                     reason.value if isinstance(reason, AiFallbackReason) else reason
                 ),
-                "escalate_to": self._config.tiers[int_index + 1].name,
+                "escalate_to": self._config.tiers[int_next].name,
             },
         )
 
@@ -1067,7 +1106,7 @@ class AiRouterCompletions(AIBaseCompletions):
             client: AIBaseCompletions | None = self._client_at(int_current)
             if client is None:
                 int_current = self._next_after_unbuildable(
-                    int_current, "send_prompt_streaming", str_route_id
+                    int_current, "send_prompt_streaming", str_route_id, None
                 )
                 continue
             token = self._push_tags(
@@ -1090,13 +1129,19 @@ class AiRouterCompletions(AIBaseCompletions):
                 return
             except Exception as exception:
                 reset_observability_context(token)
-                if not self._should_escalate(int_current, exception):
+                if not self._should_escalate(int_current, exception, None):
                     raise
-                self._log_tier_exhausted(
-                    "send_prompt_streaming", str_route_id, int_current, exception
-                )
                 assert int_current is not None
-                int_current += 1
+                int_next: int | None = self._next_tier_up(int_current, None)
+                assert int_next is not None
+                self._log_tier_exhausted(
+                    "send_prompt_streaming",
+                    str_route_id,
+                    int_current,
+                    int_next,
+                    exception,
+                )
+                int_current = int_next
                 continue
             self._last_tier_index = int_current
             self._last_route_client = client
@@ -1148,6 +1193,7 @@ class AiRouterCompletions(AIBaseCompletions):
             str_method=str_method,
             decision=decision,
             str_route_id=str_route_id,
+            messages=messages,
         )
 
     async def asend_structured_output(
@@ -1190,6 +1236,7 @@ class AiRouterCompletions(AIBaseCompletions):
             str_method=str_method,
             decision=decision,
             str_route_id=str_route_id,
+            messages=messages,
         )
 
     def send_conversation(
@@ -1230,6 +1277,7 @@ class AiRouterCompletions(AIBaseCompletions):
             str_method=str_method,
             decision=decision,
             str_route_id=str_route_id,
+            messages=messages,
         )
 
     async def asend_conversation(
@@ -1270,6 +1318,7 @@ class AiRouterCompletions(AIBaseCompletions):
             str_method=str_method,
             decision=decision,
             str_route_id=str_route_id,
+            messages=messages,
         )
 
     # ── History helpers ─────────────────────────────────────────────────────
