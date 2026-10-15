@@ -183,10 +183,22 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     # Routing
     "test_model_router_config.py": ("completions",),
     "test_model_router.py": ("completions", "core"),
+    "test_model_router_nonmock.py": (
+        "completions",
+        "core",
+        "engine_anthropic",
+        "engine_openai",
+    ),
     # Classification
     "test_classification_base.py": ("classification",),
     "test_structured_output_classifier.py": ("classification", "completions"),
     "test_ai_factory_classifier.py": ("classification", "core"),
+    "test_classification_nonmock.py": (
+        "classification",
+        "engine_anthropic",
+        "engine_gemini",
+        "engine_openai",
+    ),
     "test_openai_decisions_classifier.py": (
         "classification",
         "engine_openai",
