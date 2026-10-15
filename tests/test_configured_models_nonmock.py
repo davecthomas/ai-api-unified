@@ -7,6 +7,7 @@ the router's classifier. Fails on any model a provider reports missing.
 Run with:
 
     poetry run pytest -m nonmock tests/test_configured_models_nonmock.py -q -s
+    poetry run pytest -m nonmock tests/test_configured_models_nonmock.py -q -s --models-config path/to/models.json
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from ai_api_unified.util.env_settings import EnvSettings
 pytestmark = pytest.mark.nonmock
 
 TUPLE_CONFIG_KEYS: tuple[str, ...] = (
+    "AI_MODELS_CONFIG",
     "COMPLETIONS_ROUTER_CONFIG",
     "COMPLETIONS_ROUTER_CLASSIFIER",
     "COMPLETIONS_FALLBACKS",
@@ -35,10 +37,16 @@ TUPLE_CONFIG_KEYS: tuple[str, ...] = (
 )
 
 
-def test_every_configured_model_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_every_configured_model_is_available(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
     # The suite blanks these so mocked tests never see a developer's config;
-    # this test exists to read exactly that config, from .env.
+    # this test exists to read exactly that config: --models-config when
+    # given, else .env and the models.json it names.
+    str_option: str | None = request.config.getoption("--models-config")
     for str_key in TUPLE_CONFIG_KEYS:
+        if str_key == "AI_MODELS_CONFIG" and str_option:
+            continue
         monkeypatch.delenv(str_key, raising=False)
     env = EnvSettings()
     str_engine = str(env.get_setting("COMPLETIONS_ENGINE", "") or "")

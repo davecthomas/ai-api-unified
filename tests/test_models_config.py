@@ -117,6 +117,20 @@ class TestLoad:
         )
         assert config.setting("AI_MODEL_CHECK") == "prune"
 
+    def test_fixture_file_validates_and_denies_one_of_its_own_tier_models(self) -> None:
+        config = load_models_config(
+            str(REPO_ROOT / "tests" / "fixtures" / "models_test.json")
+        )
+        assert config.comment and config.router is not None
+        list_denied = [
+            c.label
+            for tier in config.router.tiers
+            for c in tier.candidates
+            if config.policy.denial_reason(c.engine, c.model)
+        ]
+        assert list_denied == ["claude:claude-fable-5-1"]
+        assert config.policy.is_allowed("claude", "claude-opus-5-5")
+
     def test_setting_mapping_and_unset_keys(self) -> None:
         config = AIModelsConfig.model_validate(
             {

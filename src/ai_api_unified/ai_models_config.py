@@ -211,6 +211,8 @@ class AIModelsConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # A free-text note for humans reading the file; ignored by the library.
+    comment: str | None = Field(default=None, alias="_comment")
     allow: list[str] = Field(default_factory=list)
     deny: list[str] = Field(default_factory=list)
     completions: AICompletionsSelection = Field(default_factory=AICompletionsSelection)

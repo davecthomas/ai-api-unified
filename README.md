@@ -2224,6 +2224,15 @@ Live provider tests:
 poetry run pytest -m nonmock -s -vv
 ```
 
+Tests never read your own `models.json`: the suite blanks `AI_MODELS_CONFIG`.
+Live tests that need a models config read `tests/fixtures/models_test.json`,
+whose hard tier lists a model its own deny list rejects so the policy tests
+prove the deny list bites. To run them against any file:
+
+```bash
+poetry run pytest -m nonmock tests/test_model_policy_nonmock.py tests/test_configured_models_nonmock.py -q -s --models-config ./models.json
+```
+
 Notes for live tests:
 
 - install the matching provider extras first
