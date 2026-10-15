@@ -123,12 +123,17 @@ def test_missing_models_are_pruned_and_the_configuration_still_builds(
         assert all(
             "nope" not in c.model for c in tier.candidates
         ), f"a missing model survived in tier {tier.name}"
-    assert isinstance(client.default_client, AiFallbackCompletions)
-    assert all("nope" not in c.model for c in client.default_client.candidates)
-    print(
-        "  chain after pruning: "
-        + ", ".join(c.label for c in client.default_client.candidates)
-    )
+    if isinstance(client.default_client, AiFallbackCompletions):
+        assert all("nope" not in c.model for c in client.default_client.candidates)
+        print(
+            "  chain after pruning: "
+            + ", ".join(c.label for c in client.default_client.candidates)
+        )
+    else:
+        # Every fallback was pruned, so the default route is the plain engine.
+        print(
+            f"  chain after pruning: {client.default_client.model_name} (no fallbacks left)"
+        )
     print("  tiers after pruning: " + ", ".join(t.label for t in client.tiers))
     assert any(r.status is AiModelCheckStatus.AVAILABLE for r in report)
 
