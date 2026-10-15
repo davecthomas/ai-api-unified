@@ -9,6 +9,7 @@ from ..ai_base import (
     SupportedDataType,
 )
 from ..pricing.pricing_registry import PROVIDER_GOOGLE, get_model_pricing
+from ..thinking import gemini_thinking_capabilities
 
 
 class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
@@ -99,6 +100,7 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
             )
 
         capabilities["pricing"] = get_model_pricing(PROVIDER_GOOGLE, model_name)
+        capabilities["thinking"] = gemini_thinking_capabilities(model_name)
         return cls(**capabilities)
 
 

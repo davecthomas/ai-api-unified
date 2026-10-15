@@ -130,6 +130,8 @@ class AICompletionsSelection(BaseModel):
     fallbacks: list[str] = Field(default_factory=list)
     fallback_on: str | list[str] | None = None
     retry_policy: str | None = None
+    # Provider-neutral thinking level: off, minimal, low, medium, high, max.
+    thinking: str | None = None
 
 
 class AIClassifierSelection(BaseModel):
@@ -323,6 +325,7 @@ DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
     "COMPLETIONS_FALLBACKS": lambda c: c.completions.fallbacks,
     "COMPLETIONS_FALLBACK_ON": lambda c: c.completions.fallback_on,
     "COMPLETIONS_RETRY_POLICY": lambda c: c.completions.retry_policy,
+    "COMPLETIONS_THINKING": lambda c: c.completions.thinking,
     "CLASSIFIER_ENGINE": lambda c: c.classifier.engine,
     "CLASSIFIER_MODEL_NAME": lambda c: c.classifier.model,
     "COMPLETIONS_ROUTER_CLASSIFIER": _classifier_pair,

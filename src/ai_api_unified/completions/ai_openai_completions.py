@@ -36,6 +36,11 @@ from ..ai_base import (
     RETRY_POLICY_NONE,
     SupportedDataType,
 )
+from ..thinking import (
+    DICT_OPENAI_EFFORT,
+    AIThinkingLevel,
+    openai_thinking_capabilities,
+)
 from ..ai_provider_exceptions import (
     FROZENSET_TRANSIENT_FALLBACK_REASONS,
     AiFallbackReason,
@@ -182,6 +187,7 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
 
         # 2) Pricing from the central registry (single source of truth)
         capabilities["pricing"] = get_model_pricing(PROVIDER_OPENAI, normalized_name)
+        capabilities["thinking"] = openai_thinking_capabilities(normalized_name)
 
         # 3) Family properties: map by prefix to avoid duplicating per-model conditionals
         # gpt-5.6 is checked before gpt-5 because it shares the prefix.
@@ -279,6 +285,24 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
     # reasoning models require max_completion_tokens; many OpenAI-compatible
     # servers accept only the older max_tokens.
     MAX_TOKENS_REQUEST_FIELD: ClassVar[str] = "max_completion_tokens"
+    # The request field that carries the thinking level; the Responses
+    # engine nests it instead.
+    THINKING_REQUEST_FIELD: ClassVar[str] = "reasoning_effort"
+
+    def _thinking_request_kwargs(
+        self, other_params: AICompletionsPromptParamsBase | None = None
+    ) -> dict[str, Any]:
+        """
+        The `reasoning_effort` field that applies this call's thinking level,
+        or nothing on a model without a reasoning control. Merged before
+        provider_options, so a caller's own value wins.
+        """
+        level: AIThinkingLevel | None = self._thinking_for_call(other_params).applied
+        if level is None:
+            # Early return: no reasoning control on this model.
+            return {}
+        # Normal return with the provider's effort value.
+        return {self.THINKING_REQUEST_FIELD: DICT_OPENAI_EFFORT[level]}
 
     def __init__(self, model: str = "", **kwargs: Any):
         """
@@ -670,6 +694,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 "type": "function",
                 "function": {"name": tool_choice},
             }
+        dict_request_kwargs.update(self._thinking_request_kwargs())
         # provider_options merge last so callers can extend the raw request.
         dict_request_kwargs.update(dict_merge_options)
         # Normal return with the chat-shaped conversation request.
@@ -1117,6 +1142,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             },
         }
         dict_request_kwargs.update(self._build_prompt_cache_kwargs(prompt_cache))
+        dict_request_kwargs.update(self._thinking_request_kwargs())
         dict_request_kwargs.update(dict_merge_options)
         # Normal return with the chat-shaped structured request.
         return dict_request_kwargs
@@ -1190,6 +1216,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         }
         if max_response_tokens is not None:
             dict_request_kwargs[self.MAX_TOKENS_REQUEST_FIELD] = max_response_tokens
+        dict_request_kwargs.update(self._thinking_request_kwargs(other_params))
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_completions_observability_input_metadata(
                 prompt=str_redacted_prompt,
@@ -1370,6 +1397,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         **self._build_prompt_cache_kwargs(
                             self._resolve_prompt_cache_hint(other_params)
                         ),
+                        **self._thinking_request_kwargs(other_params),
                     )
                     str_finish_reason: str = str(completion.choices[0].finish_reason)
                     choice_msg = completion.choices[0].message
@@ -1535,6 +1563,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                         **self._build_prompt_cache_kwargs(
                             self._resolve_prompt_cache_hint(other_params)
                         ),
+                        **self._thinking_request_kwargs(other_params),
                     )
                 except Exception as exception:
                     self._raise_request_error(exception)
@@ -1682,6 +1711,7 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
                 **self._build_prompt_cache_kwargs(
                     self._resolve_prompt_cache_hint(other_params)
                 ),
+                **self._thinking_request_kwargs(other_params),
             )
             # Loop through provider chunks so callers see text as it arrives.
             for chunk in stream:

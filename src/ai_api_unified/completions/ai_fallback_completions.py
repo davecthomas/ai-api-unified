@@ -398,6 +398,12 @@ class AiFallbackCompletions(AIBaseCompletions):
         return client if client is not None else self.primary
 
     @property
+    def last_thinking(self) -> Any:
+        """The thinking resolution of the candidate that served the last call."""
+        # Normal return via the serving candidate.
+        return self.last_route_client.last_thinking
+
+    @property
     def capabilities(self) -> AICompletionsCapabilitiesBase:
         """The primary's capabilities."""
         # Normal return with the primary descriptor.

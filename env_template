@@ -93,6 +93,12 @@ GOOGLE_AUTH_METHOD=api_key
 # model_unavailable to also fail over on an unknown model id, or timeout to
 # fail over when request_timeout_seconds passes with no answer.
 # COMPLETIONS_FALLBACK_ON=unavailable,rate_limited,quota_exhausted,auth_rejected
+# Provider-neutral thinking level applied to every completions call unless a
+# call overrides it: off, minimal, low, medium, high, max. Default medium.
+# Each engine maps it to its provider's own control (Anthropic effort, OpenAI
+# reasoning_effort, Gemini thinking_level or thinking_budget); a model that
+# cannot honor the level applies the nearest one it supports and records both.
+# COMPLETIONS_THINKING=medium
 # Optional complexity router: a JSON file path (or inline JSON) listing tiers of
 # engine:model chains. The configured completions LLM is the default route.
 # See README "Model routing".

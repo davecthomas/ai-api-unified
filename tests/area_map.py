@@ -183,6 +183,21 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_finops_cost_observability.py": ("middleware", "pricing"),
     "test_request_cost.py": ("middleware", "pricing", "completions", "core"),
     "test_billed_failures.py": ("middleware", "pricing", "completions", "core"),
+    "test_thinking_levels.py": (
+        "completions",
+        "core",
+        "engine_anthropic",
+        "engine_openai",
+        "engine_gemini",
+        "engine_bedrock",
+    ),
+    "test_thinking_levels_nonmock.py": (
+        "completions",
+        "core",
+        "engine_anthropic",
+        "engine_openai",
+        "engine_gemini",
+    ),
     "test_request_cost_nonmock.py": (
         "middleware",
         "pricing",
@@ -312,6 +327,7 @@ LIST_SOURCE_AREA_RULES: list[tuple[str, tuple[str, ...] | str]] = [
     ("src/ai_api_unified/embeddings/", ("embeddings",)),
     ("src/ai_api_unified/classification/", ("classification",)),
     ("src/ai_api_unified/routing/", ("completions", "core")),
+    ("src/ai_api_unified/thinking.py", ALL_AREAS),
     (
         "src/ai_api_unified/completions/ai_router_completions.py",
         ("completions", "core"),

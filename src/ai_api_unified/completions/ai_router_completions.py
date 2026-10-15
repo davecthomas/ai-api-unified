@@ -252,6 +252,12 @@ class AiRouterCompletions(AIBaseCompletions):
     # ── Pass-through to the default client ──────────────────────────────────
 
     @property
+    def last_thinking(self) -> Any:
+        """The thinking resolution of the client that served the last call."""
+        # Normal return via the serving client.
+        return self._last_route_client.last_thinking
+
+    @property
     def capabilities(self) -> AICompletionsCapabilitiesBase:
         # Normal return with the default client's capabilities.
         return self._default_client.capabilities

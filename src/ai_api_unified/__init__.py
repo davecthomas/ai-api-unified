@@ -82,6 +82,11 @@ from .completions.ai_fallback_completions import (
     AIFallbackCandidate,
     AiFallbackCompletions,
 )
+from .thinking import (
+    AIThinkingCapabilities,
+    AIThinkingLevel,
+    AIThinkingResolution,
+)
 from .middleware.request_cost import (
     AIRequestCostLineItem,
     AIRequestCostReport,
@@ -147,6 +152,9 @@ __all__: list[str] = [
     "AIRequestCostLineItem",
     "AIRequestCostReport",
     "AIStructuredOutputResult",
+    "AIThinkingCapabilities",
+    "AIThinkingLevel",
+    "AIThinkingResolution",
     "AITokenUsage",
     "AITool",
     "AIToolCall",

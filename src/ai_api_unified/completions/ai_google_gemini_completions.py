@@ -68,6 +68,7 @@ from ..ai_base import (
     normalize_retry_policy,
     resolve_retry_policy,
 )
+from ..thinking import AIThinkingLevel, gemini_thinking_config
 from ..ai_provider_exceptions import (
     AiFallbackReason,
     AiProviderRequestError,
@@ -878,6 +879,24 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 )
         return [{"role": "user", "parts": user_parts}]
 
+    def _thinking_config_kwargs(
+        self, other_params: AICompletionsPromptParamsBase | None = None
+    ) -> dict[str, Any]:
+        """
+        The `thinking_config` entry that applies this call's thinking level
+        (`thinking_level` on Gemini 3, `thinking_budget` on 2.5), or nothing
+        on a model without a thinking control. Merged before
+        provider_options, so a caller's own thinking_config wins.
+        """
+        level: AIThinkingLevel | None = self._thinking_for_call(other_params).applied
+        if level is None:
+            # Early return: no thinking control on this model.
+            return {}
+        # Normal return with the provider config for the level.
+        return {
+            "thinking_config": gemini_thinking_config(self.completions_model, level)
+        }
+
     def _build_config(
         self,
         params: AICompletionsPromptParamsGoogle,
@@ -906,6 +925,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
 
         if system_prompt is not None:
             config_kwargs["system_instruction"] = system_prompt
+        config_kwargs.update(self._thinking_config_kwargs(params))
 
         if response_schema is not None or response_json_schema is not None:
             config_kwargs["response_mime_type"] = "application/json"
@@ -1402,6 +1422,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             dict_config_kwargs["http_options"] = genai.types.HttpOptions(
                 timeout=int(request_timeout_seconds * 1000)
             )
+        dict_config_kwargs.update(self._thinking_config_kwargs())
         dict_config_kwargs.update(dict_merge_options)
         # Normal return with the conversation config kwargs.
         return dict_config_kwargs
@@ -1668,6 +1689,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             dict_config_kwargs["http_options"] = genai.types.HttpOptions(
                 timeout=int(request_timeout_seconds * 1000)
             )
+        dict_config_kwargs.update(self._thinking_config_kwargs())
         dict_config_kwargs.update(dict_merge_options)
         # Normal return with contents and config kwargs.
         return list_contents, dict_config_kwargs

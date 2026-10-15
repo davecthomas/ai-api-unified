@@ -59,6 +59,17 @@ from ai_api_unified.middleware.request_cost import (
 )
 from ai_api_unified.pricing.model_pricing import AIModelPricing
 from ai_api_unified.middleware.pii_redactor import AiApiPiiMiddleware
+from ai_api_unified.thinking import (
+    COMPLETIONS_THINKING_KEY,
+    DEFAULT_THINKING_LEVEL,
+    THINKING_CALL_OVERRIDE,
+    AIThinkingCapabilities,
+    AIThinkingLevel,
+    AIThinkingResolution,
+    parse_thinking_level,
+    resolve_thinking_level,
+    thinking_event_fields,
+)
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 ProviderCallReturnType = TypeVar("ProviderCallReturnType")
@@ -142,6 +153,9 @@ class AICompletionsCapabilitiesBase(BaseModel):
     implicit_prompt_caching: bool = False
     supports_prompt_cache_hint: bool = False
     pricing: AIModelPricing | None = None
+    # The standard thinking levels this model honors exactly; None when the
+    # model exposes no thinking control. See AIThinkingLevel.
+    thinking: AIThinkingCapabilities | None = None
 
 
 class AIIncludedMediaParamsBase(BaseModel):
@@ -278,6 +292,9 @@ class AICompletionsPromptParamsBase(AIIncludedMediaParamsBase, ABC):
     # by send_prompt, asend_prompt, send_prompt_streaming, and
     # strict_schema_prompt; see AIPromptCacheHint.
     prompt_cache: AIPromptCacheHint | None = None
+    # Per-call thinking level; None uses the client's configured level. See
+    # AIThinkingLevel and AIBaseCompletions.thinking_level.
+    thinking: AIThinkingLevel | None = None
 
 
 class AIBatchStatus(str, Enum):
@@ -671,6 +688,8 @@ class AITurnResult(BaseModel):
         provider_engine: Engine token that served the turn, set by a fallback
             client; None when a single engine served it.
         model_name: Model that served the turn, set alongside provider_engine.
+        thinking: The thinking level requested and the one applied; see
+            AIThinkingResolution.
     """
 
     text: str | None = None
@@ -680,6 +699,7 @@ class AITurnResult(BaseModel):
     usage: AITokenUsage = Field(default_factory=AITokenUsage)
     provider_engine: str | None = None
     model_name: str | None = None
+    thinking: AIThinkingResolution | None = None
 
 
 class AIStructuredOutputResult(BaseModel):
@@ -696,6 +716,8 @@ class AIStructuredOutputResult(BaseModel):
         provider_engine: Engine token that served the call, set by a fallback
             client; None when a single engine served it.
         model_name: Model that served the call, set alongside provider_engine.
+        thinking: The thinking level requested and the one applied; see
+            AIThinkingResolution.
     """
 
     data: dict[str, Any] | None = None
@@ -704,6 +726,7 @@ class AIStructuredOutputResult(BaseModel):
     raw_text: str = ""
     provider_engine: str | None = None
     model_name: str | None = None
+    thinking: AIThinkingResolution | None = None
 
 
 class AIEmbeddingsCapabilitiesBase(BaseModel):
@@ -950,6 +973,11 @@ class AIBase(ABC):
             dict_context_metadata["session_id"] = observability_context.session_id
         if observability_context.workflow_id is not None:
             dict_context_metadata["workflow_id"] = observability_context.workflow_id
+        last_thinking: Any = getattr(self, "_last_thinking", None)
+        if capability == self.CLIENT_TYPE_COMPLETIONS and last_thinking is not None:
+            # Both levels ride on every completions event so a consumer sees
+            # when a model applied a level other than the one requested.
+            dict_context_metadata.update(thinking_event_fields(last_thinking))
         model_name: str | None = self._resolve_observability_model_name()
         model_version: str | None = self._resolve_observability_model_version(
             model_name=model_name
@@ -2689,10 +2717,179 @@ class AIBaseCompletions(AIBase):
     )
     RESPONSE_MODE_TEXT: ClassVar[str] = "text"
     RESPONSE_MODE_STRUCTURED: ClassVar[str] = "structured"
+    # Reserved provider_options key: a per-call thinking level on
+    # send_conversation and send_structured_output; stripped before the
+    # options reach the provider request.
+    PROVIDER_OPTION_THINKING: ClassVar[str] = "thinking_level"
+
+    _thinking_level: AIThinkingLevel | None = None
+    _last_thinking: AIThinkingResolution | None = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.pii_middleware = AiApiPiiMiddleware()
+
+    # ── Thinking levels ──────────────────────────────────────────────────────
+
+    @property
+    def thinking_level(self) -> AIThinkingLevel:
+        """
+        The thinking level this client requests on every call unless a call
+        overrides it: the `thinking=` factory argument, else the
+        COMPLETIONS_THINKING setting (`completions.thinking` in models.json),
+        else medium. Set it to change the default for later calls.
+        """
+        if self._thinking_level is None:
+            from ai_api_unified.util.env_settings import EnvSettings
+
+            self._thinking_level = (
+                parse_thinking_level(
+                    EnvSettings().get_setting(COMPLETIONS_THINKING_KEY, None)
+                )
+                or DEFAULT_THINKING_LEVEL
+            )
+        # Normal return with the configured level.
+        return self._thinking_level
+
+    @thinking_level.setter
+    def thinking_level(self, value: AIThinkingLevel | str | None) -> None:
+        self._thinking_level = parse_thinking_level(value)
+        # Normal return after storing the level (None re-reads configuration).
+        return None
+
+    @property
+    def last_thinking(self) -> AIThinkingResolution | None:
+        """
+        The thinking level requested and applied on this client's last call,
+        for send_prompt and the other text-returning methods whose result
+        has nowhere to carry it. Turn and structured results carry their own
+        `thinking` field.
+        """
+        # Normal return with the last resolution.
+        return self._last_thinking
+
+    def _thinking_for_call(
+        self, other_params: AICompletionsPromptParamsBase | None = None
+    ) -> AIThinkingResolution:
+        """
+        Resolves the thinking level for one provider call.
+
+        Precedence: the per-call level (`other_params.thinking`, or the
+        reserved `thinking_level` provider option the templates stash for
+        the engine), then the client's level. The model's honored levels
+        decide what is applied; a difference is recorded on the resolution
+        and logged once per call.
+
+        Args:
+            other_params: The call's prompt parameters, if any.
+
+        Returns:
+            The resolution, also kept as `last_thinking`.
+        """
+        requested: AIThinkingLevel | None = (
+            other_params.thinking if other_params is not None else None
+        )
+        if requested is None:
+            requested = THINKING_CALL_OVERRIDE.get()
+        if requested is None:
+            requested = self.thinking_level
+        # Capabilities may be a test double or unbuilt on a partially
+        # constructed engine; treat anything but a real descriptor as none.
+        try:
+            thinking_caps: Any = getattr(self.capabilities, "thinking", None)
+        except Exception:
+            thinking_caps = None
+        if not isinstance(thinking_caps, AIThinkingCapabilities):
+            thinking_caps = None
+        resolution: AIThinkingResolution = resolve_thinking_level(
+            requested, thinking_caps
+        )
+        self._last_thinking = resolution
+        if not resolution.exact:
+            _LOGGER.info(
+                "THINKING: %s on %s cannot apply level %s; applying %s.",
+                type(self).__name__,
+                self.model_name,
+                resolution.requested.value,
+                resolution.applied.value if resolution.applied else "none",
+                extra={
+                    "ai_thinking_event": "nearest_level",
+                    "model": self.model_name,
+                    "reason": resolution.reason,
+                    **thinking_event_fields(resolution),
+                },
+            )
+        # Normal return with the resolution the engine applies.
+        return resolution
+
+    def _thinking_applied_override(
+        self, applied: AIThinkingLevel | None, reason: str
+    ) -> None:
+        """
+        Records that the engine applied a level other than the resolved one,
+        for an engine-specific reason (a forced tool choice the provider
+        rejects with thinking on, a max_tokens too small for a budget).
+        """
+        if self._last_thinking is not None:
+            self._last_thinking = self._last_thinking.model_copy(
+                update={"applied": applied, "exact": False, "reason": reason}
+            )
+            _LOGGER.info(
+                "THINKING: %s on %s applied %s instead of %s (%s).",
+                type(self).__name__,
+                self.model_name,
+                applied.value if applied else "none",
+                self._last_thinking.requested.value,
+                reason,
+                extra={
+                    "ai_thinking_event": "engine_override",
+                    "model": self.model_name,
+                    "reason": reason,
+                    **thinking_event_fields(self._last_thinking),
+                },
+            )
+        # Normal return after recording the override.
+        return None
+
+    def _stamp_thinking(self, result: Any) -> Any:
+        """Copies the last resolution onto a turn or structured result lacking one."""
+        if (
+            isinstance(result, (AITurnResult, AIStructuredOutputResult))
+            and getattr(result, "thinking", None) is None
+            and self._last_thinking is not None
+        ):
+            try:
+                result.thinking = self._last_thinking
+            except (AttributeError, TypeError):
+                # A test double standing in for the result has no field to set.
+                pass
+        # Normal return with the stamped result.
+        return result
+
+    @staticmethod
+    def _split_thinking_option(
+        provider_options: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, AIThinkingLevel | None]:
+        """
+        Removes the reserved per-call thinking level from provider_options.
+
+        Args:
+            provider_options: The call's provider_options, if any.
+
+        Returns:
+            (the options without the key, the parsed level or None).
+        """
+        if not provider_options or (
+            AIBaseCompletions.PROVIDER_OPTION_THINKING not in provider_options
+        ):
+            # Early return: nothing to strip.
+            return provider_options, None
+        dict_options: dict[str, Any] = dict(provider_options)
+        level: AIThinkingLevel | None = parse_thinking_level(
+            dict_options.pop(AIBaseCompletions.PROVIDER_OPTION_THINKING)
+        )
+        # Normal return with the stripped options and the level.
+        return dict_options or None, level
 
     def _build_structured_token_limit_error_message(
         self,
@@ -3829,21 +4026,28 @@ class AIBaseCompletions(AIBase):
                 max_response_tokens=max_response_tokens,
             )
         )
-        structured_result: AIStructuredOutputResult = (
-            self._send_structured_output_provider(
-                response_schema=dict_effective_schema,
-                system_prompt=system_prompt,
-                prompt=prompt,
-                messages=self._normalize_messages(messages),
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=provider_options,
-                **self._prompt_cache_hook_kwargs(prompt_cache),
-            )
+        provider_options, thinking_override = self._split_thinking_option(
+            provider_options
         )
+        token_thinking = THINKING_CALL_OVERRIDE.set(thinking_override)
+        try:
+            structured_result: AIStructuredOutputResult = (
+                self._send_structured_output_provider(
+                    response_schema=dict_effective_schema,
+                    system_prompt=system_prompt,
+                    prompt=prompt,
+                    messages=self._normalize_messages(messages),
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=provider_options,
+                    **self._prompt_cache_hook_kwargs(prompt_cache),
+                )
+            )
+        finally:
+            THINKING_CALL_OVERRIDE.reset(token_thinking)
         # Normal return after optional pydantic validation of the parsed data.
         return self._validate_structured_output_result(
-            structured_result=structured_result,
+            structured_result=self._stamp_thinking(structured_result),
             response_model=response_model,
         )
 
@@ -4038,17 +4242,25 @@ class AIBaseCompletions(AIBase):
             tool_choice=tool_choice,
         )
         list_messages: list[dict[str, Any]] = self._normalize_messages(messages) or []
-        # Normal return with the provider-implemented conversation turn.
-        return self._send_conversation_provider(
-            system_prompt=system_prompt,
-            messages=list_messages,
-            tools=list_tools,
-            tool_choice=tool_choice,
-            max_response_tokens=max_response_tokens,
-            request_timeout_seconds=request_timeout_seconds,
-            provider_options=provider_options,
-            **self._prompt_cache_hook_kwargs(prompt_cache),
+        provider_options, thinking_override = self._split_thinking_option(
+            provider_options
         )
+        token_thinking = THINKING_CALL_OVERRIDE.set(thinking_override)
+        try:
+            turn_result: AITurnResult = self._send_conversation_provider(
+                system_prompt=system_prompt,
+                messages=list_messages,
+                tools=list_tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+                request_timeout_seconds=request_timeout_seconds,
+                provider_options=provider_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
+            )
+        finally:
+            THINKING_CALL_OVERRIDE.reset(token_thinking)
+        # Normal return with the provider-implemented conversation turn.
+        return self._stamp_thinking(turn_result)
 
     def _send_conversation_provider(
         self,
@@ -4190,6 +4402,9 @@ class AIBaseCompletions(AIBase):
         str_retry_policy: str | None = dict_merge_options.pop(
             self.PROVIDER_OPTION_RETRY_POLICY, None
         )
+        # The per-call thinking level is the templates' to apply; an engine
+        # reached directly still must not forward it to the SDK.
+        dict_merge_options.pop(AIBaseCompletions.PROVIDER_OPTION_THINKING, None)
         # Normal return with the filtered merge options and the retry override.
         return self._filter_known_provider_options(dict_merge_options), str_retry_policy
 
@@ -4431,21 +4646,28 @@ class AIBaseCompletions(AIBase):
                 max_response_tokens=max_response_tokens,
             )
         )
-        structured_result: AIStructuredOutputResult = (
-            await self._asend_structured_output_provider(
-                response_schema=dict_effective_schema,
-                system_prompt=system_prompt,
-                prompt=prompt,
-                messages=self._normalize_messages(messages),
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=provider_options,
-                **self._prompt_cache_hook_kwargs(prompt_cache),
-            )
+        provider_options, thinking_override = self._split_thinking_option(
+            provider_options
         )
+        token_thinking = THINKING_CALL_OVERRIDE.set(thinking_override)
+        try:
+            structured_result: AIStructuredOutputResult = (
+                await self._asend_structured_output_provider(
+                    response_schema=dict_effective_schema,
+                    system_prompt=system_prompt,
+                    prompt=prompt,
+                    messages=self._normalize_messages(messages),
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=provider_options,
+                    **self._prompt_cache_hook_kwargs(prompt_cache),
+                )
+            )
+        finally:
+            THINKING_CALL_OVERRIDE.reset(token_thinking)
         # Normal return after optional pydantic validation of the parsed data.
         return self._validate_structured_output_result(
-            structured_result=structured_result,
+            structured_result=self._stamp_thinking(structured_result),
             response_model=response_model,
         )
 
@@ -4492,17 +4714,25 @@ class AIBaseCompletions(AIBase):
             tool_choice=tool_choice,
         )
         list_messages: list[dict[str, Any]] = self._normalize_messages(messages) or []
-        # Normal return with the provider-implemented async conversation turn.
-        return await self._asend_conversation_provider(
-            system_prompt=system_prompt,
-            messages=list_messages,
-            tools=list_tools,
-            tool_choice=tool_choice,
-            max_response_tokens=max_response_tokens,
-            request_timeout_seconds=request_timeout_seconds,
-            provider_options=provider_options,
-            **self._prompt_cache_hook_kwargs(prompt_cache),
+        provider_options, thinking_override = self._split_thinking_option(
+            provider_options
         )
+        token_thinking = THINKING_CALL_OVERRIDE.set(thinking_override)
+        try:
+            turn_result: AITurnResult = await self._asend_conversation_provider(
+                system_prompt=system_prompt,
+                messages=list_messages,
+                tools=list_tools,
+                tool_choice=tool_choice,
+                max_response_tokens=max_response_tokens,
+                request_timeout_seconds=request_timeout_seconds,
+                provider_options=provider_options,
+                **self._prompt_cache_hook_kwargs(prompt_cache),
+            )
+        finally:
+            THINKING_CALL_OVERRIDE.reset(token_thinking)
+        # Normal return with the provider-implemented async conversation turn.
+        return self._stamp_thinking(turn_result)
 
     async def _asend_conversation_provider(
         self,

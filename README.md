@@ -1,4 +1,4 @@
-# ai-api-unified 3.4.0
+# ai-api-unified 3.5.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -430,6 +430,80 @@ has no per-call timeout). See the support matrix below.
 
 Unsupported combinations raise the typed `AiProviderCapabilityUnsupportedError`
 and each engine's `client.capabilities` flags report support at runtime.
+
+### Thinking levels
+
+How much a model thinks before answering is one provider-neutral setting,
+`AIThinkingLevel`, with six values: `off`, `minimal`, `low`, `medium`,
+`high`, `max`. Configuration and application code use the level; each
+engine applies it through its provider's own control, and no code or config
+names a provider field. The default is `medium`.
+
+```python
+from ai_api_unified import AIFactory, AIThinkingLevel
+
+client = AIFactory.get_ai_completions_client(thinking="high")   # or COMPLETIONS_THINKING=high
+client.thinking_level = AIThinkingLevel.LOW                      # change the default for later calls
+
+text = client.send_prompt("...", other_params=params_with(thinking=AIThinkingLevel.MAX))
+turn = client.send_conversation(system, messages, provider_options={"thinking_level": "off"})
+result = client.send_structured_output(prompt, response_model=Summary,
+                                       provider_options={"thinking_level": "low"})
+
+turn.thinking.requested, turn.thinking.applied, turn.thinking.exact   # AIThinkingResolution
+client.last_thinking                                                   # for send_prompt and friends
+```
+
+Precedence: the call (`other_params.thinking` on the text methods; the
+reserved `thinking_level` key in `provider_options` on `send_conversation`
+and `send_structured_output`, stripped before the options reach the
+provider), then the client (`thinking_level`, set by the `thinking=`
+factory argument), then `COMPLETIONS_THINKING` or `completions.thinking` in
+`models.json`, then `medium`. The factory applies one level to the primary,
+its fallbacks, and every router tier, so a request that fails over keeps its
+level.
+
+`client.capabilities.thinking` lists the standard levels the model honors
+exactly (`None` when the model has no thinking control). A requested level
+outside that list resolves to the nearest one the model supports, and a tie
+goes to the lower level, since lower thinking is cheaper and the caller
+asked for no more. The library records both levels: on `result.thinking` and
+`client.last_thinking` (`requested`, `applied`, `exact`, and a `reason`
+such as `unsupported_level`, `no_thinking_control`, `forced_tool_choice`,
+`assistant_prefill`, or `max_tokens_too_small`), on every completions
+observability event (`thinking_requested`, `thinking_applied`,
+`thinking_exact`), and in an `ai_thinking_event` log line when they differ.
+
+How each engine applies a level:
+
+| Engine | Models | `off` | `minimal` | `low` / `medium` / `high` / `max` |
+|---|---|---|---|---|
+| `claude`, Bedrock Claude | Fable 5 / 5.1, Opus 5.5 (always on) | nearest: `low` | nearest: `low` | `output_config.effort` |
+| `claude`, Bedrock Claude | Opus 5, Haiku 5.5, Sonnet 5, Opus 4.6 to 4.8, Sonnet 4.6 | `thinking.type: disabled` | nearest: `off` | `thinking.type: adaptive` + `output_config.effort` |
+| `claude`, Bedrock Claude | Sonnet 5.5 | `thinking.type: between_tools` | nearest: `off` | `thinking.type: adaptive` + `output_config.effort` |
+| `claude`, Bedrock Claude | Haiku 4.5, Sonnet 4.5, Opus 4.5 and older | omit `thinking` | nearest: `off` | `thinking.budget_tokens` 1024 / 4096 / 16384 / 32768, capped below `max_tokens` |
+| `openai`, `openai-responses` | GPT-5.1 and later, GPT-6 | `reasoning_effort: none` (not on GPT-6 Astra) | nearest | `low` / `medium` / `high` / `xhigh` |
+| `openai`, `openai-responses` | GPT-5, GPT-5 mini and nano | nearest: `minimal` | `minimal` | `low` / `medium` / `high` / nearest: `high` |
+| `openai`, `openai-responses` | o-series | nearest: `low` | nearest: `low` | `low` / `medium` / `high` / nearest: `high` |
+| `openai`, `openai-compatible` | GPT-4.1, GPT-4o, uncataloged | no control | no control | no control |
+| `google-gemini` | Gemini 3 Flash and later | nearest: `minimal` | `thinking_level: MINIMAL` | `LOW` / `MEDIUM` / `HIGH` / nearest: `HIGH` |
+| `google-gemini` | Gemini 3 Pro | nearest: `low` | nearest: `low` | `LOW` / nearest / `HIGH` / nearest: `HIGH` |
+| `google-gemini` | Gemini 2.5 Flash, Flash Lite | `thinking_budget: 0` | nearest: `off` | `thinking_budget` 1024 / 8192 / 16384 / 24576 |
+| `google-gemini` | Gemini 2.5 Pro | nearest: `low` | nearest: `low` | `thinking_budget` 1024 / 8192 / 16384 / 32768 |
+| Bedrock | Nova, DeepSeek, Qwen, GLM | no control | no control | no control |
+
+On Bedrock the Claude fields travel under `additionalModelRequestFields`.
+The engines merge these fields before `provider_options`, so a caller's own
+`thinking`, `reasoning_effort`, or `thinking_config` still wins. Three
+request shapes turn thinking off on models that allow it, with the reason
+recorded: a forced `tool_choice` (Claude rejects the pair), an assistant
+prefill (Bedrock's `strict_schema_prompt` on pre-4.6 Claude), and a
+`max_tokens` with no room for the 1024-token minimum budget.
+
+The tables follow each provider's documentation as of October 2026 and the
+live test (`poetry run pytest -m nonmock tests/test_thinking_levels_nonmock.py -q`)
+exercises the configured models. When a model rejects a value the table
+lists, the provider returns its own 400; correct the table entry.
 
 ### Structured output extraction (send_structured_output)
 
@@ -1614,7 +1688,7 @@ the value may also be inline JSON).
 {
   "allow": ["claude:*", "google-gemini:*", "openai-decisions:*"],
   "deny":  ["openai:gpt-4*", "bedrock"],
-  "completions": {"engine": "google-gemini", "model": "gemini-2.5-flash",
+  "completions": {"engine": "google-gemini", "model": "gemini-2.5-flash", "thinking": "medium",
                   "fallbacks": ["claude:claude-sonnet-5"],
                   "fallback_on": "unavailable,rate_limited,quota_exhausted,auth_rejected"},
   "classifier":  {"engine": "openai-decisions", "model": "gpt-6-luna"},
@@ -1690,6 +1764,7 @@ you use, in `models.json` or as a variable:
 | `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
 | `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
 | `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted,auth_rejected` |
+| `COMPLETIONS_THINKING`      | Optional provider-neutral thinking level: `off`, `minimal`, `low`, `medium` (default), `high`, `max` (see Thinking levels) |
 | `AI_MODELS_CONFIG` | Path to `models.json`/`.yaml`, or inline JSON; unset uses `./models.json` when present; blank turns the file off |
 | `COMPLETIONS_ROUTER_CONFIG` | Override of the file's `router` section: a JSON file path or inline JSON mapping tiers to `engine:model` chains (see Model routing) |
 | `COMPLETIONS_ROUTER_CLASSIFIER` | Optional `engine:model` for the router's classifier, or `none`; default is the classification factory's resolution |

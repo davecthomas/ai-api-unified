@@ -42,6 +42,7 @@ DICT_KEY_TO_FIELD: dict[str, tuple[str, str]] = {
     "COMPLETIONS_FALLBACKS": ("completions", "fallbacks"),
     "COMPLETIONS_FALLBACK_ON": ("completions", "fallback_on"),
     "COMPLETIONS_RETRY_POLICY": ("completions", "retry_policy"),
+    "COMPLETIONS_THINKING": ("completions", "thinking"),
     "CLASSIFIER_ENGINE": ("classifier", "engine"),
     "CLASSIFIER_MODEL_NAME": ("classifier", "model"),
     "AI_MODEL_CHECK": ("model_check", "mode"),
@@ -78,6 +79,7 @@ TUPLE_SAMPLE_DEFAULTS: tuple[tuple[str, str], ...] = (
     ("model_check", "mode"),
     ("model_check", "timeout_seconds"),
     ("completions", "fallback_on"),
+    ("completions", "thinking"),
 )
 TUPLE_SECTION_ORDER: tuple[str, ...] = (
     "allow",
