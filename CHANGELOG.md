@@ -4,6 +4,25 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 2.35.0
+
+### Added
+
+- Model fallback within an engine family on a conversation that already
+  holds engine-shaped history. Such a turn used to be pinned to one
+  candidate, so with the chain `claude:opus, claude:sonnet, google-gemini`
+  a 529 from Opus after a tool call failed the turn though Sonnet reads the
+  same history. The turn now tries the family's later candidates in chain
+  order, under the same reason set and same-account skip as any call;
+  candidates of other families are left out of that turn without being
+  built. The next turn starts again at the family's first candidate.
+- When a sibling then fails with no trigger reason (it may reject a block
+  only its producer can replay, such as a signed thinking block), the
+  client raises the failure that moved the call, with the sibling's error
+  chained as `__cause__`, and logs `candidate_rejected_history`.
+- `served_by_fallback` now reports `fallback_from` as the candidate the
+  call started on, which on a family-bound turn may not be the primary.
+
 ## 2.34.0
 
 ### Added

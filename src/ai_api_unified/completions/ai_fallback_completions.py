@@ -18,10 +18,14 @@ refusal, or a timeout would not go better on a different model.
 Three limits follow from the engines' request shapes:
 
 - A conversation whose history already holds engine-shaped entries
-  (assistant raw_content, tool results) cannot replay on another engine.
-  The wrapper reads which engine family shaped the history and routes the
-  turn to a candidate of that family; a failure there propagates. Routing
-  is a function of the history, so one client can serve many conversations.
+  (assistant raw_content, tool results) cannot replay on another engine
+  family. The wrapper reads which family shaped the history, routes the
+  turn to the first candidate of that family, and on a trigger failure
+  tries the family's later candidates in chain order; candidates of other
+  families are left out. A later candidate that then fails for a reason
+  that is not a trigger (it may reject a shape only its sibling can replay)
+  raises the first failure, with its own chained as the cause. Routing is
+  a function of the history, so one client can serve many conversations.
 - An account-wide failure (by default QUOTA_EXHAUSTED or AUTH_REJECTED,
   unless the engine marks it per-model) makes the call skip later candidates
   on the same account (same engine and base_url) instead of spending a
@@ -68,6 +72,7 @@ FALLBACK_EVENT_SERVED: str = "served_by_fallback"
 FALLBACK_EVENT_EXHAUSTED: str = "chain_exhausted"
 FALLBACK_EVENT_UNBUILDABLE: str = "candidate_unbuildable"
 FALLBACK_EVENT_SKIPPED: str = "candidate_skipped"
+FALLBACK_EVENT_REJECTED_HISTORY: str = "candidate_rejected_history"
 
 # Reasons a fallback client acts on unless configured otherwise.
 DEFAULT_FALLBACK_REASONS: frozenset[AiFallbackReason] = frozenset(
@@ -86,6 +91,25 @@ FROZENSET_NEUTRAL_ROLES: frozenset[str] = frozenset({"user", "assistant", "syste
 # Engine families, by the request shape their conversation history takes.
 # Ordered so a subclass module (openai_responses) matches before its base
 # (openai) when walking a class's MRO.
+# Request-shape family by factory engine token, so a chain can tell which
+# candidates share a family before building them. A token outside this map
+# is resolved from the built client (engine_family_of) instead.
+DICT_ENGINE_FAMILY_BY_TOKEN: dict[str, str] = {
+    "openai": "openai",
+    "openai-compatible": "openai",
+    "openai-responses": "openai-responses",
+    "claude": "anthropic",
+    "google-gemini": "gemini",
+    # "anthropic" is Claude on Bedrock (AiBedrockCompletions): Converse shapes.
+    "anthropic": "bedrock",
+    "bedrock": "bedrock",
+    "nova": "bedrock",
+    "llama": "bedrock",
+    "mistral": "bedrock",
+    "cohere": "bedrock",
+    "ai21": "bedrock",
+}
+
 TUPLE_ENGINE_FAMILY_MODULE_MARKERS: tuple[tuple[str, str], ...] = (
     ("ai_openai_responses_completions", "openai-responses"),
     ("ai_openai_completions", "openai"),
@@ -481,6 +505,24 @@ class AiFallbackCompletions(AIBaseCompletions):
             if client is not self._UNBUILDABLE
         ]
 
+    def _candidate_family(self, int_index: int) -> str | None:
+        """
+        Names one candidate's request-shape family without building it.
+
+        Args:
+            int_index: Chain position.
+
+        Returns:
+            The family from the built client when there is one, else from
+            the engine token, else None when neither can say.
+        """
+        client: Any = self._clients.get(int_index)
+        if client is not None and client is not self._UNBUILDABLE:
+            # Early return with the built client's own family.
+            return engine_family_of(client)
+        # Normal return from the engine token, or None for an unknown one.
+        return DICT_ENGINE_FAMILY_BY_TOKEN.get(self._candidates[int_index].engine)
+
     def _route_for_history(self, messages: list[dict[str, Any]]) -> int | None:
         """
         Picks the candidate a conversation history can replay on.
@@ -491,7 +533,8 @@ class AiFallbackCompletions(AIBaseCompletions):
         Returns:
             None when the history is provider-neutral (any candidate will
             do), otherwise the first built candidate of the family that
-            shaped it. Only a built candidate can have produced history. A
+            shaped it; a failure there may move to the family's later
+            candidates. Only a built candidate can have produced history. A
             history that is not neutral but matches no known family (a key
             a provider's SDK added that this module does not list) pins to
             the candidate that served the most recent call, since that is
@@ -543,6 +586,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         bool_allow_fallback: bool,
         tuple_capabilities: tuple[str, ...],
         set_failed_accounts: set[tuple[str, str | None]],
+        str_family: str | None = None,
     ) -> Iterator[tuple[int, AIBaseCompletions, bool]]:
         """
         Yields the candidates one call may try, in order.
@@ -551,7 +595,9 @@ class AiFallbackCompletions(AIBaseCompletions):
         method raises the typed capability error there, as it would without
         a chain. A later candidate that lacks a required capability, or
         whose account already failed this call with an account-level reason,
-        is skipped with a warning.
+        is skipped with a warning. With str_family set, a later candidate of
+        another family is left out without a log line: it was never a
+        choice for this history.
 
         Args:
             int_start: Chain position to start from.
@@ -560,6 +606,8 @@ class AiFallbackCompletions(AIBaseCompletions):
             set_failed_accounts: Account keys that failed this call with an
                 account-level reason; filled in by _should_continue while the
                 caller iterates.
+            str_family: When set, only candidates of this request-shape
+                family may follow the starting one.
 
         Yields:
             (index, client, is_last) for each candidate to try.
@@ -569,6 +617,15 @@ class AiFallbackCompletions(AIBaseCompletions):
             if bool_allow_fallback
             else [int_start]
         )
+        if str_family is not None:
+            # Keep the start, the family's candidates, and any candidate
+            # whose family is only known once built.
+            list_indexes = [
+                int_index
+                for int_index in list_indexes
+                if int_index == int_start
+                or self._candidate_family(int_index) in (str_family, None)
+            ]
         # Loop over the chain positions this call may use.
         for int_index in list_indexes:
             candidate: AIFallbackCandidate = self._candidates[int_index]
@@ -585,6 +642,13 @@ class AiFallbackCompletions(AIBaseCompletions):
                 continue
             client: AIBaseCompletions | None = self._client_at(int_index)
             if client is None:
+                continue
+            if (
+                str_family is not None
+                and int_index != int_start
+                and engine_family_of(client) != str_family
+            ):
+                # The token did not name a family; the built client does.
                 continue
             if int_index != int_start:
                 list_missing: list[str] = [
@@ -690,7 +754,11 @@ class AiFallbackCompletions(AIBaseCompletions):
         )
 
     def _log_served_by_fallback(
-        self, int_index: int, str_operation: str, error: AiProviderRequestError
+        self,
+        int_index: int,
+        int_start: int,
+        str_operation: str,
+        error: AiProviderRequestError,
     ) -> None:
         """
         Logs that a fallback served a request the primary could not.
@@ -701,6 +769,7 @@ class AiFallbackCompletions(AIBaseCompletions):
 
         Args:
             int_index: Chain position that served the call.
+            int_start: Chain position the call started from.
             str_operation: Method name, for logs.
             error: The failure that started the failover.
         """
@@ -708,12 +777,12 @@ class AiFallbackCompletions(AIBaseCompletions):
             "FALLBACK SERVED: %s answered by %s after %s failed (%s).",
             str_operation,
             self._candidates[int_index].label,
-            self._candidates[0].label,
+            self._candidates[int_start].label,
             error.fallback_reason.value if error.fallback_reason else "",
             extra={
                 "ai_fallback_event": FALLBACK_EVENT_SERVED,
                 "operation": str_operation,
-                "fallback_from": self._candidates[0].label,
+                "fallback_from": self._candidates[int_start].label,
                 "fallback_to": self._candidates[int_index].label,
                 "fallback_reason": (
                     error.fallback_reason.value if error.fallback_reason else ""
@@ -777,6 +846,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         tuple_capabilities: tuple[str, ...] = (),
         bool_allow_fallback: bool = True,
         int_start: int = 0,
+        str_family: str | None = None,
     ) -> T:
         """
         Runs one call across the chain until a candidate serves it.
@@ -787,13 +857,18 @@ class AiFallbackCompletions(AIBaseCompletions):
             tuple_capabilities: Capability flags a fallback candidate needs.
             bool_allow_fallback: False keeps the call on the starting candidate.
             int_start: Chain position to start from.
+            str_family: When set, the history is engine-shaped and only this
+                family's candidates may follow the starting one.
 
         Returns:
             The first successful result.
 
         Raises:
             AiProviderRequestError: The last eligible failure when no later
-                candidate could be tried, or the first ineligible one.
+                candidate could be tried, or the first ineligible one. On a
+                family-bound call, a later candidate's ineligible failure
+                raises the first failure instead, with the later one as its
+                cause.
         """
         last_error: AiProviderRequestError | None = None
         set_failed_accounts: set[tuple[str, str | None]] = set()
@@ -803,6 +878,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             bool_allow_fallback=bool_allow_fallback,
             tuple_capabilities=tuple_capabilities,
             set_failed_accounts=set_failed_accounts,
+            str_family=str_family,
         ):
             try:
                 result: T = call(client)
@@ -814,11 +890,19 @@ class AiFallbackCompletions(AIBaseCompletions):
                     str_operation=str_operation,
                     set_failed_accounts=set_failed_accounts,
                 ):
-                    raise
+                    raised: AiProviderRequestError = self._first_failure(
+                        error, last_error, int_index, str_operation, str_family
+                    )
+                    if raised is error:
+                        # Bare re-raise keeps the engine's own cause chain.
+                        raise
+                    raise raised from error
                 last_error = error
                 continue
             if last_error is not None:
-                self._log_served_by_fallback(int_index, str_operation, last_error)
+                self._log_served_by_fallback(
+                    int_index, int_start, str_operation, last_error
+                )
             # Early return with the first result.
             return self._stamp_route(result, int_index)
         # Normal exit: every later candidate was skipped after a failure.
@@ -832,6 +916,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         tuple_capabilities: tuple[str, ...] = (),
         bool_allow_fallback: bool = True,
         int_start: int = 0,
+        str_family: str | None = None,
     ) -> T:
         """Async twin of _run."""
         last_error: AiProviderRequestError | None = None
@@ -842,6 +927,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             bool_allow_fallback=bool_allow_fallback,
             tuple_capabilities=tuple_capabilities,
             set_failed_accounts=set_failed_accounts,
+            str_family=str_family,
         ):
             try:
                 result: T = await call(client)
@@ -853,15 +939,71 @@ class AiFallbackCompletions(AIBaseCompletions):
                     str_operation=str_operation,
                     set_failed_accounts=set_failed_accounts,
                 ):
-                    raise
+                    raised: AiProviderRequestError = self._first_failure(
+                        error, last_error, int_index, str_operation, str_family
+                    )
+                    if raised is error:
+                        # Bare re-raise keeps the engine's own cause chain.
+                        raise
+                    raise raised from error
                 last_error = error
                 continue
             if last_error is not None:
-                self._log_served_by_fallback(int_index, str_operation, last_error)
+                self._log_served_by_fallback(
+                    int_index, int_start, str_operation, last_error
+                )
             # Early return with the first result.
             return self._stamp_route(result, int_index)
         # Normal exit: every later candidate was skipped after a failure.
         raise self._exhausted(last_error, int_start, str_operation)
+
+    def _first_failure(
+        self,
+        error: AiProviderRequestError,
+        first_error: AiProviderRequestError | None,
+        int_index: int,
+        str_operation: str,
+        str_family: str | None,
+    ) -> AiProviderRequestError:
+        """
+        Picks the error to raise when a candidate fails with no trigger.
+
+        On a family-bound call, a later candidate may reject a history that
+        only its sibling can replay (a signed thinking block, a reasoning
+        item bound to one model). Raising that rejection would hide the
+        failure that moved the call, so the first failure is raised and the
+        rejection becomes its cause. Everywhere else the error is its own.
+
+        Args:
+            error: The failure that is not a trigger.
+            first_error: The trigger failure that moved the call, if any.
+            int_index: Chain position that failed.
+            str_operation: Method name, for logs.
+            str_family: The family the call is bound to, if any.
+
+        Returns:
+            The error to raise.
+        """
+        if str_family is None or first_error is None:
+            # Normal return: not a family-bound failover.
+            return error
+        _LOGGER.error(
+            "FALLBACK: %s on %s rejected the %s history (status %s); raising "
+            "the failure that moved the call: %s",
+            str_operation,
+            self._candidates[int_index].label,
+            str_family,
+            error.status_code,
+            error,
+            extra={
+                "ai_fallback_event": FALLBACK_EVENT_REJECTED_HISTORY,
+                "operation": str_operation,
+                "fallback_candidate": self._candidates[int_index].label,
+                "status_code": error.status_code,
+            },
+        )
+        # Normal return with the failure that started the failover.
+        return first_error
 
     def _exhausted(
         self,
@@ -925,24 +1067,31 @@ class AiFallbackCompletions(AIBaseCompletions):
         self,
         messages: list[dict[str, Any]] | None,
         provider_options: dict[str, Any] | None,
-    ) -> tuple[int, bool, dict[str, Any] | None]:
+    ) -> tuple[int, bool, dict[str, Any] | None, str | None]:
         """
-        Resolves where a history-bearing call starts and whether it may move.
+        Resolves where a history-bearing call starts and how far it may move.
 
         Args:
             messages: Caller-managed history, if the call carries one.
             provider_options: The call's provider_options.
 
         Returns:
-            (start index, fallback allowed, provider_options for the engine).
+            (start index, fallback allowed, provider_options for the engine,
+            family the call is bound to or None).
         """
         dict_options, bool_allowed = self._strip_reserved_options(provider_options)
-        int_route: int | None = self._route_for_history(messages or [])
+        list_messages: list[dict[str, Any]] = messages or []
+        int_route: int | None = self._route_for_history(list_messages)
         if int_route is None:
             # Normal return: neutral history starts at the primary.
-            return 0, bool_allowed, dict_options
-        # Normal return: engine-shaped history is pinned to its family.
-        return int_route, False, dict_options
+            return 0, bool_allowed, dict_options, None
+        str_family: str | None = history_family_of(list_messages)
+        if str_family is None:
+            # Normal return: engine-shaped but unrecognized, so pinned to
+            # the candidate that served the last call.
+            return int_route, False, dict_options, None
+        # Normal return: bound to the family that shaped the history.
+        return int_route, bool_allowed, dict_options, str_family
 
     # ── Text prompts ────────────────────────────────────────────────────────
 
@@ -1048,7 +1197,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                 continue
             if last_error is not None:
                 self._log_served_by_fallback(
-                    int_index, "send_prompt_streaming", last_error
+                    int_index, 0, "send_prompt_streaming", last_error
                 )
             self._last_route_index = int_index
             yield str_first
@@ -1106,10 +1255,10 @@ class AiFallbackCompletions(AIBaseCompletions):
         """
         Runs send_structured_output, failing over while messages are neutral.
 
-        An engine-shaped history routes to a candidate of the family that
-        shaped it, with fallback off.
+        An engine-shaped history routes to the family that shaped it and
+        may fail over within that family.
         """
-        int_start, bool_allowed, dict_options = self._routing_for(
+        int_start, bool_allowed, dict_options, str_family = self._routing_for(
             messages, provider_options
         )
         # Normal return with the serving candidate's structured result.
@@ -1129,6 +1278,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             tuple_capabilities=("supports_structured_output",),
             bool_allow_fallback=bool_allowed,
             int_start=int_start,
+            str_family=str_family,
         )
 
     async def asend_structured_output(
@@ -1145,7 +1295,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         """Async twin of send_structured_output."""
-        int_start, bool_allowed, dict_options = self._routing_for(
+        int_start, bool_allowed, dict_options, str_family = self._routing_for(
             messages, provider_options
         )
         # Normal return with the serving candidate's structured result.
@@ -1165,6 +1315,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             tuple_capabilities=("supports_async", "supports_structured_output"),
             bool_allow_fallback=bool_allowed,
             int_start=int_start,
+            str_family=str_family,
         )
 
     # ── Conversations ───────────────────────────────────────────────────────
@@ -1184,11 +1335,10 @@ class AiFallbackCompletions(AIBaseCompletions):
         """
         Sends one conversation turn, failing over while the history is neutral.
 
-        Once the history holds engine-shaped entries, the turn goes to a
-        candidate of the family that shaped it, and a failure there
-        propagates.
+        Once the history holds engine-shaped entries, the turn goes to the
+        family that shaped it and may fail over within that family.
         """
-        int_start, bool_allowed, dict_options = self._routing_for(
+        int_start, bool_allowed, dict_options, str_family = self._routing_for(
             messages, provider_options
         )
         # Normal return with the serving candidate's turn.
@@ -1207,6 +1357,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             tuple_capabilities=("supports_tool_use",),
             bool_allow_fallback=bool_allowed,
             int_start=int_start,
+            str_family=str_family,
         )
 
     async def asend_conversation(
@@ -1222,7 +1373,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         """Async twin of send_conversation."""
-        int_start, bool_allowed, dict_options = self._routing_for(
+        int_start, bool_allowed, dict_options, str_family = self._routing_for(
             messages, provider_options
         )
         # Normal return with the serving candidate's turn.
@@ -1241,6 +1392,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             tuple_capabilities=("supports_async", "supports_tool_use"),
             bool_allow_fallback=bool_allowed,
             int_start=int_start,
+            str_family=str_family,
         )
 
     def _client_for_history(self, messages: list[dict[str, Any]]) -> AIBaseCompletions:
