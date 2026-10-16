@@ -294,6 +294,27 @@ def _isolate_from_developer_wrappers(
     # The configured-model check probes real providers; mocked tests must
     # not. Checker tests set AI_MODEL_CHECK themselves with fake probes.
     monkeypatch.setenv("AI_MODEL_CHECK", "off")
+    # Tests that patch EnvSettings.get_setting bypass that variable, and the
+    # check runs on every completions build, so mocked tests also swap each
+    # registered probe for an offline one that answers "unverifiable".
+    if request.node.get_closest_marker("nonmock") is None:
+        from ai_api_unified.util.ai_model_checker import (
+            AiModelChecker,
+            AiModelCheckStatus,
+        )
+
+        def _offline_probe(_model: str, _base_url: str | None):
+            return AiModelCheckStatus.UNVERIFIABLE, "mocked suite: no network"
+
+        monkeypatch.setattr(
+            AiModelChecker,
+            "_DICT_PROBE_BY_ENGINE",
+            {
+                str_engine: _offline_probe
+                for str_engine in AiModelChecker._DICT_PROBE_BY_ENGINE
+            },
+        )
+        AiModelChecker.reset_cache()
     # A developer's models.json must not become every test's configuration,
     # unless --models-config names the file the run should use.
     str_models_config: str | None = request.config.getoption("--models-config")

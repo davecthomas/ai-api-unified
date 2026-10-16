@@ -1,26 +1,40 @@
 # ai_model_checker.py
 """
-Verifies that every configured model exists before it is relied on.
+Verifies that every configured model exists and can be reached before it
+is relied on.
 
 A fallback chain, a router tier, or a classifier names models the process
-expects to call later. A typo, a retired id, or a model not offered in the
-configured region would only surface when that model is finally tried, in
-the middle of a failover. The checker asks each provider for the model's
-metadata once (one free call, no completion), memoizes the answer for the
-life of the process, and the factory prunes anything missing from the
-effective configuration with a loud warning.
+expects to call later. A typo, a retired id, a model not offered in the
+configured region, or a fallback whose key is missing would only surface
+when that model is finally tried, in the middle of a failover. The checker
+asks each provider for the model's metadata once (one free call, no
+completion) with the credentials the engine would use, memoizes the answer,
+and the factory prunes anything missing or unreachable from the effective
+configuration with a loud warning.
+
+The memo key is (engine, model, base_url, credential fingerprint), so a
+model is probed again when its id, base URL, or credentials change, and
+never otherwise. The fingerprint is a hash of the settings the engine's
+probe reads; a key never appears in it. An error result is not memoized,
+so the next factory call probes that model again.
 
 Statuses:
     available: the provider knows the model.
     missing: the provider says there is no such model.
-    unverifiable: the engine cannot be asked (no credentials, no extra
-        installed, no probe for that engine); the model is kept.
+    unreachable: the library cannot call the model: no credentials, the
+        credentials were rejected as invalid, no base URL, or the engine's
+        extra is not installed.
+    unverifiable: the model cannot be asked about, but nothing says it
+        cannot be called (the engine default model, no probe for the
+        engine, a permission denial on the catalog call only, a server
+        without a model catalog); the model is kept.
     error: the probe failed for another reason (network, a 5xx); the model
         is kept, since a transient outage is not a configuration error.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -33,12 +47,14 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict
 
 from ..completions.ai_fallback_completions import AIFallbackCandidate
+from .env_settings import EnvSettings
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 # Values of the `ai_model_check_event` field on this module's log records.
 MODEL_CHECK_EVENT_AVAILABLE: str = "model_available"
 MODEL_CHECK_EVENT_MISSING: str = "model_missing"
+MODEL_CHECK_EVENT_UNREACHABLE: str = "model_unreachable"
 MODEL_CHECK_EVENT_UNVERIFIABLE: str = "model_unverifiable"
 MODEL_CHECK_EVENT_ERROR: str = "model_check_error"
 MODEL_CHECK_EVENT_PRUNED_TIER: str = "router_tier_pruned"
@@ -64,6 +80,7 @@ class AiModelCheckStatus(str, Enum):
 
     AVAILABLE = "available"
     MISSING = "missing"
+    UNREACHABLE = "unreachable"
     UNVERIFIABLE = "unverifiable"
     ERROR = "error"
 
@@ -100,16 +117,23 @@ class AiModelCheckResult(BaseModel):
 
     @property
     def keeps_model(self) -> bool:
-        """True unless the provider said the model is missing."""
-        # Normal return: only MISSING prunes.
-        return self.status is not AiModelCheckStatus.MISSING
+        """True unless the model is missing or cannot be reached."""
+        # Normal return: MISSING and UNREACHABLE prune.
+        return self.status not in FROZENSET_PRUNING_STATUSES
+
+
+# Statuses that take a model out of the effective configuration.
+FROZENSET_PRUNING_STATUSES: frozenset[AiModelCheckStatus] = frozenset(
+    {AiModelCheckStatus.MISSING, AiModelCheckStatus.UNREACHABLE}
+)
 
 
 # A probe takes (model, base_url) and returns (status, detail). It must make
 # at most one metadata call and must not run a completion.
 TypeModelProbe = Callable[[str, str | None], tuple[AiModelCheckStatus, str]]
 
-TypeCheckKey = tuple[str, str, str | None]
+# (engine, model, base_url, credential fingerprint).
+TypeCheckKey = tuple[str, str, str | None, str]
 
 
 class AiModelChecker:
@@ -123,6 +147,7 @@ class AiModelChecker:
     _DICT_CACHE: ClassVar[dict[TypeCheckKey, AiModelCheckResult]] = {}
     _LOCK: ClassVar[threading.Lock] = threading.Lock()
     _DICT_PROBE_BY_ENGINE: ClassVar[dict[str, TypeModelProbe]] = {}
+    _DICT_CREDENTIAL_SETTINGS_BY_ENGINE: ClassVar[dict[str, tuple[str, ...]]] = {}
 
     def __init__(
         self,
@@ -136,9 +161,27 @@ class AiModelChecker:
     # ── Probe registry ──────────────────────────────────────────────────────
 
     @classmethod
-    def register_probe(cls, str_engine: str, probe: TypeModelProbe) -> None:
-        """Registers the probe for one engine token."""
-        cls._DICT_PROBE_BY_ENGINE[str_engine.strip().lower()] = probe
+    def register_probe(
+        cls,
+        str_engine: str,
+        probe: TypeModelProbe,
+        tuple_credential_settings: tuple[str, ...] = (),
+    ) -> None:
+        """
+        Registers the probe for one engine token.
+
+        Args:
+            str_engine: Engine token.
+            probe: The probe.
+            tuple_credential_settings: Settings the probe reads to reach the
+                provider (keys, base URLs, region); a change to any of them
+                makes the memoized result stale.
+        """
+        str_token: str = str_engine.strip().lower()
+        cls._DICT_PROBE_BY_ENGINE[str_token] = probe
+        cls._DICT_CREDENTIAL_SETTINGS_BY_ENGINE[str_token] = tuple(
+            tuple_credential_settings
+        )
 
     @classmethod
     def probe_for(cls, str_engine: str) -> TypeModelProbe | None:
@@ -158,10 +201,33 @@ class AiModelChecker:
         # Normal return with the cached result.
         return cls._DICT_CACHE.get(cls._key(candidate))
 
-    @staticmethod
-    def _key(candidate: AIFallbackCandidate) -> TypeCheckKey:
+    @classmethod
+    def _key(cls, candidate: AIFallbackCandidate) -> TypeCheckKey:
         # Normal return with the memo key.
-        return (candidate.engine, candidate.model, candidate.base_url)
+        return (
+            candidate.engine,
+            candidate.model,
+            candidate.base_url,
+            cls._credential_fingerprint(candidate.engine),
+        )
+
+    @classmethod
+    def _credential_fingerprint(cls, str_engine: str) -> str:
+        """A hash of the settings the engine's probe reads; never the values."""
+        tuple_settings: tuple[str, ...] = cls._DICT_CREDENTIAL_SETTINGS_BY_ENGINE.get(
+            str_engine.strip().lower(), ()
+        )
+        if not tuple_settings:
+            # Early return: the engine registered no credential settings.
+            return ""
+        env: EnvSettings = EnvSettings()
+        digest: Any = hashlib.sha256()
+        # Loop over the settings so any change alters the hash.
+        for str_setting in tuple_settings:
+            str_value: str = str(env.get_setting(str_setting, "") or "").strip()
+            digest.update(f"{str_setting}={str_value}\0".encode())
+        # Normal return with a short, one-way fingerprint.
+        return digest.hexdigest()[:16]
 
     # ── Checks ──────────────────────────────────────────────────────────────
 
@@ -181,6 +247,10 @@ class AiModelChecker:
             # Early return: checked earlier in this process.
             return cached
         result: AiModelCheckResult = self._probe(candidate)
+        if result.status is AiModelCheckStatus.ERROR:
+            # Early return without memoizing: the next check probes again.
+            self._log(result)
+            return result
         with self._LOCK:
             # Keep the first result when two threads raced on the same model.
             existing: AiModelCheckResult | None = self._DICT_CACHE.get(key)
@@ -294,6 +364,17 @@ class AiModelChecker:
                 result.detail,
                 extra={"ai_model_check_event": MODEL_CHECK_EVENT_MISSING, **dict_extra},
             )
+        elif result.status is AiModelCheckStatus.UNREACHABLE:
+            _LOGGER.warning(
+                "MODEL CHECK: configured model %s cannot be reached and will be "
+                "ignored (%s).",
+                result.label,
+                result.detail,
+                extra={
+                    "ai_model_check_event": MODEL_CHECK_EVENT_UNREACHABLE,
+                    **dict_extra,
+                },
+            )
         elif result.status is AiModelCheckStatus.ERROR:
             _LOGGER.warning(
                 "MODEL CHECK: could not verify %s, keeping it (%s).",
@@ -347,17 +428,17 @@ def resolve_model_check_mode(object_value: object) -> str:
 
 def prune_candidates(
     list_candidates: list[AIFallbackCandidate],
-    dict_results: dict[TypeCheckKey, AiModelCheckResult],
+    dict_results: dict[tuple[str, str, str | None], AiModelCheckResult],
 ) -> list[AIFallbackCandidate]:
     """
-    Drops candidates the provider reported missing; keeps the rest in order.
+    Drops candidates that are missing or unreachable; keeps the rest in order.
 
     Args:
         list_candidates: Configured chain.
-        dict_results: Check results by memo key.
+        dict_results: Check results by (engine, model, base_url).
 
     Returns:
-        The chain without missing models.
+        The chain without missing or unreachable models.
     """
     # Normal return with the surviving candidates.
     return [

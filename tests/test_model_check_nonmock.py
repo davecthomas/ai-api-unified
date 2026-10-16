@@ -1,6 +1,7 @@
 # tests/test_model_check_nonmock.py
 """
-Live proof that the configured-model check prunes models that do not exist.
+Live proof that the configured-model check prunes models that do not exist,
+and that a rejected key makes a model unreachable.
 
 Reads tests/fixtures/models_missing_test.json by default: its fallback chain
 and easy tier each list an id no provider serves. Against the real
@@ -165,3 +166,24 @@ def test_models_are_checked_once_per_process(config: AIModelsConfig) -> None:
     assert (
         len(AiModelChecker._DICT_CACHE) == int_before
     ), "the second build probed again"
+
+
+def test_rejected_key_is_unreachable_and_a_fixed_key_reprobes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real 401 is unreachable; restoring the key probes again, from scratch."""
+    import os
+
+    str_key: str | None = os.environ.get("ANTHROPIC_API_KEY")
+    if not str_key:
+        pytest.skip("Skipping: ANTHROPIC_API_KEY not set")
+    AiModelChecker.reset_cache()
+    candidate = AIFallbackCandidate(engine="claude", model="claude-haiku-4-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-invalid-for-model-check")
+    rejected = AiModelChecker().check(candidate)
+    print(f"\n  bad key:  {rejected.status.value:13} {rejected.detail}")
+    assert rejected.status is AiModelCheckStatus.UNREACHABLE
+    monkeypatch.setenv("ANTHROPIC_API_KEY", str_key)
+    restored = AiModelChecker().check(candidate)
+    print(f"  good key: {restored.status.value:13} {restored.detail}")
+    assert restored.status is AiModelCheckStatus.AVAILABLE

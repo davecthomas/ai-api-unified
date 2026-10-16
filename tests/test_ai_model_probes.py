@@ -53,7 +53,7 @@ class TestOpenAI:
 
     @pytest.mark.parametrize(
         ("code", "expected"),
-        [(404, S.MISSING), (401, S.UNVERIFIABLE), (403, S.UNVERIFIABLE)],
+        [(404, S.MISSING), (401, S.UNREACHABLE), (403, S.UNVERIFIABLE)],
     )
     def test_status_mapping(self, code: int, expected: S) -> None:
         client = Mock()
@@ -72,7 +72,7 @@ class TestOpenAI:
         pytest.importorskip("openai")
         with _settings():
             assert probes.probe_openai("x", None) == (
-                S.UNVERIFIABLE,
+                S.UNREACHABLE,
                 "OPENAI_API_KEY not set",
             )
         assert probes.probe_openai("", None)[0] is S.UNVERIFIABLE
@@ -135,7 +135,16 @@ class TestOpenAICompatible:
     def test_no_base_url(self) -> None:
         pytest.importorskip("openai")
         with _settings():
-            assert probes.probe_openai_compatible("a", None)[0] is S.UNVERIFIABLE
+            assert probes.probe_openai_compatible("a", None)[0] is S.UNREACHABLE
+
+    def test_rejected_key_is_unreachable(self) -> None:
+        client = Mock()
+        client.models.list.side_effect = _openai_status_error(401)
+        with (
+            _settings(OPENAI_COMPATIBLE_BASE_URL="http://x"),
+            patch("openai.OpenAI", return_value=client),
+        ):
+            assert probes.probe_openai_compatible("a", None)[0] is S.UNREACHABLE
 
 
 class TestAnthropic:
@@ -148,7 +157,12 @@ class TestAnthropic:
 
     @pytest.mark.parametrize(
         ("code", "expected"),
-        [(None, S.AVAILABLE), (404, S.MISSING), (401, S.UNVERIFIABLE)],
+        [
+            (None, S.AVAILABLE),
+            (404, S.MISSING),
+            (401, S.UNREACHABLE),
+            (403, S.UNVERIFIABLE),
+        ],
     )
     def test_mapping(self, code: int | None, expected: S) -> None:
         client = Mock()
@@ -165,21 +179,26 @@ class TestAnthropic:
         pytest.importorskip("anthropic")
         with _settings():
             assert probes.probe_anthropic("x", None) == (
-                S.UNVERIFIABLE,
+                S.UNREACHABLE,
                 "ANTHROPIC_API_KEY not set",
             )
 
 
 class TestGemini:
-    def _error(self, code: int) -> Exception:
+    def _error(self, code: int, str_reason: str = "NOT_FOUND") -> Exception:
         gerr = pytest.importorskip("google.genai.errors")
         return gerr.ClientError(
-            code, {"error": {"message": "x", "status": "NOT_FOUND"}}
+            code, {"error": {"message": f"x {str_reason}", "status": str_reason}}
         )
 
     @pytest.mark.parametrize(
         ("code", "expected"),
-        [(None, S.AVAILABLE), (404, S.MISSING), (403, S.UNVERIFIABLE)],
+        [
+            (None, S.AVAILABLE),
+            (404, S.MISSING),
+            (401, S.UNREACHABLE),
+            (403, S.UNVERIFIABLE),
+        ],
     )
     def test_mapping_probes_the_raw_id(self, code: int | None, expected: S) -> None:
         genai = pytest.importorskip("google.genai")
@@ -193,13 +212,23 @@ class TestGemini:
             assert probes.probe_google_gemini("gemini-nope", None)[0] is expected
         client.models.get.assert_called_once_with(model="gemini-nope")
 
-    def test_vertex_auth_and_no_key_are_unverifiable(self) -> None:
+    def test_invalid_key_400_is_unreachable(self) -> None:
+        genai = pytest.importorskip("google.genai")
+        client = Mock()
+        client.models.get.side_effect = self._error(400, "API_KEY_INVALID")
+        with (
+            _settings(GOOGLE_GEMINI_API_KEY="k"),
+            patch.object(genai, "Client", return_value=client),
+        ):
+            assert probes.probe_google_gemini("x", None)[0] is S.UNREACHABLE
+
+    def test_vertex_auth_is_unverifiable_and_no_key_unreachable(self) -> None:
         pytest.importorskip("google.genai")
         with _settings(GOOGLE_AUTH_METHOD="vertex"):
             assert probes.probe_google_gemini("x", None)[0] is S.UNVERIFIABLE
         with _settings():
             assert probes.probe_google_gemini("x", None) == (
-                S.UNVERIFIABLE,
+                S.UNREACHABLE,
                 "GOOGLE_GEMINI_API_KEY not set",
             )
 
@@ -244,7 +273,8 @@ class TestBedrock:
             ("ResourceNotFoundException", S.MISSING),
             ("ValidationException", S.MISSING),
             ("AccessDeniedException", S.UNVERIFIABLE),
-            ("ExpiredTokenException", S.UNVERIFIABLE),
+            ("ExpiredTokenException", S.UNREACHABLE),
+            ("UnrecognizedClientException", S.UNREACHABLE),
         ],
     )
     def test_client_error_mapping(self, code: str, expected: S) -> None:
@@ -259,7 +289,7 @@ class TestBedrock:
         client.get_foundation_model.side_effect = botocore.NoCredentialsError()
         with _settings(), patch("boto3.client", return_value=client):
             assert probes.probe_bedrock("x", None) == (
-                S.UNVERIFIABLE,
+                S.UNREACHABLE,
                 "no AWS credentials",
             )
 

@@ -1,16 +1,19 @@
 # tests/test_ai_model_checker.py
 """
-AiModelChecker core: memoization, parallel de-duplication, probe failure
-mapping, log events, mode parsing, and candidate pruning.
+AiModelChecker core: memoization keyed by credentials, parallel
+de-duplication, probe failure mapping, log events, mode parsing, and
+candidate pruning.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import os
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -29,10 +32,13 @@ LOGGER_NAME: str = "ai_api_unified.util.ai_model_checker"
 @pytest.fixture(autouse=True)
 def _fresh_checker() -> Iterator[None]:
     dict_saved = dict(AiModelChecker._DICT_PROBE_BY_ENGINE)
+    dict_saved_settings = dict(AiModelChecker._DICT_CREDENTIAL_SETTINGS_BY_ENGINE)
     AiModelChecker.reset_cache()
     yield
     AiModelChecker._DICT_PROBE_BY_ENGINE.clear()
     AiModelChecker._DICT_PROBE_BY_ENGINE.update(dict_saved)
+    AiModelChecker._DICT_CREDENTIAL_SETTINGS_BY_ENGINE.clear()
+    AiModelChecker._DICT_CREDENTIAL_SETTINGS_BY_ENGINE.update(dict_saved_settings)
     AiModelChecker.reset_cache()
 
 
@@ -55,6 +61,41 @@ class TestCheck:
         assert first is second and calls == ["m1"]
         assert first.status is AiModelCheckStatus.AVAILABLE and first.keeps_model
         assert AiModelChecker.cached(_c("fake", "m1")) is first
+
+    def test_credential_change_reprobes_and_key_never_in_memo(self) -> None:
+        calls: list[str] = []
+
+        def _probe(model: str, base_url: str | None):
+            calls.append(os.environ["FAKE_KEY"])
+            return AiModelCheckStatus.AVAILABLE, "ok"
+
+        AiModelChecker.register_probe("fake", _probe, ("FAKE_KEY",))
+        checker = AiModelChecker()
+        with patch.dict(os.environ, {"FAKE_KEY": "secret-one"}):
+            checker.check(_c("fake", "m1"))
+            checker.check(_c("fake", "m1"))
+        with patch.dict(os.environ, {"FAKE_KEY": "secret-two"}):
+            checker.check(_c("fake", "m1"))
+        assert calls == ["secret-one", "secret-two"]
+        assert not any(
+            "secret" in str(part) for key in AiModelChecker._DICT_CACHE for part in key
+        )
+
+    def test_error_result_is_not_memoized(self) -> None:
+        calls: list[str] = []
+
+        def _flaky(model: str, base_url: str | None):
+            calls.append(model)
+            if len(calls) == 1:
+                raise ConnectionError("blip")
+            return AiModelCheckStatus.AVAILABLE, "ok"
+
+        AiModelChecker.register_probe("flaky", _flaky)
+        checker = AiModelChecker()
+        assert checker.check(_c("flaky", "m")).status is AiModelCheckStatus.ERROR
+        assert checker.check(_c("flaky", "m")).status is AiModelCheckStatus.AVAILABLE
+        assert checker.check(_c("flaky", "m")).status is AiModelCheckStatus.AVAILABLE
+        assert calls == ["m", "m"]
 
     def test_base_url_is_part_of_the_key(self) -> None:
         AiModelChecker.register_probe(
@@ -91,10 +132,14 @@ class TestCheck:
             "gone", lambda m, b: (AiModelCheckStatus.MISSING, "404")
         )
         AiModelChecker.register_probe(
+            "badkey", lambda m, b: (AiModelCheckStatus.UNREACHABLE, "401")
+        )
+        AiModelChecker.register_probe(
             "nokey", lambda m, b: (AiModelCheckStatus.UNVERIFIABLE, "no key")
         )
         checker = AiModelChecker()
         assert checker.check(_c("gone", "m")).keeps_model is False
+        assert checker.check(_c("badkey", "m")).keeps_model is False
         assert checker.check(_c("nokey", "m")).keeps_model is True
         unknown = checker.check(_c("unregistered", "m"))
         assert (
@@ -129,8 +174,13 @@ class TestCheck:
         AiModelChecker.register_probe(
             "nokey", lambda m, b: (AiModelCheckStatus.UNVERIFIABLE, "no key")
         )
+        AiModelChecker.register_probe(
+            "badkey", lambda m, b: (AiModelCheckStatus.UNREACHABLE, "401")
+        )
         with caplog.at_level(logging.DEBUG, logger=LOGGER_NAME):
-            AiModelChecker().check_all([_c("gone", "x"), _c("nokey", "y")])
+            AiModelChecker().check_all(
+                [_c("gone", "x"), _c("nokey", "y"), _c("badkey", "z")]
+            )
         dict_events = {
             getattr(r, "ai_model_check_event", None): r for r in caplog.records
         }
@@ -139,6 +189,9 @@ class TestCheck:
         assert "not available and will be ignored" in missing.getMessage()
         assert missing.engine == "gone" and missing.status == "missing"
         assert dict_events["model_unverifiable"].levelno == logging.INFO
+        unreachable = dict_events["model_unreachable"]
+        assert unreachable.levelno == logging.WARNING
+        assert "cannot be reached and will be ignored" in unreachable.getMessage()
 
 
 class TestHelpers:
@@ -153,7 +206,7 @@ class TestHelpers:
         with pytest.raises(ValueError, match="AI_MODEL_CHECK"):
             resolve_model_check_mode("maybe")
 
-    def test_prune_candidates_drops_only_missing(self) -> None:
+    def test_prune_candidates_drops_missing_and_unreachable(self) -> None:
         now = datetime.now(timezone.utc)
 
         def _r(model: str, status: AiModelCheckStatus) -> AiModelCheckResult:
@@ -165,9 +218,16 @@ class TestHelpers:
             ("e", "a", None): _r("a", AiModelCheckStatus.AVAILABLE),
             ("e", "b", None): _r("b", AiModelCheckStatus.MISSING),
             ("e", "c", None): _r("c", AiModelCheckStatus.ERROR),
+            ("e", "d", None): _r("d", AiModelCheckStatus.UNREACHABLE),
         }
         kept = prune_candidates(
-            [_c("e", "a"), _c("e", "b"), _c("e", "c"), _c("e", "unchecked")],
+            [
+                _c("e", "a"),
+                _c("e", "b"),
+                _c("e", "c"),
+                _c("e", "d"),
+                _c("e", "unchecked"),
+            ],
             dict_results,
         )
         assert [c.model for c in kept] == ["a", "c", "unchecked"]

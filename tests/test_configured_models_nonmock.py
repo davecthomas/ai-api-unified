@@ -76,9 +76,9 @@ def test_every_configured_model_is_available(
     print()
     for result in list_results:
         print(f"  {result.label:50} {result.status.value:13} {result.detail}")
-    list_missing = [r for r in list_results if r.status is AiModelCheckStatus.MISSING]
-    assert not list_missing, "configured models not available: " + ", ".join(
-        f"{r.label} ({r.detail})" for r in list_missing
+    list_failed = [r for r in list_results if not r.keeps_model]
+    assert not list_failed, "configured models missing or unreachable: " + ", ".join(
+        f"{r.label} ({r.status.value}: {r.detail})" for r in list_failed
     )
     assert any(
         r.status is AiModelCheckStatus.AVAILABLE for r in list_results
