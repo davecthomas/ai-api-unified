@@ -31,7 +31,9 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .completions.ai_fallback_cooldown import AIFallbackCooldownPolicy
 from .routing.config_checks import AIConfigRequirements
+from .thinking import parse_thinking_level
 from .routing.router_config import AIRouterClassifierConfig, AIRouterConfig
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -135,10 +137,20 @@ class AICompletionsSelection(BaseModel):
     thinking: str | None = None
     # How long a failed candidate rests: true/false, or
     # {"enabled": true, "seconds": {"rate_limited": 30, ...}}.
-    cooldown: bool | dict[str, Any] | None = None
+    cooldown: bool | AIFallbackCooldownPolicy | None = None
     # What every route must offer, checked at build:
     # {"capabilities": [...], "second_provider": true, "mode": "warn"}.
     require: AIConfigRequirements | None = None
+
+    @field_validator("thinking", mode="before")
+    @classmethod
+    def _check_thinking(cls, value: Any) -> Any:
+        """Fails a misspelled level at load, not at the first client build."""
+        if value is None or not str(value).strip():
+            # Early return: unset.
+            return None
+        # Normal return with the level's canonical value.
+        return parse_thinking_level(str(value)).value
 
 
 class AIClassifierSelection(BaseModel):
@@ -227,6 +239,8 @@ class AIModelsConfig(BaseModel):
 
     # A free-text note for humans reading the file; ignored by the library.
     comment: str | None = Field(default=None, alias="_comment")
+    # The JSON Schema an editor validates the file against; ignored here.
+    schema_ref: str | None = Field(default=None, alias="$schema")
     config_version: str | None = None
     allow: list[str] = Field(default_factory=list)
     deny: list[str] = Field(default_factory=list)

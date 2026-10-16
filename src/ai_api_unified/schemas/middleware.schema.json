@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/davecthomas/ai-api-unified/main/src/ai_api_unified/schemas/middleware.schema.json",
+  "title": "ai_api_unified middleware configuration",
+  "type": "object",
+  "properties": {
+    "middleware": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "observability",
+              "pii_redaction"
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "settings": {
+            "description": "Settings for the named middleware."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "observability"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "settings": {
+                  "$ref": "#/$defs/ObservabilitySettingsModel"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "pii_redaction"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "settings": {
+                  "$ref": "#/$defs/PiiRedactionSettingsModel"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "RedactionRecognizerRuleSettingsModel": {
+      "additionalProperties": true,
+      "description": "Typed model for one configurable custom recognizer rule block.\n\nThis model intentionally exposes middleware-level semantics only.\nIt does not expose implementation-provider identifiers in the YAML contract.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "confidence_threshold": {
+          "default": 0.0,
+          "title": "Confidence Threshold"
+        },
+        "context_terms": {
+          "title": "Context Terms"
+        },
+        "negative_context_terms": {
+          "title": "Negative Context Terms"
+        }
+      },
+      "title": "RedactionRecognizerRuleSettingsModel",
+      "type": "object"
+    },
+    "RedactionRecognizersSettingsModel": {
+      "additionalProperties": true,
+      "description": "Typed model for `redaction_recognizers` middleware extension settings.",
+      "properties": {
+        "proximity_window_chars": {
+          "default": 28,
+          "title": "Proximity Window Chars"
+        },
+        "ssn_last4": {},
+        "cc_last4": {},
+        "dob": {}
+      },
+      "title": "RedactionRecognizersSettingsModel",
+      "type": "object"
+    },
+    "PiiRedactionSettingsModel": {
+      "additionalProperties": true,
+      "description": "Typed model for the `pii_redaction.settings` block.\nDefaults are intentionally lenient to keep configuration migration smooth.",
+      "properties": {
+        "direction": {
+          "default": "input_only",
+          "title": "Direction"
+        },
+        "strict_mode": {
+          "default": false,
+          "title": "Strict Mode",
+          "type": "boolean"
+        },
+        "detection_profile": {
+          "default": "balanced",
+          "title": "Detection Profile"
+        },
+        "language": {
+          "default": "en",
+          "title": "Language"
+        },
+        "country_scope": {
+          "default": "US",
+          "title": "Country Scope"
+        },
+        "address_detection_enabled": {
+          "default": true,
+          "title": "Address Detection Enabled",
+          "type": "boolean"
+        },
+        "address_detection_provider": {
+          "default": "usaddress",
+          "title": "Address Detection Provider"
+        },
+        "span_conflict_policy": {
+          "default": "prefer_usaddress_longest",
+          "title": "Span Conflict Policy"
+        },
+        "default_redaction_label": {
+          "default": "REDACTED",
+          "title": "Default Redaction Label",
+          "type": "string"
+        },
+        "allowed_entities": {
+          "title": "Allowed Entities"
+        },
+        "entity_label_map": {
+          "title": "Entity Label Map"
+        },
+        "redaction_recognizers": {}
+      },
+      "title": "PiiRedactionSettingsModel",
+      "type": "object"
+    },
+    "ObservabilitySettingsModel": {
+      "additionalProperties": true,
+      "description": "Typed model for logger-backed observability middleware settings.",
+      "properties": {
+        "direction": {
+          "default": "input_output",
+          "title": "Direction"
+        },
+        "capabilities": {
+          "title": "Capabilities"
+        },
+        "log_level": {
+          "default": "INFO",
+          "title": "Log Level"
+        },
+        "token_count_mode": {
+          "default": "provider_or_estimate",
+          "title": "Token Count Mode"
+        },
+        "include_media_details": {
+          "default": true,
+          "title": "Include Media Details",
+          "type": "boolean"
+        },
+        "include_provider_usage": {
+          "default": true,
+          "title": "Include Provider Usage",
+          "type": "boolean"
+        },
+        "include_audio_byte_count": {
+          "default": true,
+          "title": "Include Audio Byte Count",
+          "type": "boolean"
+        },
+        "include_image_byte_count": {
+          "default": true,
+          "title": "Include Image Byte Count",
+          "type": "boolean"
+        },
+        "include_video_byte_count": {
+          "default": true,
+          "title": "Include Video Byte Count",
+          "type": "boolean"
+        },
+        "emit_error_events": {
+          "default": true,
+          "title": "Emit Error Events",
+          "type": "boolean"
+        },
+        "emit_cost": {
+          "default": false,
+          "title": "Emit Cost",
+          "type": "boolean"
+        },
+        "emit_cost_topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Emit Cost Topic"
+        }
+      },
+      "title": "ObservabilitySettingsModel",
+      "type": "object"
+    }
+  }
+}

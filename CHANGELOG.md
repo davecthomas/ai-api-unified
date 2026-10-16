@@ -4,6 +4,28 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.10.0
+
+### Added
+
+- Published JSON Schemas for both configuration files, generated from the
+  pydantic models that load them: `models.schema.json` for models.json and
+  `middleware.schema.json` for the middleware YAML. They ship in the
+  package under `ai_api_unified/schemas/` and are published from the repo;
+  `models_sample.json` references its schema with `"$schema"`, and the
+  middleware example with a `yaml-language-server` line. Where a loader
+  accepts several spellings, the schema accepts each.
+- `python -m ai_api_unified.config_schema validate FILE...` checks
+  models.json or middleware files the way the library loads them and exits
+  1 on any error; `print models|middleware` and `write` (regenerate the
+  shipped files) round it out.
+- models.json accepts a top-level `"$schema"` key.
+
+### Changed
+
+- `completions.thinking` is validated when models.json loads, so a
+  misspelled level fails there instead of at the first client build.
+
 ## 3.9.0
 
 ### Added

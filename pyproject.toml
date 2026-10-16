@@ -36,7 +36,7 @@
 [project]
 name = "ai_api_unified"
 
-version = "3.9.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
+version = "3.10.0" # keep in sync with src/ai_api_unified/__version__.py and the README.md title
 description = "Unified access layer for AI completions (LLM), embedding (semantic), image, video, and voice services"
 authors = [{ name = "Dave Thomas", email = "davidcthomas@gmail.com" }]
 license = "MIT"
@@ -196,6 +196,7 @@ pytest-asyncio = ">=0.24.0,<1.0.0"
 botocore = { version = ">=1.40.0", extras = ["crt"] }
 
 # ─── Tell Poetry where your package lives ────────────────────────────────────
+jsonschema = ">=4.23"
 [[tool.poetry.packages]]
 include = "ai_api_unified" # the import path your tests use
 from = "src"               # relative folder containing the package

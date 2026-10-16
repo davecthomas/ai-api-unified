@@ -1,0 +1,884 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/davecthomas/ai-api-unified/main/src/ai_api_unified/schemas/models.schema.json",
+  "$defs": {
+    "AIClassifierSelection": {
+      "description": "The `classifier` section; also the router's classifier.",
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Seconds"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instructions"
+        },
+        "min_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Confidence"
+        }
+      },
+      "title": "AIClassifierSelection",
+      "type": "object"
+    },
+    "AICompletionsSelection": {
+      "description": "The `completions` section.",
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "fallbacks": {
+          "items": {
+            "type": "string",
+            "description": "An 'engine:model' pair; the split is on the first colon."
+          },
+          "title": "Fallbacks",
+          "type": "array"
+        },
+        "fallback_on": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AiFallbackReason"
+              }
+            },
+            {
+              "type": "string",
+              "description": "Comma-separated AiFallbackReason values."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback On"
+        },
+        "retry_policy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Policy"
+        },
+        "thinking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AIThinkingLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thinking"
+        },
+        "cooldown": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/AIFallbackCooldownPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cooldown"
+        },
+        "require": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AIConfigRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AICompletionsSelection",
+      "type": "object"
+    },
+    "AIConfigRequirements": {
+      "description": "What every completions route must offer, checked at build.\n\nAttributes:\n    capabilities: Capability names each route's primary must support,\n        without the `supports_` prefix (structured_output, tool_use,\n        streaming, async, batch, token_counting, ...).\n    second_provider: True requires each route to hold a model on a\n        provider other than its primary's.\n    mode: \"warn\" logs an unmet requirement; \"strict\" raises.",
+      "properties": {
+        "capabilities": {
+          "items": {
+            "type": "string",
+            "enum": [
+              "async",
+              "batch",
+              "data_residency_constraint",
+              "prompt_cache_hint",
+              "streaming",
+              "structured_output",
+              "token_counting",
+              "tool_use"
+            ]
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "second_provider": {
+          "default": false,
+          "title": "Second Provider",
+          "type": "boolean"
+        },
+        "mode": {
+          "default": "warn",
+          "enum": [
+            "warn",
+            "strict"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "AIConfigRequirements",
+      "type": "object"
+    },
+    "AIEmbeddingsSelection": {
+      "description": "The `embeddings` section.",
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "dimensions": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dimensions"
+        }
+      },
+      "title": "AIEmbeddingsSelection",
+      "type": "object"
+    },
+    "AIFallbackCandidate": {
+      "description": "One (engine, model) pair in a fallback chain.\n\nAttributes:\n    engine: Completions engine token, as the factory accepts it.\n    model: Model name for that engine; blank means the engine default.\n    base_url: Optional API base-URL override for engines that accept one.",
+      "properties": {
+        "engine": {
+          "title": "Engine",
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        }
+      },
+      "required": [
+        "engine"
+      ],
+      "title": "AIFallbackCandidate",
+      "type": "object"
+    },
+    "AIFallbackCooldownPolicy": {
+      "description": "How long a failed candidate rests.\n\nAttributes:\n    enabled: False turns cooldowns off; every call starts at the primary.\n    seconds: Rest per reason value (for example {\"rate_limited\": 10}),\n        merged over DICT_DEFAULT_COOLDOWN_SECONDS. 0 means no rest.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "seconds": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/AiFallbackReason"
+          },
+          "title": "Seconds",
+          "type": "object"
+        }
+      },
+      "title": "AIFallbackCooldownPolicy",
+      "type": "object"
+    },
+    "AIImagesSelection": {
+      "description": "The `images` section.",
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        }
+      },
+      "title": "AIImagesSelection",
+      "type": "object"
+    },
+    "AIModelCheckSelection": {
+      "description": "The `model_check` section.",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "prune",
+                "strict",
+                "off"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Seconds"
+        }
+      },
+      "title": "AIModelCheckSelection",
+      "type": "object"
+    },
+    "AIRouterClassifierConfig": {
+      "description": "Which classifier the router uses.\n\nAttributes:\n    engine: Classification engine token, or \"none\" to route without a\n        classifier. None means the factory's own resolution\n        (CLASSIFIER_ENGINE, then openai-decisions when OPENAI_API_KEY is set).\n    model: Classification model; None means the engine's default.\n    base_url: Optional API base-URL override.\n    timeout_seconds: Per-call classifier timeout.\n    instructions: Prose prepended to the built-in routing instructions.\n    min_confidence: When the classifier reports a confidence below this\n        (0 to 1), the request goes one tier above the classifier's pick.\n        None turns the check off; a classifier that reports no\n        confidence keeps its pick.",
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        },
+        "timeout_seconds": {
+          "default": 5.0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instructions"
+        },
+        "min_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Confidence"
+        }
+      },
+      "title": "AIRouterClassifierConfig",
+      "type": "object"
+    },
+    "AIRouterConfig": {
+      "description": "The router's tiers and policy.\n\nAttributes:\n    tiers: Ascending capability; at least one.\n    classifier: Classifier selection; None means the factory's resolution.\n    default_tier: Tier used when classification is unavailable; None\n        means the default chain (the configured completions LLM).\n    on_exhausted: When a tier's chain is exhausted on a trigger reason,\n        \"escalate\" tries the next tier up; \"any\" tries every tier above\n        the pick, then the tiers below it, nearest first; \"raise\"\n        re-raises.\n    followup: How a follow-up turn of a plain conversation (one with an\n        earlier assistant turn and no tool calls) is routed.\n        \"reclassify\" classifies each turn on its own; \"ratchet\" never\n        routes it below the tier that served this client's previous\n        call. One client per conversation makes the ratchet exact; a\n        client shared across conversations should pass the floor per\n        call as provider_options[\"route_floor\"] instead.\n    fallback_on: Default trigger reasons for every tier's chain; None\n        means the factory's resolution (COMPLETIONS_FALLBACK_ON, then the\n        library default).",
+      "properties": {
+        "tiers": {
+          "items": {
+            "$ref": "#/$defs/AIRouterTier"
+          },
+          "minItems": 1,
+          "title": "Tiers",
+          "type": "array"
+        },
+        "classifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AIRouterClassifierConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "default_tier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default Tier"
+        },
+        "on_exhausted": {
+          "default": "escalate",
+          "enum": [
+            "escalate",
+            "any",
+            "raise"
+          ],
+          "title": "On Exhausted",
+          "type": "string"
+        },
+        "followup": {
+          "default": "reclassify",
+          "enum": [
+            "reclassify",
+            "ratchet"
+          ],
+          "title": "Followup",
+          "type": "string"
+        },
+        "fallback_on": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AiFallbackReason"
+              }
+            },
+            {
+              "type": "string",
+              "description": "Comma-separated AiFallbackReason values."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback On"
+        },
+        "pruned_tiers": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Pruned Tiers",
+          "type": "object"
+        }
+      },
+      "required": [
+        "tiers"
+      ],
+      "title": "AIRouterConfig",
+      "type": "object"
+    },
+    "AIRouterTier": {
+      "description": "One complexity tier.\n\nAttributes:\n    name: Lowercase token, unique in the config; the classifier returns it.\n    description: Prose the classifier reads to recognize the tier. Built\n        in for easy, medium, and hard; required otherwise.\n    candidates: The tier's models in order: the primary, then its chain.\n    fallback_on: Reasons that move a request along the tier's chain;\n        None means the router-level default.\n    thinking: The tier's thinking level (off, minimal, low, medium,\n        high, max); None means the router's level. A per-call level\n        still wins.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/AIFallbackCandidate"
+          },
+          "minItems": 1,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "fallback_on": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AiFallbackReason"
+              }
+            },
+            {
+              "type": "string",
+              "description": "Comma-separated AiFallbackReason values."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback On"
+        },
+        "thinking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AIThinkingLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "models": {
+          "description": "The tier's models in order, the primary first: 'engine:model' strings (comma-separated pairs allowed) or {engine, model, base_url} objects. Same as candidates.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/AIFallbackCandidate"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "AIRouterTier",
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "models"
+          ]
+        },
+        {
+          "required": [
+            "candidates"
+          ]
+        }
+      ]
+    },
+    "AIThinkingLevel": {
+      "description": "How much a model should think before answering, provider-neutral.\n\nMembers, in order:\n    OFF: No thinking. Models whose thinking is always on apply their\n        lowest level instead and record it.\n    MINIMAL: The least thinking a model offers above off.\n    LOW: Light reasoning; quick answers.\n    MEDIUM: The default. Balanced depth, mapped to each provider's own\n        medium (Anthropic `effort: medium`, OpenAI `reasoning_effort:\n        medium`, Gemini `thinking_level: medium`).\n    HIGH: Deep reasoning.\n    MAX: The most a model offers.",
+      "enum": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "title": "AIThinkingLevel",
+      "type": "string"
+    },
+    "AIVideosSelection": {
+      "description": "The `videos` section.",
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "output_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Dir"
+        },
+        "poll_interval_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Poll Interval Seconds"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Seconds"
+        }
+      },
+      "title": "AIVideosSelection",
+      "type": "object"
+    },
+    "AIVoiceSelection": {
+      "description": "The `voice` section.",
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "tts_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tts Model"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Language"
+        }
+      },
+      "title": "AIVoiceSelection",
+      "type": "object"
+    },
+    "AiFallbackReason": {
+      "description": "Why a failed provider request is a candidate for retry on another model.\n\nSet on AiProviderRequestError by each engine from the provider's own error\ncodes, since an HTTP status alone does not separate a rate limit from an\nexhausted quota. Errors that a different model would not fix (validation,\na content refusal) carry no reason. Account-level\nfailures (a rejected key, a spend cap) do carry one: a candidate on\nanother provider uses another account.\n\nMembers:\n    UNAVAILABLE: The provider or model cannot serve right now: 5xx,\n        overloaded, model not ready, or the connection failed.\n    RATE_LIMITED: A transient 429; the engine's own backoff runs first.\n    QUOTA_EXHAUSTED: Billing, credit, quota, or a spend cap is used up,\n        so retrying the same model is pointless.\n    AUTH_REJECTED: The provider rejected the credentials or the account\n        (401/403, an invalid or expired key, a disabled organization).\n        Retrying the same provider is pointless; another provider's\n        account can still serve.\n    TIMEOUT: The caller's own deadline passed before the provider\n        answered. Off by default in the fallback layer: the deadline is\n        a caller setting, and failing over adds the next candidate's\n        wait on top of it. A caller with a short deadline turns it on\n        to treat a hung provider as an outage.\n    MODEL_UNAVAILABLE: The model id is unknown, retired, or not offered\n        in the configured region. Usually a configuration error, so a\n        fallback layer should not act on it unless told to.\n    INVALID_OUTPUT: The model answered a structured request, and was\n        billed for it, but the answer is not valid JSON, not a JSON\n        object, or fails the response model. Off by default: a bad\n        answer then costs a second billed call on another model, which\n        is a spending decision. Turn it on to let the chain try the next\n        model and the router escalate on bad output; each discarded\n        answer is a wasted line item on the request's cost report.",
+      "enum": [
+        "unavailable",
+        "rate_limited",
+        "quota_exhausted",
+        "model_unavailable",
+        "auth_rejected",
+        "timeout",
+        "invalid_output"
+      ],
+      "title": "AiFallbackReason",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The whole file.\n\nAttributes:\n    allow: Model globs the library may use; empty means all.\n    deny: Model globs the library may never use; wins over allow.\n    completions: Primary engine and model, chain, reasons, retry policy.\n    classifier: The classification engine and model.\n    router: The complexity router.\n    model_check: The configured-model check mode and timeout.\n    embeddings, images, videos, voice: Per-capability selections.\n    geo_residency: Geo hint (`US`), as AI_API_GEO_RESIDENCY.\n    config_version: A label for this configuration (a date, a release,\n        a commit); every call the completions client makes carries it\n        as the `config_version` tag, next to the computed `config_id`.",
+  "properties": {
+    "_comment": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Comment"
+    },
+    "$schema": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "$Schema"
+    },
+    "config_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Config Version"
+    },
+    "allow": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Allow",
+      "type": "array"
+    },
+    "deny": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Deny",
+      "type": "array"
+    },
+    "completions": {
+      "$ref": "#/$defs/AICompletionsSelection"
+    },
+    "classifier": {
+      "$ref": "#/$defs/AIClassifierSelection"
+    },
+    "router": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AIRouterConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "model_check": {
+      "$ref": "#/$defs/AIModelCheckSelection"
+    },
+    "embeddings": {
+      "$ref": "#/$defs/AIEmbeddingsSelection"
+    },
+    "images": {
+      "$ref": "#/$defs/AIImagesSelection"
+    },
+    "videos": {
+      "$ref": "#/$defs/AIVideosSelection"
+    },
+    "voice": {
+      "$ref": "#/$defs/AIVoiceSelection"
+    },
+    "geo_residency": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Geo Residency"
+    }
+  },
+  "title": "AIModelsConfig",
+  "type": "object"
+}
