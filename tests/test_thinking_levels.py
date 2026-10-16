@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -138,10 +139,33 @@ class TestClaudeMapping:
             ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "budget"),
             ("anthropic.claude-sonnet-4-20250514-v1:0", "budget"),
             ("claude-3-7-sonnet-latest", "budget"),
+            ("claude-3-5-haiku-20241022", "none"),
+            ("us.anthropic.claude-3-5-haiku-20241022-v1:0", "none"),
+            ("claude-3-opus-20240229", "none"),
         ],
     )
     def test_model_classes(self, model: str, cls: str) -> None:
         assert claude_thinking_class(model) == cls
+
+    def test_claude_3_without_extended_thinking_has_no_control(self) -> None:
+        assert (
+            AICompletionsCapabilitiesAnthropic.for_model(
+                "claude-3-5-haiku-20241022"
+            ).thinking
+            is None
+        )
+        fields, reason = claude_thinking_request_fields(
+            "claude-3-5-haiku-20241022", L.MEDIUM, max_tokens=16000
+        )
+        assert fields == {} and reason == "no_thinking_control"
+        # The native engine retires this id; Bedrock still catalogs it.
+        client = _bedrock("us.anthropic.claude-3-5-haiku-20241022-v1:0")
+        client.send_prompt("hi")
+        assert (
+            "additionalModelRequestFields"
+            not in client.client.converse.call_args.kwargs
+        )
+        assert client.last_thinking.applied is None
 
     def test_always_on_sends_effort_only(self) -> None:
         fields, reason = claude_thinking_request_fields(
@@ -172,12 +196,17 @@ class TestClaudeMapping:
             "claude-haiku-4-5", L.MEDIUM, max_tokens=16000
         )
         assert fields == {"thinking": {"type": "enabled", "budget_tokens": 4096}}
+        # The cap keeps 1024 tokens free for the answer.
         clamped, _ = claude_thinking_request_fields(
             "claude-haiku-4-5", L.MAX, max_tokens=8000
         )
-        assert clamped["thinking"]["budget_tokens"] == 7999
+        assert clamped["thinking"]["budget_tokens"] == 8000 - 1024
+        at_default, _ = claude_thinking_request_fields(
+            "claude-haiku-4-5", L.MEDIUM, max_tokens=2048
+        )
+        assert at_default["thinking"]["budget_tokens"] == 1024
         none, reason = claude_thinking_request_fields(
-            "claude-haiku-4-5", L.LOW, max_tokens=1024
+            "claude-haiku-4-5", L.LOW, max_tokens=2047
         )
         assert none == {} and reason == "max_tokens_too_small"
         off, _ = claude_thinking_request_fields("claude-haiku-4-5", L.OFF, max_tokens=1)
@@ -193,6 +222,10 @@ class TestOpenAIAndGeminiTables:
         gpt5 = AICompletionsCapabilitiesOpenAI.for_model("gpt-5").thinking
         assert gpt5 is not None and gpt5.levels[0] is L.MINIMAL
         assert gpt5.nearest(L.MAX) is L.HIGH
+        # Snapshots and siblings of the launch family match by prefix.
+        for name in ("gpt-5-mini-2025-08-07", "gpt-5-pro", "gpt-5-codex"):
+            snapshot = AICompletionsCapabilitiesOpenAI.for_model(name).thinking
+            assert snapshot is not None and snapshot.levels == gpt5.levels, name
         assert AICompletionsCapabilitiesOpenAI.for_model("gpt-4.1").thinking is None
         o4 = AICompletionsCapabilitiesOpenAI.for_model("o4-mini").thinking
         assert o4 is not None and o4.levels == [L.LOW, L.MEDIUM, L.HIGH]
@@ -257,20 +290,23 @@ class TestAnthropicRequests:
             "effort": "high"
         }
 
-    def test_always_on_model_records_nearest_level(
+    def test_always_on_model_records_nearest_level_and_logs_once(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         client = _anthropic("claude-opus-5-5")
         client.thinking_level = L.OFF
-        with caplog.at_level(logging.INFO, logger="ai_api_unified.ai_base"):
+        with caplog.at_level(logging.DEBUG, logger="ai_api_unified.ai_base"):
             client.send_prompt("hi")
+            client.send_prompt("hi again")
         kwargs = client.client.messages.create.call_args.kwargs
         assert "thinking" not in kwargs
         assert kwargs["output_config"] == {"effort": "low"}
         assert client.last_thinking.applied is L.LOW
         assert client.last_thinking.reason == "unsupported_level"
         events = [r for r in caplog.records if hasattr(r, "ai_thinking_event")]
-        assert events and events[0].thinking_requested == "off"
+        # One line per client per distinct resolution, at INFO.
+        assert len(events) == 1 and events[0].levelno == logging.INFO
+        assert events[0].thinking_requested == "off"
         assert events[0].thinking_applied == "low"
 
     def test_budget_model_sends_budget_tokens(self) -> None:
@@ -361,16 +397,22 @@ class TestOpenAIRequests:
             == "none"
         )
 
-    def test_model_without_a_control_sends_nothing(self) -> None:
+    def test_model_without_a_control_sends_nothing_and_logs_at_debug_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         client = _openai("gpt-4.1")
         client.client.chat.completions.create.return_value = _chat_response()
-        client.send_prompt("hi")
+        with caplog.at_level(logging.DEBUG, logger="ai_api_unified.ai_base"):
+            client.send_prompt("hi")
+            client.send_prompt("hi")
         assert (
             "reasoning_effort"
             not in client.client.chat.completions.create.call_args.kwargs
         )
         assert client.last_thinking.applied is None
         assert client.last_thinking.reason == "no_thinking_control"
+        events = [r for r in caplog.records if hasattr(r, "ai_thinking_event")]
+        assert len(events) == 1 and events[0].levelno == logging.DEBUG
 
     def test_compatible_server_without_catalog_sends_nothing(self) -> None:
         client = _openai_compatible()
@@ -461,6 +503,23 @@ class TestBedrockRequests:
         }
         assert kwargs["inferenceConfig"]["temperature"] == 0.2
 
+    def test_budget_claude_default_cap_rises_so_the_level_applies(self) -> None:
+        client = _bedrock("us.anthropic.claude-haiku-4-5-20251001-v1:0")
+        client.send_prompt("hi")
+        kwargs = client.client.converse.call_args.kwargs
+        assert kwargs["inferenceConfig"]["maxTokens"] == 4096
+        assert kwargs["additionalModelRequestFields"]["thinking"] == {
+            "type": "enabled",
+            "budget_tokens": 3072,
+        }
+        assert client.last_thinking.exact
+        # An explicit small cap is the caller's and stays; thinking is off.
+        client.send_prompt("hi", max_response_tokens=512)
+        kwargs = client.client.converse.call_args.kwargs
+        assert kwargs["inferenceConfig"]["maxTokens"] == 512
+        assert "additionalModelRequestFields" not in kwargs
+        assert client.last_thinking.reason == "max_tokens_too_small"
+
     def test_nova_sends_nothing(self) -> None:
         client = _bedrock("amazon.nova-lite-v1:0")
         client.send_prompt("hi")
@@ -532,13 +591,60 @@ class TestConfiguration:
         chain.send_prompt("hi")
         assert chain.last_thinking is not None and chain.last_thinking.exact
 
-    def test_observability_context_carries_both_levels(self) -> None:
+    def test_observability_events_carry_this_calls_levels(self) -> None:
+        """The call context is built before the provider call runs."""
         client = _anthropic("claude-opus-5-5")
-        client.thinking_level = L.OFF
-        client.send_prompt("hi")
-        context = client._build_observability_call_context(
-            capability="completions", operation="send_prompt"
+        seen: list[dict[str, Any]] = []
+        spy = Mock()
+        spy.bool_enabled = True
+        spy.before_call = lambda call_context: seen.append(
+            dict(call_context.dict_metadata)
         )
-        assert context.dict_metadata["thinking_requested"] == "off"
-        assert context.dict_metadata["thinking_applied"] == "low"
-        assert context.dict_metadata["thinking_exact"] is False
+        spy.after_call = lambda **kwargs: None
+        spy.on_error = lambda **kwargs: None
+        client._observability_middleware = spy
+        client.send_prompt("hi", other_params=_Params(thinking=L.OFF))
+        client.send_prompt("hi", other_params=_Params(thinking=L.HIGH))
+        assert seen[0]["thinking_requested"] == "off"
+        assert seen[0]["thinking_applied"] == "low"
+        assert seen[0]["thinking_exact"] is False
+        assert seen[1]["thinking_requested"] == "high"
+        assert seen[1]["thinking_exact"] is True
+
+    def test_wrapper_setter_reaches_every_candidate(self) -> None:
+        from ai_api_unified.completions.ai_fallback_completions import (
+            AIFallbackCandidate,
+            AiFallbackCompletions,
+        )
+
+        primary = _anthropic("claude-opus-4-8")
+        fallback = _anthropic("claude-sonnet-5")
+        chain = AiFallbackCompletions(
+            primary=primary,
+            primary_candidate=AIFallbackCandidate(
+                engine="claude", model="claude-opus-4-8"
+            ),
+            fallback_candidates=[
+                AIFallbackCandidate(engine="claude", model="claude-sonnet-5")
+            ],
+            client_builder=lambda c: fallback,
+        )
+        chain.thinking_level = "off"
+        assert chain.thinking_level is L.OFF and primary.thinking_level is L.OFF
+        # Built lazily after the assignment, the fallback still gets the level.
+        assert chain._client_at(1) is fallback and fallback.thinking_level is L.OFF
+        chain.send_prompt("hi")
+        assert primary.client.messages.create.call_args.kwargs["thinking"] == {
+            "type": "disabled"
+        }
+
+    def test_router_setter_reaches_default_route_and_tiers(self) -> None:
+        from tests.test_model_router import _FakeClassifier, _engines, _router
+
+        engines = _engines("e", "h")
+        router = _router(engines, classifier=_FakeClassifier("hard"))
+        router.thinking_level = "high"
+        assert router.thinking_level is L.HIGH
+        assert router.default_client.thinking_level is L.HIGH
+        router.send_prompt("p")
+        assert engines["claude:h"].thinking_level is L.HIGH

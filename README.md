@@ -492,9 +492,10 @@ How each engine applies a level:
 | `claude`, Bedrock Claude | Fable 5 / 5.1, Opus 5.5 (always on) | nearest: `low` | nearest: `low` | `output_config.effort` |
 | `claude`, Bedrock Claude | Opus 5, Haiku 5.5, Sonnet 5, Opus 4.6 to 4.8, Sonnet 4.6 | `thinking.type: disabled` | nearest: `off` | `thinking.type: adaptive` + `output_config.effort` |
 | `claude`, Bedrock Claude | Sonnet 5.5 | `thinking.type: between_tools` | nearest: `off` | `thinking.type: adaptive` + `output_config.effort` |
-| `claude`, Bedrock Claude | Haiku 4.5, Sonnet 4.5, Opus 4.5 and older | omit `thinking` | nearest: `off` | `thinking.budget_tokens` 1024 / 4096 / 16384 / 32768, capped below `max_tokens` |
+| `claude`, Bedrock Claude | Haiku 4.5, Sonnet 4.5, Opus 4.5, Opus 4.1, Sonnet 4, Opus 4, 3.7 Sonnet | omit `thinking` | nearest: `off` | `thinking.budget_tokens` 1024 / 4096 / 16384 / 32768, capped at `max_tokens` less 1024 kept for the answer |
+| `claude`, Bedrock Claude | Claude 3 Opus and Haiku, 3.5 Sonnet and Haiku | no control | no control | no control |
 | `openai`, `openai-responses` | GPT-5.1 and later, GPT-6 | `reasoning_effort: none` (not on GPT-6 Astra) | nearest | `low` / `medium` / `high` / `xhigh` |
-| `openai`, `openai-responses` | GPT-5, GPT-5 mini and nano | nearest: `minimal` | `minimal` | `low` / `medium` / `high` / nearest: `high` |
+| `openai`, `openai-responses` | GPT-5, GPT-5 mini, nano, pro, codex, and dated snapshots | nearest: `minimal` | `minimal` | `low` / `medium` / `high` / nearest: `high` |
 | `openai`, `openai-responses` | o-series | nearest: `low` | nearest: `low` | `low` / `medium` / `high` / nearest: `high` |
 | `openai`, `openai-compatible` | GPT-4.1, GPT-4o, uncataloged | no control | no control | no control |
 | `google-gemini` | Gemini 3 Flash and later | nearest: `minimal` | `thinking_level: MINIMAL` | `LOW` / `MEDIUM` / `HIGH` / nearest: `HIGH` |
@@ -509,7 +510,10 @@ The engines merge these fields before `provider_options`, so a caller's own
 request shapes turn thinking off on models that allow it, with the reason
 recorded: a forced `tool_choice` (Claude rejects the pair), an assistant
 prefill (Bedrock's `strict_schema_prompt` on pre-4.6 Claude), and a
-`max_tokens` with no room for the 1024-token minimum budget.
+`max_tokens` with no room for the 1024-token minimum budget after 1024
+tokens are kept for the answer. Bedrock's `send_prompt` and streaming
+defaults of 256 tokens rise to 4096 on budget-era Claude models when the
+caller sets no cap, so the configured level is applied.
 
 The tables follow each provider's documentation as of October 2026 and the
 live test (`poetry run pytest -m nonmock tests/test_thinking_levels_nonmock.py -q`)

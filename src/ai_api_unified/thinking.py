@@ -251,12 +251,15 @@ LIST_EFFORT_LEVELS_WITH_OFF: list[AIThinkingLevel] = [
 #   between_tools: Sonnet 5.5 — `{type: disabled}` is rejected; off is
 #       `{type: between_tools}`.
 #   budget:    Haiku 4.5, Sonnet 4.5, Opus 4.5, Opus 4.1, Sonnet 4, Opus 4,
-#       Claude 3.x — `{type: enabled, budget_tokens: N}`, N >= 1024 and less
-#       than max_tokens; no effort parameter.
+#       3.7 Sonnet — `{type: enabled, budget_tokens: N}`, N >= 1024 and
+#       below max_tokens with room left for the answer; no effort parameter.
+#   none:      Claude 3 Opus/Haiku and 3.5 Sonnet/Haiku have no thinking
+#       control; the level is recorded as not applied.
 CLAUDE_CLASS_ALWAYS_ON: str = "always_on"
 CLAUDE_CLASS_ADAPTIVE: str = "adaptive"
 CLAUDE_CLASS_BETWEEN_TOOLS: str = "between_tools"
 CLAUDE_CLASS_BUDGET: str = "budget"
+CLAUDE_CLASS_NONE: str = "none"
 
 TUPLE_CLAUDE_ALWAYS_ON_MARKERS: tuple[str, ...] = (
     "claude-fable-",
@@ -271,8 +274,9 @@ TUPLE_CLAUDE_BUDGET_MARKERS: tuple[str, ...] = (
     "claude-opus-4-1",
     "claude-opus-4-2",
     "claude-sonnet-4-2",
-    "claude-3-",
+    "claude-3-7-sonnet",
 )
+TUPLE_CLAUDE_NO_CONTROL_MARKERS: tuple[str, ...] = ("claude-3-",)
 TUPLE_CLAUDE_BUDGET_EXACT: tuple[str, ...] = (
     "claude-sonnet-4",
     "claude-opus-4",
@@ -292,6 +296,9 @@ DICT_CLAUDE_BUDGET_TOKENS: dict[AIThinkingLevel, int] = {
     AIThinkingLevel.MAX: 32_768,
 }
 INT_CLAUDE_MIN_BUDGET_TOKENS: int = 1024
+# Output tokens kept free of the thinking budget so the answer itself fits;
+# a budget that would leave less than this turns thinking off instead.
+INT_CLAUDE_ANSWER_RESERVE_TOKENS: int = 1024
 
 
 def claude_thinking_class(model_name: str) -> str:
@@ -308,27 +315,32 @@ def claude_thinking_class(model_name: str) -> str:
     """
     str_name: str = model_name.strip().lower()
     str_core: str = str_name.split("anthropic.")[-1]
+    str_bare: str = str_core.split("@")[0]
+    if any(marker in str_core for marker in TUPLE_CLAUDE_BUDGET_MARKERS) or any(
+        str_bare == exact or str_bare.startswith(exact + "-2")
+        for exact in TUPLE_CLAUDE_BUDGET_EXACT
+    ):
+        # Early return: the pre-4.6 budget_tokens control (3.7 Sonnet included).
+        return CLAUDE_CLASS_BUDGET
+    if any(marker in str_core for marker in TUPLE_CLAUDE_NO_CONTROL_MARKERS):
+        # Early return: the rest of Claude 3.x has no thinking control.
+        return CLAUDE_CLASS_NONE
     if any(marker in str_core for marker in TUPLE_CLAUDE_ALWAYS_ON_MARKERS):
         # Early return: thinking cannot be turned off.
         return CLAUDE_CLASS_ALWAYS_ON
     if any(marker in str_core for marker in TUPLE_CLAUDE_BETWEEN_TOOLS_MARKERS):
         # Early return: off is between_tools.
         return CLAUDE_CLASS_BETWEEN_TOOLS
-    str_bare: str = str_core.split("@")[0]
-    # Bedrock ids carry a date and version suffix (claude-haiku-4-5-20251001-v1:0).
-    if any(marker in str_core for marker in TUPLE_CLAUDE_BUDGET_MARKERS) or any(
-        str_bare == exact or str_bare.startswith(exact + "-2")
-        for exact in TUPLE_CLAUDE_BUDGET_EXACT
-    ):
-        # Early return: the pre-4.6 budget_tokens control.
-        return CLAUDE_CLASS_BUDGET
     # Normal return: adaptive thinking with effort.
     return CLAUDE_CLASS_ADAPTIVE
 
 
-def claude_thinking_capabilities(model_name: str) -> AIThinkingCapabilities:
-    """The standard levels a Claude model honors, from its thinking class."""
+def claude_thinking_capabilities(model_name: str) -> AIThinkingCapabilities | None:
+    """The standard levels a Claude model honors, or None without a control."""
     str_class: str = claude_thinking_class(model_name)
+    if str_class == CLAUDE_CLASS_NONE:
+        # Early return: nothing to apply a level with.
+        return None
     if str_class == CLAUDE_CLASS_ALWAYS_ON:
         # Early return: no off; effort low through max.
         return AIThinkingCapabilities(
@@ -368,21 +380,28 @@ def claude_thinking_request_fields(
         model_name: The model id.
         level: An honored level (see claude_thinking_capabilities).
         max_tokens: The request's max_tokens; a budget model's
-            budget_tokens must stay below it.
+            budget_tokens is capped at max_tokens less
+            INT_CLAUDE_ANSWER_RESERVE_TOKENS so the answer still fits.
 
     Returns:
         (fields to merge into the request: `thinking` and/or
         `output_config`, as plain dicts; the reason the level could not be
-        applied, or None). On a budget model whose max_tokens leaves no
-        room for the minimum budget, thinking is left off and the reason
-        is `max_tokens_too_small`.
+        applied, or None). On a budget model whose max_tokens leaves less
+        than the minimum budget after the answer reserve, thinking is left
+        off and the reason is `max_tokens_too_small`.
     """
     str_class: str = claude_thinking_class(model_name)
+    if str_class == CLAUDE_CLASS_NONE:
+        # Early return: no control on this model.
+        return {}, THINKING_REASON_NO_CONTROL
     if str_class == CLAUDE_CLASS_BUDGET:
         if level is AIThinkingLevel.OFF:
             # Early return: omitting thinking is off on these models.
             return {}, None
-        int_budget: int = min(DICT_CLAUDE_BUDGET_TOKENS[level], max_tokens - 1)
+        int_budget: int = min(
+            DICT_CLAUDE_BUDGET_TOKENS[level],
+            max_tokens - INT_CLAUDE_ANSWER_RESERVE_TOKENS,
+        )
         if int_budget < INT_CLAUDE_MIN_BUDGET_TOKENS:
             # Early return: the request cannot fit the minimum budget.
             return {}, THINKING_REASON_MAX_TOKENS_TOO_SMALL
@@ -419,7 +438,9 @@ DICT_OPENAI_EFFORT: dict[AIThinkingLevel, str] = {
     AIThinkingLevel.MAX: "xhigh",
 }
 TUPLE_OPENAI_NO_NONE_PREFIXES: tuple[str, ...] = ("gpt-6-astra", "gpt-6.1-sol")
-TUPLE_OPENAI_GPT5_BASE: tuple[str, ...] = ("gpt-5", "gpt-5-mini", "gpt-5-nano")
+# The GPT-5 launch family (gpt-5, -mini, -nano, -pro, -codex, dated snapshots):
+# ids that are exactly gpt-5 or start with gpt-5- (gpt-5.1 and later are gpt-5.).
+TUPLE_OPENAI_GPT5_BASE_PREFIXES: tuple[str, ...] = ("gpt-5-",)
 
 
 def openai_thinking_capabilities(model_name: str) -> AIThinkingCapabilities | None:
@@ -439,8 +460,8 @@ def openai_thinking_capabilities(model_name: str) -> AIThinkingCapabilities | No
             levels=list_levels,
             notes="reasoning_effort none|low|medium|high|xhigh",
         )
-    if str_name in TUPLE_OPENAI_GPT5_BASE:
-        # Early return: the GPT-5 launch models.
+    if str_name == "gpt-5" or str_name.startswith(TUPLE_OPENAI_GPT5_BASE_PREFIXES):
+        # Early return: the GPT-5 launch models and their snapshots.
         return AIThinkingCapabilities(
             levels=[
                 AIThinkingLevel.MINIMAL,

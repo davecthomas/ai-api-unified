@@ -66,6 +66,7 @@ from ai_api_unified.thinking import (
     AIThinkingCapabilities,
     AIThinkingLevel,
     AIThinkingResolution,
+    THINKING_REASON_NO_CONTROL,
     parse_thinking_level,
     resolve_thinking_level,
     thinking_event_fields,
@@ -2724,6 +2725,10 @@ class AIBaseCompletions(AIBase):
 
     _thinking_level: AIThinkingLevel | None = None
     _last_thinking: AIThinkingResolution | None = None
+    # Resolutions this client already logged, so a steady state (an
+    # always-on model asked for off, a model with no control) is one line per
+    # client rather than one per call.
+    _set_logged_thinking: set[tuple[str, str | None, str | None]] | None = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -2806,21 +2811,50 @@ class AIBaseCompletions(AIBase):
         )
         self._last_thinking = resolution
         if not resolution.exact:
-            _LOGGER.info(
-                "THINKING: %s on %s cannot apply level %s; applying %s.",
-                type(self).__name__,
-                self.model_name,
-                resolution.requested.value,
-                resolution.applied.value if resolution.applied else "none",
-                extra={
-                    "ai_thinking_event": "nearest_level",
-                    "model": self.model_name,
-                    "reason": resolution.reason,
-                    **thinking_event_fields(resolution),
-                },
-            )
+            self._log_thinking_once(resolution, "nearest_level")
         # Normal return with the resolution the engine applies.
         return resolution
+
+    def _log_thinking_once(
+        self, resolution: AIThinkingResolution, str_event: str
+    ) -> None:
+        """
+        Logs one line per client per distinct resolution: INFO when a level
+        was substituted or overridden, DEBUG when the model has no control.
+        """
+        if self._set_logged_thinking is None:
+            self._set_logged_thinking = set()
+        tuple_key: tuple[str, str | None, str | None] = (
+            resolution.requested.value,
+            resolution.applied.value if resolution.applied else None,
+            resolution.reason,
+        )
+        if tuple_key in self._set_logged_thinking:
+            # Early return: already reported for this client.
+            return None
+        self._set_logged_thinking.add(tuple_key)
+        int_level: int = (
+            logging.DEBUG
+            if resolution.reason == THINKING_REASON_NO_CONTROL
+            else logging.INFO
+        )
+        _LOGGER.log(
+            int_level,
+            "THINKING: %s on %s applies %s for requested level %s (%s).",
+            type(self).__name__,
+            self.model_name,
+            resolution.applied.value if resolution.applied else "none",
+            resolution.requested.value,
+            resolution.reason,
+            extra={
+                "ai_thinking_event": str_event,
+                "model": self.model_name,
+                "reason": resolution.reason,
+                **thinking_event_fields(resolution),
+            },
+        )
+        # Normal return after the one-time line.
+        return None
 
     def _thinking_applied_override(
         self, applied: AIThinkingLevel | None, reason: str
@@ -2834,20 +2868,7 @@ class AIBaseCompletions(AIBase):
             self._last_thinking = self._last_thinking.model_copy(
                 update={"applied": applied, "exact": False, "reason": reason}
             )
-            _LOGGER.info(
-                "THINKING: %s on %s applied %s instead of %s (%s).",
-                type(self).__name__,
-                self.model_name,
-                applied.value if applied else "none",
-                self._last_thinking.requested.value,
-                reason,
-                extra={
-                    "ai_thinking_event": "engine_override",
-                    "model": self.model_name,
-                    "reason": reason,
-                    **thinking_event_fields(self._last_thinking),
-                },
-            )
+            self._log_thinking_once(self._last_thinking, "engine_override")
         # Normal return after recording the override.
         return None
 
@@ -3039,6 +3060,14 @@ class AIBaseCompletions(AIBase):
         Returns:
             Dictionary of metadata-only input fields safe for observability logging.
         """
+        # The call context snapshots `last_thinking` before the provider call
+        # runs, so the text paths resolve the level here, ahead of the code
+        # that builds the request; the engine's later resolution of the same
+        # call is identical. An engine-side override (a forced tool choice,
+        # a prefill, a max_tokens too small for a budget) lands after this
+        # point: it is on `last_thinking` and the result, while the input
+        # event carries the resolution before it.
+        self._thinking_for_call(other_params)
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = {
             "prompt_char_count": len(prompt),
             "prompt_token_count_source": TOKEN_COUNT_SOURCE_NONE,

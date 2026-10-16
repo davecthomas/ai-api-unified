@@ -54,6 +54,7 @@ from ..ai_base import (
 )
 from ..thinking import (
     THINKING_REASON_FORCED_TOOL_CHOICE,
+    THINKING_REASON_NO_CONTROL,
     AIThinkingLevel,
     claude_thinking_capabilities,
     claude_thinking_request_fields,
@@ -197,7 +198,14 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             self.completions_model, level, max_tokens=max_tokens
         )
         if str_reason is not None:
-            self._thinking_applied_override(AIThinkingLevel.OFF, str_reason)
+            self._thinking_applied_override(
+                (
+                    None
+                    if str_reason == THINKING_REASON_NO_CONTROL
+                    else AIThinkingLevel.OFF
+                ),
+                str_reason,
+            )
         # Normal return with the provider fields for the level.
         return dict_fields
 
