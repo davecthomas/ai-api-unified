@@ -20,6 +20,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..ai_provider_exceptions import AiFallbackReason
+from ..thinking import AIThinkingLevel, parse_thinking_level
 from ..completions.ai_fallback_completions import (
     AIFallbackCandidate,
     parse_fallback_candidates,
@@ -63,6 +64,9 @@ class AIRouterTier(BaseModel):
         candidates: The tier's models in order: the primary, then its chain.
         fallback_on: Reasons that move a request along the tier's chain;
             None means the router-level default.
+        thinking: The tier's thinking level (off, minimal, low, medium,
+            high, max); None means the router's level. A per-call level
+            still wins.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -71,6 +75,13 @@ class AIRouterTier(BaseModel):
     description: str = ""
     candidates: list[AIFallbackCandidate] = Field(min_length=1)
     fallback_on: frozenset[AiFallbackReason] | None = None
+    thinking: AIThinkingLevel | None = None
+
+    @field_validator("thinking", mode="before")
+    @classmethod
+    def _parse_thinking(cls, value: Any) -> Any:
+        # Normal return with the parsed level, or None.
+        return parse_thinking_level(value) if value is not None else None
 
     @model_validator(mode="before")
     @classmethod
@@ -146,6 +157,10 @@ class AIRouterClassifierConfig(BaseModel):
         base_url: Optional API base-URL override.
         timeout_seconds: Per-call classifier timeout.
         instructions: Prose prepended to the built-in routing instructions.
+        min_confidence: When the classifier reports a confidence below this
+            (0 to 1), the request goes one tier above the classifier's pick.
+            None turns the check off; a classifier that reports no
+            confidence keeps its pick.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -155,6 +170,7 @@ class AIRouterClassifierConfig(BaseModel):
     base_url: str | None = None
     timeout_seconds: float = DEFAULT_ROUTER_CLASSIFIER_TIMEOUT_SECONDS
     instructions: str | None = None
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @property
     def disabled(self) -> bool:
@@ -173,7 +189,16 @@ class AIRouterConfig(BaseModel):
         default_tier: Tier used when classification is unavailable; None
             means the default chain (the configured completions LLM).
         on_exhausted: When a tier's chain is exhausted on a trigger reason,
-            "escalate" tries the next tier up; "raise" re-raises.
+            "escalate" tries the next tier up; "any" tries every tier above
+            the pick, then the tiers below it, nearest first; "raise"
+            re-raises.
+        followup: How a follow-up turn of a plain conversation (one with an
+            earlier assistant turn and no tool calls) is routed.
+            "reclassify" classifies each turn on its own; "ratchet" never
+            routes it below the tier that served this client's previous
+            call. One client per conversation makes the ratchet exact; a
+            client shared across conversations should pass the floor per
+            call as provider_options["route_floor"] instead.
         fallback_on: Default trigger reasons for every tier's chain; None
             means the factory's resolution (COMPLETIONS_FALLBACK_ON, then the
             library default).
@@ -184,7 +209,8 @@ class AIRouterConfig(BaseModel):
     tiers: list[AIRouterTier] = Field(min_length=1)
     classifier: AIRouterClassifierConfig | None = None
     default_tier: str | None = None
-    on_exhausted: Literal["escalate", "raise"] = "escalate"
+    on_exhausted: Literal["escalate", "any", "raise"] = "escalate"
+    followup: Literal["reclassify", "ratchet"] = "reclassify"
     fallback_on: frozenset[AiFallbackReason] | None = None
     # Tiers the model check removed, each mapped to the next higher tier that
     # survived (None means the default route). A call that still names one

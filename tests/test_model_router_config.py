@@ -162,3 +162,55 @@ class TestClassificationText:
         )
         assert classification_text_for("prompt", None) == "prompt"
         assert classification_text_for(None, None) == ""
+
+
+class TestRouterOptions:
+    def test_json_carries_the_new_options(self) -> None:
+        config = load_router_config(
+            json.dumps(
+                {
+                    "tiers": [
+                        {"name": "easy", "models": ["claude:e"], "thinking": "off"},
+                        {"name": "hard", "models": ["claude:h"], "thinking": "high"},
+                    ],
+                    "classifier": {"engine": "openai-decisions", "min_confidence": 0.7},
+                    "on_exhausted": "any",
+                    "followup": "ratchet",
+                }
+            )
+        )
+        assert [t.thinking.value for t in config.tiers] == ["off", "high"]
+        assert config.classifier is not None
+        assert config.classifier.min_confidence == 0.7
+        assert config.on_exhausted == "any" and config.followup == "ratchet"
+
+    def test_defaults_keep_the_earlier_behavior(self) -> None:
+        config = load_router_config(
+            json.dumps({"tiers": [{"name": "easy", "models": ["claude:e"]}]})
+        )
+        assert config.on_exhausted == "escalate"
+        assert config.followup == "reclassify"
+        assert all(t.thinking is None for t in config.tiers)
+
+    @pytest.mark.parametrize(
+        "patch",
+        [{"followup": "sometimes"}, {"on_exhausted": "down"}],
+    )
+    def test_unknown_values_are_rejected(self, patch: dict[str, str]) -> None:
+        with pytest.raises(ValueError):
+            load_router_config(json.dumps({**DICT_CONFIG, **patch}))
+
+    def test_classifier_section_min_confidence_reaches_the_router(self) -> None:
+        from ai_api_unified.ai_models_config import AIModelsConfig
+
+        config = AIModelsConfig.model_validate(
+            {
+                "classifier": {"engine": "openai-decisions", "min_confidence": 0.55},
+                "router": {"tiers": [{"name": "easy", "models": ["claude:e"]}]},
+            }
+        )
+        router = config.setting("COMPLETIONS_ROUTER_CONFIG")
+        assert router is not None
+        parsed = load_router_config(router) if isinstance(router, str) else router
+        assert parsed.classifier is not None
+        assert parsed.classifier.min_confidence == 0.55
