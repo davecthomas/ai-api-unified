@@ -841,6 +841,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                 "fallback_to": str_next,
                 "fallback_reason": str_reason,
                 "status_code": error.status_code,
+                "config_id": self.config_id,
             },
         )
         # Normal return: move on.
@@ -873,6 +874,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                     if last_error is not None and last_error.fallback_reason
                     else ""
                 ),
+                "config_id": self.config_id,
             },
         )
 
@@ -910,6 +912,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                 "fallback_reason": (
                     error.fallback_reason.value if error.fallback_reason else ""
                 ),
+                "config_id": self.config_id,
             },
         )
 

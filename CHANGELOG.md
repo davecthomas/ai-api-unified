@@ -4,6 +4,30 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.9.0
+
+### Added
+
+- Config identity. Every completions client the factory builds records a
+  `config_id`, a 12-character hash of the routing configuration (primary,
+  fallbacks, trigger reasons, router, cooldown, thinking), and the
+  optional top-level `config_version` label from models.json. Both ride
+  on every call as the `config_id` / `config_version` observability tags
+  (so every input, output, and cost event and the request cost report
+  carry them), on the router's `routed` record, and as `config_id` on the
+  `tier_exhausted`, `failover`, `served_by_fallback`, and
+  `chain_exhausted` records. Read them as `client.config_id` and
+  `client.config_version`. Caller-set tags win.
+- Startup requirements: `completions.require` in models.json (or the
+  factory's `require=`) declares what every route (the default chain and
+  each router tier) must offer: `capabilities` its primary must support,
+  and `second_provider` (a model on a provider other than the primary's).
+  Checked once at build from each engine's model table, without building
+  a client. `mode: "warn"` (default) logs `requirement_unmet`; `"strict"`
+  raises. Export `AIConfigRequirements`.
+- `request_cost_scope(..., dict_default_tags=...)` for tags a request
+  carries unless the caller's own tags set them.
+
 ## 3.8.0
 
 ### Added

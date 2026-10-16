@@ -31,6 +31,7 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .routing.config_checks import AIConfigRequirements
 from .routing.router_config import AIRouterClassifierConfig, AIRouterConfig
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -135,6 +136,9 @@ class AICompletionsSelection(BaseModel):
     # How long a failed candidate rests: true/false, or
     # {"enabled": true, "seconds": {"rate_limited": 30, ...}}.
     cooldown: bool | dict[str, Any] | None = None
+    # What every route must offer, checked at build:
+    # {"capabilities": [...], "second_provider": true, "mode": "warn"}.
+    require: AIConfigRequirements | None = None
 
 
 class AIClassifierSelection(BaseModel):
@@ -214,12 +218,16 @@ class AIModelsConfig(BaseModel):
         model_check: The configured-model check mode and timeout.
         embeddings, images, videos, voice: Per-capability selections.
         geo_residency: Geo hint (`US`), as AI_API_GEO_RESIDENCY.
+        config_version: A label for this configuration (a date, a release,
+            a commit); every call the completions client makes carries it
+            as the `config_version` tag, next to the computed `config_id`.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # A free-text note for humans reading the file; ignored by the library.
     comment: str | None = Field(default=None, alias="_comment")
+    config_version: str | None = None
     allow: list[str] = Field(default_factory=list)
     deny: list[str] = Field(default_factory=list)
     completions: AICompletionsSelection = Field(default_factory=AICompletionsSelection)

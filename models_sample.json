@@ -1,4 +1,5 @@
 {
+  "config_version": "2026-10-16",
   "allow": ["claude:*", "google-gemini:*", "openai:*", "openai-decisions:*"],
   "deny": ["openai:gpt-4*", "bedrock"],
 
@@ -12,6 +13,11 @@
     "cooldown": {
       "enabled": true,
       "seconds": {"rate_limited": 30, "unavailable": 30, "quota_exhausted": 300}
+    },
+    "require": {
+      "capabilities": ["structured_output", "tool_use", "streaming"],
+      "second_provider": true,
+      "mode": "warn"
     }
   },
 

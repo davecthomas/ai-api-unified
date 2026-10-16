@@ -1241,6 +1241,8 @@ class AiRouterCompletions(AIBaseCompletions):
                 "caller_id": context.caller_id,
                 "session_id": context.session_id,
                 "workflow_id": context.workflow_id,
+                "config_id": self.config_id,
+                "config_version": self.config_version,
             },
         )
 
@@ -1332,6 +1334,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 "fallback_reason": str_reason,
                 "escalate_to": self._config.tiers[int_next].name,
                 "direction": "down" if bool_down else "up",
+                "config_id": self.config_id,
             },
         )
         if bool_down:

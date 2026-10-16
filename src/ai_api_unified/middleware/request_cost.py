@@ -666,6 +666,7 @@ def request_cost_scope(
     operation: str,
     *,
     request_id: str | None = None,
+    dict_default_tags: Mapping[str, str] | None = None,
 ) -> Iterator[RequestCostScope | JoinedRequestCostScope]:
     """
     Opens (or joins) the request that provider calls are charged to.
@@ -687,6 +688,9 @@ def request_cost_scope(
             a workflow step.
         request_id: Correlation id; generated when omitted. A router passes
             its `route_id`.
+        dict_default_tags: Tags the request carries unless the caller's own
+            observability tags set the same key (a client passes its
+            config_id and config_version). Ignored when joining.
 
     Yields:
         The active scope, or a joined view of it. `scope.bool_owner` tells
@@ -705,13 +709,19 @@ def request_cost_scope(
         yield JoinedRequestCostScope(existing)
         return
     scope: RequestCostScope = RequestCostScope(operation, request_id=request_id)
+    if dict_default_tags:
+        scope._tags = {**dict(dict_default_tags), **scope._tags}
     token_scope: Token[RequestCostScope | None] = REQUEST_COST_SCOPE.set(scope)
     context = get_observability_context()
     token_context = set_observability_context(
         caller_id=context.caller_id,
         session_id=context.session_id,
         workflow_id=context.workflow_id,
-        tags={**dict(context.tags), TAG_REQUEST_ID: scope.request_id},
+        tags={
+            **dict(dict_default_tags or {}),
+            **dict(context.tags),
+            TAG_REQUEST_ID: scope.request_id,
+        },
     )
     str_status: str = REQUEST_STATUS_ERROR
     try:
