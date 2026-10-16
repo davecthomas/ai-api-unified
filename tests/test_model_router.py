@@ -194,9 +194,13 @@ class _FakeClassifier(AIBaseClassifier):
         *,
         fail: Exception | None = None,
         supports_async: bool = True,
+        confidence: float | None = 0.8,
+        pricing: Any = None,
     ) -> None:
         super().__init__(model="fake-classifier")
         self.choice = choice
+        self.confidence = confidence
+        self.pricing = pricing
         self.fail = fail
         self._async = supports_async
         self.calls: list[dict[str, Any]] = []
@@ -208,7 +212,9 @@ class _FakeClassifier(AIBaseClassifier):
 
     @property
     def capabilities(self) -> AIClassifierCapabilitiesBase:
-        return AIClassifierCapabilitiesBase(supports_async=self._async)
+        return AIClassifierCapabilitiesBase(
+            supports_async=self._async, pricing=self.pricing
+        )
 
     def _classify_choice_provider(
         self, str_text: str, list_choices: list[AIClassificationChoice], **kwargs: Any
@@ -223,7 +229,7 @@ class _FakeClassifier(AIBaseClassifier):
             question_type="choice",
             choice=self.choice,
             refused=self.choice is None,
-            confidence=0.8,
+            confidence=self.confidence,
             probabilities={"easy": 0.2, "hard": 0.8},
             usage=AITokenUsage(input_tokens=12, output_tokens=0),
             token_source="provider",
@@ -245,11 +251,13 @@ def _router(
     tiers: list[AIRouterTier] | None = None,
     classifier: AIBaseClassifier | None = None,
     default: _FakeEngine | None = None,
+    classifier_config: AIRouterClassifierConfig | None = None,
     **config_kwargs: Any,
 ) -> AiRouterCompletions:
     """Builds a router whose builder hands out `engines` by candidate label."""
     config = AIRouterConfig(
         tiers=tiers or [_tier("easy", "claude:e"), _tier("hard", "claude:h")],
+        classifier=classifier_config,
         **config_kwargs,
     )
     builder = Mock(side_effect=lambda candidate: engines[candidate.label])
@@ -259,6 +267,7 @@ def _router(
         classifier=classifier,
         client_builder=builder,
         fallback_on=DEFAULT_FALLBACK_REASONS,
+        cooldown=False,
     )
     router.builder = builder  # type: ignore[attr-defined]
     return router
@@ -913,3 +922,293 @@ class TestFactory:
             client = AIFactory.get_ai_completions_client()
         assert isinstance(client, AiRouterCompletions)
         assert isinstance(client.default_client, AiFallbackCompletions)
+
+
+# ── Router options: tier thinking, confidence, floors, descent, cost ───────
+
+
+def _three(**fails: Exception) -> dict[str, _FakeEngine]:
+    return _engines("e", "m", "h", **fails)
+
+
+def _three_tiers(**kwargs: Any) -> list[AIRouterTier]:
+    return [
+        _tier("easy", "claude:e", **kwargs.get("easy", {})),
+        _tier("medium", "claude:m", **kwargs.get("medium", {})),
+        _tier("hard", "claude:h", **kwargs.get("hard", {})),
+    ]
+
+
+class TestTierThinking:
+    def test_each_tier_applies_its_own_level_and_others_inherit(self) -> None:
+        from ai_api_unified import AIThinkingLevel
+
+        engines = _three()
+        router = _router(
+            engines,
+            tiers=_three_tiers(easy={"thinking": "off"}, hard={"thinking": "HIGH"}),
+            classifier=_FakeClassifier("easy"),
+        )
+        router.thinking_level = "low"
+        router.send_prompt("p")
+        router.classifier.choice = "hard"  # type: ignore[union-attr]
+        router.send_prompt("p")
+        router.classifier.choice = "medium"  # type: ignore[union-attr]
+        router.send_prompt("p")
+        assert engines["claude:e"].thinking_level is AIThinkingLevel.OFF
+        assert engines["claude:h"].thinking_level is AIThinkingLevel.HIGH
+        assert engines["claude:m"].thinking_level is AIThinkingLevel.LOW
+        # A later router-wide change keeps each tier's own level.
+        router.thinking_level = "max"
+        assert engines["claude:e"].thinking_level is AIThinkingLevel.OFF
+        assert engines["claude:m"].thinking_level is AIThinkingLevel.MAX
+
+    def test_bad_tier_level_is_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            _tier("easy", "claude:e", thinking="lots")
+
+
+class TestLowConfidence:
+    def _build(
+        self, confidence: float | None, choice: str = "easy", min_conf: Any = 0.6
+    ) -> tuple[dict[str, _FakeEngine], AiRouterCompletions]:
+        engines = _three()
+        router = _router(
+            engines,
+            tiers=_three_tiers(),
+            classifier=_FakeClassifier(choice, confidence=confidence),
+            classifier_config=(
+                AIRouterClassifierConfig(min_confidence=min_conf)
+                if min_conf is not None
+                else None
+            ),
+        )
+        return engines, router
+
+    def test_unsure_pick_goes_one_tier_up(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engines, router = self._build(0.4)
+        with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+            assert router.send_prompt("p") == "m:ok"
+        routed = [
+            r for r in caplog.records if getattr(r, "ai_router_event", "") == "routed"
+        ][-1]
+        assert routed.method == "low_confidence" and routed.tier == "medium"
+
+    @pytest.mark.parametrize(
+        ("confidence", "min_conf", "expected"),
+        [(0.6, 0.6, "e:ok"), (None, 0.6, "e:ok"), (0.1, None, "e:ok")],
+        ids=["at-threshold", "no-confidence", "check-off"],
+    )
+    def test_confident_unreported_or_unchecked_keeps_the_pick(
+        self, confidence: float | None, min_conf: Any, expected: str
+    ) -> None:
+        _, router = self._build(confidence, min_conf=min_conf)
+        assert router.send_prompt("p") == expected
+
+    def test_unsure_top_pick_stays_on_top(self) -> None:
+        _, router = self._build(0.1, choice="hard")
+        assert router.send_prompt("p") == "h:ok"
+
+    def test_min_confidence_is_bounded(self) -> None:
+        with pytest.raises(ValueError):
+            AIRouterClassifierConfig(min_confidence=1.5)
+
+
+class TestFloors:
+    def test_route_floor_raises_a_lower_pick_and_is_stripped(self) -> None:
+        engines = _three()
+        router = _router(
+            engines, tiers=_three_tiers(), classifier=_FakeClassifier("easy")
+        )
+        router.send_structured_output(
+            "p", response_model=None, provider_options={"route_floor": "medium"}
+        )
+        assert engines["claude:m"].calls == ["send_structured_output"]
+        assert "route_floor" not in (
+            engines["claude:m"].last_kwargs.get("provider_options") or {}
+        )
+        # A pick above the floor stands.
+        router.classifier.choice = "hard"  # type: ignore[union-attr]
+        router.send_structured_output(
+            "p", response_model=None, provider_options={"route_floor": "medium"}
+        )
+        assert engines["claude:h"].calls == ["send_structured_output"]
+
+    def test_unknown_floor_raises(self) -> None:
+        router = _router(
+            _three(), tiers=_three_tiers(), classifier=_FakeClassifier("easy")
+        )
+        with pytest.raises(ValueError, match="route_floor"):
+            router.send_structured_output(
+                "p", response_model=None, provider_options={"route_floor": "x"}
+            )
+
+    def test_override_ignores_the_floor(self) -> None:
+        engines = _three()
+        router = _router(
+            engines, tiers=_three_tiers(), classifier=_FakeClassifier("hard")
+        )
+        router.send_structured_output(
+            "p",
+            response_model=None,
+            provider_options={"route": "easy", "route_floor": "hard"},
+        )
+        assert engines["claude:e"].calls == ["send_structured_output"]
+
+    def _conversation(self, router: AiRouterCompletions) -> AITurnResult:
+        return router.send_conversation(
+            "sys",
+            [
+                {"role": "user", "content": "a"},
+                {"role": "assistant", "content": "b"},
+                {"role": "user", "content": "c"},
+            ],
+        )
+
+    def test_ratchet_keeps_a_follow_up_at_or_above_the_last_tier(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engines = _three()
+        router = _router(
+            engines,
+            tiers=_three_tiers(),
+            classifier=_FakeClassifier("hard"),
+            followup="ratchet",
+        )
+        router.send_conversation("sys", [{"role": "user", "content": "a"}])
+        router.classifier.choice = "easy"  # type: ignore[union-attr]
+        with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+            self._conversation(router)
+        assert engines["claude:h"].calls == ["send_conversation"] * 2
+        assert engines["claude:e"].calls == []
+        routed = [
+            r for r in caplog.records if getattr(r, "ai_router_event", "") == "routed"
+        ][-1]
+        assert routed.method == "floor"
+
+    def test_reclassify_is_the_default_and_a_first_turn_is_never_floored(
+        self,
+    ) -> None:
+        engines = _three()
+        router = _router(
+            engines, tiers=_three_tiers(), classifier=_FakeClassifier("hard")
+        )
+        router.send_conversation("sys", [{"role": "user", "content": "a"}])
+        router.classifier.choice = "easy"  # type: ignore[union-attr]
+        self._conversation(router)
+        assert engines["claude:e"].calls == ["send_conversation"]
+        ratchet = _router(
+            _three(),
+            tiers=_three_tiers(),
+            classifier=_FakeClassifier("hard"),
+            followup="ratchet",
+        )
+        ratchet.send_prompt("p")
+        ratchet.classifier.choice = "easy"  # type: ignore[union-attr]
+        assert ratchet.send_prompt("p") == "e:ok"
+
+
+class TestDescend:
+    def test_any_goes_up_first_then_down(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engines = _three(m=_err(R.UNAVAILABLE), h=_err(R.UNAVAILABLE))
+        router = _router(
+            engines,
+            tiers=_three_tiers(),
+            classifier=_FakeClassifier("medium"),
+            on_exhausted="any",
+        )
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            assert router.send_prompt("p") == "e:ok"
+        assert engines["claude:h"].calls == ["send_prompt"]
+        exhausted = [
+            r
+            for r in caplog.records
+            if getattr(r, "ai_router_event", "") == "tier_exhausted"
+        ]
+        assert [(r.tier, r.escalate_to, r.direction) for r in exhausted] == [
+            ("medium", "hard", "up"),
+            ("hard", "easy", "down"),
+        ]
+        assert "tier_descended" in _events(caplog)
+        assert router.last_tier == "easy"
+
+    def test_escalate_never_descends(self) -> None:
+        engines = _three(m=_err(R.UNAVAILABLE), h=_err(R.UNAVAILABLE))
+        router = _router(
+            engines, tiers=_three_tiers(), classifier=_FakeClassifier("medium")
+        )
+        with pytest.raises(AiProviderRequestError):
+            router.send_prompt("p")
+        assert engines["claude:e"].calls == []
+
+    def test_any_raises_when_every_tier_fails(self) -> None:
+        engines = _three(
+            e=_err(R.UNAVAILABLE), m=_err(R.UNAVAILABLE), h=_err(R.UNAVAILABLE)
+        )
+        router = _router(
+            engines,
+            tiers=_three_tiers(),
+            classifier=_FakeClassifier("hard"),
+            on_exhausted="any",
+        )
+        with pytest.raises(AiProviderRequestError):
+            router.send_prompt("p")
+        assert [
+            len(engines[k].calls) for k in ("claude:h", "claude:m", "claude:e")
+        ] == [
+            1,
+            1,
+            1,
+        ]
+
+    def test_any_descends_in_async_and_streaming(self) -> None:
+        engines = _three(h=_err(R.UNAVAILABLE))
+        router = _router(
+            engines,
+            tiers=_three_tiers(),
+            classifier=_FakeClassifier("hard"),
+            on_exhausted="any",
+        )
+        assert asyncio.run(router.asend_prompt("p")) == "m:ok"
+        assert list(router.send_prompt_streaming("p")) == ["m-1", "m-2"]
+
+
+class TestClassifierCost:
+    def _pricing(self, str_provider: str, str_model: str) -> Any:
+        from ai_api_unified.pricing.pricing_registry import get_model_pricing
+
+        return get_model_pricing(str_provider, str_model)
+
+    def _build(self, pricing: Any) -> None:
+        _router(
+            {},
+            tiers=[
+                _tier("easy", "claude:claude-haiku-4-5"),
+                _tier("hard", "claude:claude-opus-5-5"),
+            ],
+            classifier=_FakeClassifier("easy", pricing=pricing),
+        )
+
+    def test_classifier_as_costly_as_the_cheapest_tier_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            self._build(self._pricing("anthropic", "claude-opus-5-5"))
+        costly = [
+            r
+            for r in caplog.records
+            if getattr(r, "ai_router_event", "") == "classifier_costly"
+        ]
+        assert costly and costly[0].cheapest_tier == "easy(claude:claude-haiku-4-5)"
+
+    @pytest.mark.parametrize("cheap", [True, False], ids=["cheaper", "unpriced"])
+    def test_cheap_or_unpriced_classifier_is_quiet(
+        self, cheap: bool, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            self._build(self._pricing("openai", "gpt-6-luna") if cheap else None)
+        assert "classifier_costly" not in _events(caplog)

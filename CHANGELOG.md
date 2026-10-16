@@ -4,6 +4,36 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.8.0
+
+### Added
+
+- Router options, all off by default:
+  - `thinking` per tier. A tier without one uses the router's level; a
+    per-call level still wins.
+  - `classifier.min_confidence` (0 to 1). A pick below it goes one tier up
+    (route method `low_confidence`). A classifier that reports no
+    confidence keeps its pick. Also read from the top-level `classifier`
+    section of models.json.
+  - `provider_options["route_floor"]` on structured-output and
+    conversation calls: the pick is raised to at least that tier (route
+    method `floor`). An override or a tool-shaped history is never moved.
+  - `followup: "ratchet"`: a follow-up turn of a plain conversation never
+    goes below the tier that served the client's previous call. Exact
+    with one client per conversation; a shared client passes
+    `route_floor` instead.
+  - `on_exhausted: "any"`: once no tier above can serve, the router tries
+    the tiers below the pick, nearest first, logging `tier_descended`
+    (WARNING) and `direction: down` on `tier_exhausted`.
+- `classifier_costly` (WARNING, once at build) when the classifier's input
+  rate is at or above the cheapest priced tier primary's.
+
+### Changed
+
+- `tier_exhausted` records carry `direction` (`up` or `down`).
+- A tier that cannot be built logs "moving to" instead of "escalating
+  to", since with `on_exhausted: "any"` the next tier may be lower.
+
 ## 3.7.0
 
 ### Added

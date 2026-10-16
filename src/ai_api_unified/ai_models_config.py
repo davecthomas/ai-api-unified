@@ -147,6 +147,8 @@ class AIClassifierSelection(BaseModel):
     base_url: str | None = None
     timeout_seconds: float | None = None
     instructions: str | None = None
+    # Router only: below this confidence (0 to 1) a request goes one tier up.
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class AIModelCheckSelection(BaseModel):
@@ -291,7 +293,8 @@ def _classifier_pair(config: AIModelsConfig) -> str | None:
 def _router_with_classifier(config: AIModelsConfig) -> AIRouterConfig | None:
     """
     The router for COMPLETIONS_ROUTER_CONFIG, carrying the `classifier`
-    section's base_url, timeout, and instructions when the router names no
+    section's base_url, timeout, instructions, and min_confidence when the
+    router names no
     classifier of its own (engine and model travel as
     COMPLETIONS_ROUTER_CLASSIFIER).
     """
@@ -304,6 +307,7 @@ def _router_with_classifier(config: AIModelsConfig) -> AIRouterConfig | None:
         selection.base_url is None
         and selection.timeout_seconds is None
         and selection.instructions is None
+        and selection.min_confidence is None
     ):
         # Early return: nothing to carry over.
         return router
@@ -315,6 +319,8 @@ def _router_with_classifier(config: AIModelsConfig) -> AIRouterConfig | None:
     }
     if selection.timeout_seconds is not None:
         dict_classifier["timeout_seconds"] = selection.timeout_seconds
+    if selection.min_confidence is not None:
+        dict_classifier["min_confidence"] = selection.min_confidence
     # Normal return with the classifier section folded in.
     return router.model_copy(
         update={"classifier": AIRouterClassifierConfig(**dict_classifier)}

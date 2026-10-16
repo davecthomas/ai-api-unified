@@ -12,8 +12,11 @@ chain is an AiFallbackCompletions, so provider failures, engine families,
 and same-account skips behave exactly as they do without a router.
 
 The router adds one failure behavior of its own: when a tier's chain is
-exhausted on a trigger reason, it escalates to the next tier up (or raises,
-when configured). The classifier can never fail a user's call: no
+exhausted on a trigger reason, it escalates to the next tier up; with
+on_exhausted "any" it then descends below the pick, and with "raise" it
+re-raises. An unsure classifier (below classifier.min_confidence) sends the
+call one tier up, and a route_floor or the follow-up ratchet keeps a pick
+from going below a floor. Each tier may carry its own thinking level. The classifier can never fail a user's call: no
 classifier, a classifier error, or a refusal routes to the default tier or
 the default chain, and the reason is logged.
 
@@ -57,6 +60,7 @@ from ..middleware.observability_runtime import (
     set_observability_context,
 )
 from ..middleware.request_cost import RequestCostScope, current_request_cost_scope
+from ..pricing.pricing_registry import get_model_pricing
 from ..thinking import parse_thinking_level
 from ..routing.router_config import (
     AIRouterConfig,
@@ -81,12 +85,38 @@ ROUTER_EVENT_CLASSIFIER_UNAVAILABLE: str = "classifier_unavailable"
 ROUTER_EVENT_CLASSIFIER_FAILED: str = "classifier_failed"
 ROUTER_EVENT_TIER_EXHAUSTED: str = "tier_exhausted"
 ROUTER_EVENT_TIER_UNBUILDABLE: str = "tier_unbuildable"
+ROUTER_EVENT_TIER_DESCENDED: str = "tier_descended"
+ROUTER_EVENT_CLASSIFIER_COSTLY: str = "classifier_costly"
 
 # Values of the `method` field on a routed event.
 ROUTE_METHOD_CLASSIFIER: str = "classifier"
 ROUTE_METHOD_DEFAULT: str = "default"
 ROUTE_METHOD_PINNED: str = "pinned"
 ROUTE_METHOD_OVERRIDE: str = "override"
+ROUTE_METHOD_LOW_CONFIDENCE: str = "low_confidence"
+ROUTE_METHOD_FLOOR: str = "floor"
+
+# Methods a floor (route_floor, or the follow-up ratchet) may raise. An
+# override or a pinned history is never moved.
+FROZENSET_FLOORABLE_METHODS: frozenset[str] = frozenset(
+    {ROUTE_METHOD_CLASSIFIER, ROUTE_METHOD_LOW_CONFIDENCE, ROUTE_METHOD_DEFAULT}
+)
+
+# Pricing-registry provider by engine token, for the classifier cost check.
+DICT_PRICING_PROVIDER_BY_TOKEN: dict[str, str] = {
+    "openai": "openai",
+    "openai-responses": "openai",
+    "openai-decisions": "openai",
+    "claude": "anthropic",
+    "google-gemini": "google",
+    "anthropic": "bedrock",
+    "bedrock": "bedrock",
+    "nova": "bedrock",
+    "llama": "bedrock",
+    "mistral": "bedrock",
+    "cohere": "bedrock",
+    "ai21": "bedrock",
+}
 
 # Observability tags pushed around every routed call.
 TAG_ROUTE_ID: str = "route_id"
@@ -115,6 +145,8 @@ class AiRouterCompletions(AIBaseCompletions):
 
     # Reserved provider option: a tier name, or "default", pins one call.
     PROVIDER_OPTION_ROUTE: ClassVar[str] = "route"
+    # Reserved provider option: a tier name the call may not route below.
+    PROVIDER_OPTION_ROUTE_FLOOR: ClassVar[str] = "route_floor"
 
     def __init__(
         self,
@@ -170,6 +202,58 @@ class AiRouterCompletions(AIBaseCompletions):
                     "routed_to": self._tier_label(self._int_default_tier_index),
                 },
             )
+        else:
+            self._warn_if_classifier_costly()
+
+    def _warn_if_classifier_costly(self) -> None:
+        """
+        Warns once when the classifier's input rate is at or above the
+        cheapest tier primary's, since classifying then costs about as much
+        as sending the request to that tier outright.
+        """
+        assert self._classifier is not None
+        capabilities: Any = getattr(self._classifier, "capabilities", None)
+        pricing: Any = getattr(capabilities, "pricing", None)
+        rates: Any = getattr(pricing, "token_rates", None)
+        if rates is None:
+            # Early return: the classifier is not priced.
+            return None
+        cheapest: tuple[Decimal, str] | None = None
+        # Loop over tier primaries for the lowest priced input rate.
+        for tier in self._config.tiers:
+            candidate: AIFallbackCandidate = tier.candidates[0]
+            str_provider: str | None = DICT_PRICING_PROVIDER_BY_TOKEN.get(
+                candidate.engine
+            )
+            if str_provider is None or not candidate.model:
+                continue
+            tier_pricing: Any = get_model_pricing(str_provider, candidate.model)
+            tier_rates: Any = getattr(tier_pricing, "token_rates", None)
+            if tier_rates is None:
+                continue
+            if cheapest is None or tier_rates.input_per_1m < cheapest[0]:
+                cheapest = (tier_rates.input_per_1m, tier.label)
+        if cheapest is None or rates.input_per_1m < cheapest[0]:
+            # Early return: cheaper than every priced tier, or nothing to compare.
+            return None
+        _LOGGER.warning(
+            "ROUTER: the classifier %s costs $%s per 1M input tokens, at or above "
+            "the cheapest tier %s ($%s); classifying may cost about as much as "
+            "routing every request there.",
+            self._classifier.model_name,
+            rates.input_per_1m,
+            cheapest[1],
+            cheapest[0],
+            extra={
+                "ai_router_event": ROUTER_EVENT_CLASSIFIER_COSTLY,
+                "classifier_model": self._classifier.model_name,
+                "classifier_input_per_1m": float(rates.input_per_1m),
+                "cheapest_tier": cheapest[1],
+                "cheapest_tier_input_per_1m": float(cheapest[0]),
+            },
+        )
+        # Normal return after the warning.
+        return None
 
     # ── Introspection ───────────────────────────────────────────────────────
 
@@ -275,9 +359,9 @@ class AiRouterCompletions(AIBaseCompletions):
         self._default_client.thinking_level = self._thinking_level
         # Loop over built tiers so each chain applies the level; later builds
         # pick it up in _tier_client.
-        for chain in self._tier_clients.values():
+        for int_index, chain in self._tier_clients.items():
             if chain is not None:
-                chain.thinking_level = self._thinking_level
+                chain.thinking_level = self._tier_thinking(int_index)
         # Normal return after propagating the level.
         return None
 
@@ -422,11 +506,18 @@ class AiRouterCompletions(AIBaseCompletions):
             fallback_on=tier.fallback_on or self._fallback_on,
             cooldown=self._cooldown,
         )
-        if self._thinking_level is not None:
-            client.thinking_level = self._thinking_level
+        level_tier: Any = self._tier_thinking(int_index)
+        if level_tier is not None:
+            client.thinking_level = level_tier
         self._tier_clients[int_index] = client
         # Normal return with the new chain.
         return client
+
+    def _tier_thinking(self, int_index: int) -> Any:
+        """A tier's own thinking level, else the router's, else None."""
+        level_tier: Any = self._config.tiers[int_index].thinking
+        # Normal return with the tier's level, or the router-wide one.
+        return level_tier if level_tier is not None else self._thinking_level
 
     def _client_at(self, int_index: int | None) -> AIBaseCompletions | None:
         """The default client for None, else the tier's chain."""
@@ -453,26 +544,32 @@ class AiRouterCompletions(AIBaseCompletions):
 
     def _strip_route_option(
         self, provider_options: dict[str, Any] | None
-    ) -> tuple[dict[str, Any] | None, str | None]:
+    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
         """
-        Removes the reserved route key before options reach a chain.
+        Removes the reserved route and route_floor keys before options reach
+        a chain.
 
         Args:
             provider_options: The call's provider_options.
 
         Returns:
-            (remaining options or None, the route override or None).
+            (remaining options or None, the route override or None, the
+            route floor or None).
         """
         if not provider_options:
             # Early return: nothing to strip.
-            return None, None
+            return None, None, None
         dict_copy: dict[str, Any] = dict(provider_options)
         raw_route: Any = dict_copy.pop(self.PROVIDER_OPTION_ROUTE, None)
+        raw_floor: Any = dict_copy.pop(self.PROVIDER_OPTION_ROUTE_FLOOR, None)
         str_route: str | None = (
             str(raw_route).strip().lower() if raw_route not in (None, "") else None
         )
-        # Normal return with the stripped options and the override.
-        return dict_copy or None, str_route
+        str_floor: str | None = (
+            str(raw_floor).strip().lower() if raw_floor not in (None, "") else None
+        )
+        # Normal return with the stripped options, the override, and the floor.
+        return dict_copy or None, str_route, str_floor
 
     def _select(
         self,
@@ -482,9 +579,81 @@ class AiRouterCompletions(AIBaseCompletions):
         str_route: str | None,
         str_operation: str,
         str_route_id: str,
+        str_floor: str | None = None,
+    ) -> tuple[int | None, str, AIClassificationResult | None]:
+        """Decides which tier serves one call, then applies any floor."""
+        int_index, str_method, decision = self._select_unfloored(
+            str_text=str_text,
+            messages=messages,
+            str_route=str_route,
+            str_operation=str_operation,
+            str_route_id=str_route_id,
+        )
+        # Normal return with the floored selection.
+        return (
+            *self._apply_floor(int_index, str_method, messages, str_floor),
+            decision,
+        )
+
+    def _apply_floor(
+        self,
+        int_index: int | None,
+        str_method: str,
+        messages: list[dict[str, Any]] | None,
+        str_floor: str | None,
+    ) -> tuple[int | None, str]:
+        """
+        Raises a classified or default pick to the call's floor: the
+        route_floor option, and with followup "ratchet" the tier that served
+        this client's previous call when the history is a follow-up.
+
+        Raises:
+            ValueError: route_floor names no tier.
+        """
+        if str_method not in FROZENSET_FLOORABLE_METHODS:
+            # Early return: an override or a pinned history is never moved.
+            return int_index, str_method
+        int_floor: int | None = None
+        if str_floor is not None:
+            str_resolved: str | None = self._config.resolve_tier_name(str_floor)
+            int_floor = (
+                self._config.tier_index(str_resolved)
+                if str_resolved is not None
+                else None
+            )
+            if int_floor is None and str_resolved is not None:
+                raise ValueError(
+                    f"Unknown router tier {str_floor!r} in provider_options "
+                    f"'{self.PROVIDER_OPTION_ROUTE_FLOOR}'; expected one of "
+                    f"{[tier.name for tier in self._config.tiers]}."
+                )
+        if (
+            self._config.followup == "ratchet"
+            and self._last_tier_index is not None
+            and any(message.get("role") == "assistant" for message in (messages or []))
+        ):
+            int_floor = (
+                self._last_tier_index
+                if int_floor is None
+                else max(int_floor, self._last_tier_index)
+            )
+        if int_floor is None or (int_index is not None and int_index >= int_floor):
+            # Early return: the pick is at or above the floor.
+            return int_index, str_method
+        # Normal return: the pick is raised to the floor.
+        return int_floor, ROUTE_METHOD_FLOOR
+
+    def _select_unfloored(
+        self,
+        *,
+        str_text: str,
+        messages: list[dict[str, Any]] | None,
+        str_route: str | None,
+        str_operation: str,
+        str_route_id: str,
     ) -> tuple[int | None, str, AIClassificationResult | None]:
         """
-        Decides which tier serves one call.
+        Decides which tier serves one call, before any floor.
 
         Args:
             str_text: The text to classify.
@@ -567,8 +736,10 @@ class AiRouterCompletions(AIBaseCompletions):
             str_next: str | None = self._config.pruned_tiers[decision.choice]
             # Early return: a pruned tier goes to the next higher survivor.
             return (
-                self._config.tier_index(str_next) if str_next else None,
-                ROUTE_METHOD_CLASSIFIER,
+                *self._raise_if_unsure(
+                    self._config.tier_index(str_next) if str_next else None,
+                    decision,
+                ),
                 decision,
             )
         int_index: int | None = self._config.tier_index(decision.choice)
@@ -583,8 +754,32 @@ class AiRouterCompletions(AIBaseCompletions):
             )
             # Early return: the classifier named no tier we know.
             return self._int_default_tier_index, ROUTE_METHOD_DEFAULT, decision
-        # Normal return with the classified tier.
-        return int_index, ROUTE_METHOD_CLASSIFIER, decision
+        # Normal return with the classified tier, raised one when unsure.
+        return *self._raise_if_unsure(int_index, decision), decision
+
+    def _raise_if_unsure(
+        self, int_index: int | None, decision: AIClassificationResult
+    ) -> tuple[int | None, str]:
+        """
+        Moves a pick one tier up when the classifier's confidence is below
+        classifier.min_confidence; a classifier that reports none keeps it.
+        """
+        float_min: float | None = (
+            self._config.classifier.min_confidence
+            if self._config.classifier is not None
+            else None
+        )
+        if (
+            float_min is None
+            or decision.confidence is None
+            or decision.confidence >= float_min
+            or int_index is None
+            or int_index + 1 >= len(self._config.tiers)
+        ):
+            # Early return: confident enough, unchecked, or already on top.
+            return int_index, ROUTE_METHOD_CLASSIFIER
+        # Normal return with the next tier up.
+        return int_index + 1, ROUTE_METHOD_LOW_CONFIDENCE
 
     def _pinned_tier(self, str_family: str) -> int | None:
         """
@@ -673,11 +868,35 @@ class AiRouterCompletions(AIBaseCompletions):
         str_route: str | None,
         str_operation: str,
         str_route_id: str,
+        str_floor: str | None = None,
     ) -> tuple[int | None, str, AIClassificationResult | None]:
         """Async twin of _select."""
+        int_index, str_method, decision = await self._aselect_unfloored(
+            str_text=str_text,
+            messages=messages,
+            str_route=str_route,
+            str_operation=str_operation,
+            str_route_id=str_route_id,
+        )
+        # Normal return with the floored selection.
+        return (
+            *self._apply_floor(int_index, str_method, messages, str_floor),
+            decision,
+        )
+
+    async def _aselect_unfloored(
+        self,
+        *,
+        str_text: str,
+        messages: list[dict[str, Any]] | None,
+        str_route: str | None,
+        str_operation: str,
+        str_route_id: str,
+    ) -> tuple[int | None, str, AIClassificationResult | None]:
+        """Async twin of _select_unfloored."""
         if str_route is not None or history_family_of(messages or []) is not None:
             # Early return: no classifier call is involved.
-            return self._select(
+            return self._select_unfloored(
                 str_text=str_text,
                 messages=messages,
                 str_route=str_route,
@@ -709,27 +928,60 @@ class AiRouterCompletions(AIBaseCompletions):
 
     # ── Dispatch ────────────────────────────────────────────────────────────
 
-    def _next_tier_up(self, int_index: int, str_family: str | None) -> int | None:
+    def _tier_takes_family(self, int_index: int, str_family: str | None) -> bool:
         """
-        The next tier above one that may serve this call, or None.
+        True when a tier may serve this call. A family-pinned history can
+        only replay on a tier with a candidate of that family.
+        """
+        # Normal return with the family check.
+        return str_family is None or any(
+            self._candidate_family(candidate) == str_family
+            for candidate in self._config.tiers[int_index].candidates
+        )
 
-        A family-pinned history can only replay on a tier with a candidate
-        of that family, so tiers of other families are skipped.
-        """
+    def _next_tier_up(self, int_index: int, str_family: str | None) -> int | None:
+        """The next tier above one that may serve this call, or None."""
         # Loop upward for the first tier that can take the call.
         for int_next in range(int_index + 1, len(self._config.tiers)):
-            if str_family is None or any(
-                self._candidate_family(candidate) == str_family
-                for candidate in self._config.tiers[int_next].candidates
-            ):
+            if self._tier_takes_family(int_next, str_family):
                 # Early return with the eligible tier.
                 return int_next
         # Normal return: nothing above may serve the call.
         return None
 
+    def _next_tier(
+        self, int_current: int, int_pick: int, str_family: str | None
+    ) -> int | None:
+        """
+        Where a call goes after its current tier is exhausted, or None.
+
+        Upward from the current tier first. With on_exhausted "any", once
+        nothing above may serve, the tiers below the pick follow, nearest
+        first; a call already below the pick keeps going down.
+        """
+        if int_current >= int_pick:
+            int_up: int | None = self._next_tier_up(int_current, str_family)
+            if int_up is not None:
+                # Early return with the next tier up.
+                return int_up
+            int_below: int = int_pick - 1
+        else:
+            int_below = int_current - 1
+        if self._config.on_exhausted != "any":
+            # Early return: only "any" descends.
+            return None
+        # Loop downward for the nearest lower tier that can take the call.
+        for int_next in range(int_below, -1, -1):
+            if self._tier_takes_family(int_next, str_family):
+                # Early return with the lower tier.
+                return int_next
+        # Normal return: no tier may serve the call.
+        return None
+
     def _should_escalate(
         self,
         int_index: int | None,
+        int_pick: int | None,
         exception: BaseException,
         str_family: str | None,
     ) -> bool:
@@ -743,7 +995,7 @@ class AiRouterCompletions(AIBaseCompletions):
         if int_index is None or self._config.on_exhausted == "raise":
             # Early return: nothing above the default chain, or raise mode.
             return False
-        if self._next_tier_up(int_index, str_family) is None:
+        if int_pick is None or self._next_tier(int_index, int_pick, str_family) is None:
             # Early return: no tier above may serve the call.
             return False
         reason: Any = getattr(exception, "fallback_reason", None)
@@ -787,7 +1039,7 @@ class AiRouterCompletions(AIBaseCompletions):
             client: AIBaseCompletions | None = self._client_at(int_current)
             if client is None:
                 int_current = self._next_after_unbuildable(
-                    int_current, str_operation, str_route_id, str_family
+                    int_current, int_index, str_operation, str_route_id, str_family
                 )
                 continue
             token = self._push_tags(
@@ -800,10 +1052,14 @@ class AiRouterCompletions(AIBaseCompletions):
             try:
                 result: T = call(client)
             except Exception as exception:
-                if not self._should_escalate(int_current, exception, str_family):
+                if not self._should_escalate(
+                    int_current, int_index, exception, str_family
+                ):
                     raise
-                assert int_current is not None
-                int_next: int | None = self._next_tier_up(int_current, str_family)
+                assert int_current is not None and int_index is not None
+                int_next: int | None = self._next_tier(
+                    int_current, int_index, str_family
+                )
                 assert int_next is not None
                 self._log_tier_exhausted(
                     str_operation, str_route_id, int_current, int_next, exception
@@ -836,7 +1092,7 @@ class AiRouterCompletions(AIBaseCompletions):
             client: AIBaseCompletions | None = self._client_at(int_current)
             if client is None:
                 int_current = self._next_after_unbuildable(
-                    int_current, str_operation, str_route_id, str_family
+                    int_current, int_index, str_operation, str_route_id, str_family
                 )
                 continue
             token = self._push_tags(
@@ -849,10 +1105,14 @@ class AiRouterCompletions(AIBaseCompletions):
             try:
                 result: T = await call(client)
             except Exception as exception:
-                if not self._should_escalate(int_current, exception, str_family):
+                if not self._should_escalate(
+                    int_current, int_index, exception, str_family
+                ):
                     raise
-                assert int_current is not None
-                int_next: int | None = self._next_tier_up(int_current, str_family)
+                assert int_current is not None and int_index is not None
+                int_next: int | None = self._next_tier(
+                    int_current, int_index, str_family
+                )
                 assert int_next is not None
                 self._log_tier_exhausted(
                     str_operation, str_route_id, int_current, int_next, exception
@@ -869,6 +1129,7 @@ class AiRouterCompletions(AIBaseCompletions):
     def _next_after_unbuildable(
         self,
         int_index: int | None,
+        int_pick: int | None,
         str_operation: str,
         str_route_id: str,
         str_family: str | None,
@@ -887,17 +1148,19 @@ class AiRouterCompletions(AIBaseCompletions):
         int_next: int | None = (
             None
             if self._config.on_exhausted == "raise"
-            else self._next_tier_up(int_index, str_family)
+            else self._next_tier(
+                int_index, int_pick if int_pick is not None else int_index, str_family
+            )
         )
         if int_next is None:
             raise AiProviderRequestError(
                 f"Router tier {self._config.tiers[int_index].name!r} could not be "
-                "built and no tier above it may serve this call.",
+                "built and no other tier may serve this call.",
                 status_code=None,
                 fallback_reason=None,
             )
         _LOGGER.error(
-            "ROUTER: %s cannot use tier %s (unbuildable); escalating to %s.",
+            "ROUTER: %s cannot use tier %s (unbuildable); moving to %s.",
             str_operation,
             self._config.tiers[int_index].name,
             self._config.tiers[int_next].name,
@@ -1049,11 +1312,16 @@ class AiRouterCompletions(AIBaseCompletions):
         exception: BaseException,
     ) -> None:
         reason: Any = getattr(exception, "fallback_reason", None)
+        str_reason: Any = (
+            reason.value if isinstance(reason, AiFallbackReason) else reason
+        )
+        bool_down: bool = int_next < int_index
         _LOGGER.error(
-            "ROUTER: %s exhausted tier %s (%s); escalating to %s: %s",
+            "ROUTER: %s exhausted tier %s (%s); %s to %s: %s",
             str_operation,
             self._config.tiers[int_index].name,
-            reason.value if isinstance(reason, AiFallbackReason) else reason,
+            str_reason,
+            "descending" if bool_down else "escalating",
             self._config.tiers[int_next].name,
             exception,
             extra={
@@ -1061,12 +1329,26 @@ class AiRouterCompletions(AIBaseCompletions):
                 "route_id": str_route_id,
                 "operation": str_operation,
                 "tier": self._config.tiers[int_index].name,
-                "fallback_reason": (
-                    reason.value if isinstance(reason, AiFallbackReason) else reason
-                ),
+                "fallback_reason": str_reason,
                 "escalate_to": self._config.tiers[int_next].name,
+                "direction": "down" if bool_down else "up",
             },
         )
+        if bool_down:
+            _LOGGER.warning(
+                "ROUTER: %s is moving down to tier %s; the answer may be weaker "
+                "than the classifier asked for.",
+                str_operation,
+                self._config.tiers[int_next].name,
+                extra={
+                    "ai_router_event": ROUTER_EVENT_TIER_DESCENDED,
+                    "route_id": str_route_id,
+                    "operation": str_operation,
+                    "tier": self._config.tiers[int_index].name,
+                    "descend_to": self._config.tiers[int_next].name,
+                    "fallback_reason": str_reason,
+                },
+            )
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -1187,7 +1469,7 @@ class AiRouterCompletions(AIBaseCompletions):
             client: AIBaseCompletions | None = self._client_at(int_current)
             if client is None:
                 int_current = self._next_after_unbuildable(
-                    int_current, "send_prompt_streaming", str_route_id, None
+                    int_current, int_index, "send_prompt_streaming", str_route_id, None
                 )
                 continue
             token = self._push_tags(
@@ -1210,10 +1492,10 @@ class AiRouterCompletions(AIBaseCompletions):
                 return
             except Exception as exception:
                 reset_observability_context(token)
-                if not self._should_escalate(int_current, exception, None):
+                if not self._should_escalate(int_current, int_index, exception, None):
                     raise
-                assert int_current is not None
-                int_next: int | None = self._next_tier_up(int_current, None)
+                assert int_current is not None and int_index is not None
+                int_next: int | None = self._next_tier(int_current, int_index, None)
                 assert int_next is not None
                 self._log_tier_exhausted(
                     "send_prompt_streaming",
@@ -1248,13 +1530,14 @@ class AiRouterCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         str_route_id: str = uuid.uuid4().hex
-        dict_options, str_route = self._strip_route_option(provider_options)
+        dict_options, str_route, str_floor = self._strip_route_option(provider_options)
 
         def _routed() -> AIStructuredOutputResult:
             int_index, str_method, decision = self._select(
                 str_text=classification_text_for(prompt, messages),
                 messages=messages,
                 str_route=str_route,
+                str_floor=str_floor,
                 str_operation="send_structured_output",
                 str_route_id=str_route_id,
             )
@@ -1298,13 +1581,14 @@ class AiRouterCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         str_route_id: str = uuid.uuid4().hex
-        dict_options, str_route = self._strip_route_option(provider_options)
+        dict_options, str_route, str_floor = self._strip_route_option(provider_options)
 
         async def _routed() -> AIStructuredOutputResult:
             int_index, str_method, decision = await self._aselect(
                 str_text=classification_text_for(prompt, messages),
                 messages=messages,
                 str_route=str_route,
+                str_floor=str_floor,
                 str_operation="asend_structured_output",
                 str_route_id=str_route_id,
             )
@@ -1347,13 +1631,14 @@ class AiRouterCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         str_route_id: str = uuid.uuid4().hex
-        dict_options, str_route = self._strip_route_option(provider_options)
+        dict_options, str_route, str_floor = self._strip_route_option(provider_options)
 
         def _routed() -> AITurnResult:
             int_index, str_method, decision = self._select(
                 str_text=classification_text_for(None, messages),
                 messages=messages,
                 str_route=str_route,
+                str_floor=str_floor,
                 str_operation="send_conversation",
                 str_route_id=str_route_id,
             )
@@ -1395,13 +1680,14 @@ class AiRouterCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         str_route_id: str = uuid.uuid4().hex
-        dict_options, str_route = self._strip_route_option(provider_options)
+        dict_options, str_route, str_floor = self._strip_route_option(provider_options)
 
         async def _routed() -> AITurnResult:
             int_index, str_method, decision = await self._aselect(
                 str_text=classification_text_for(None, messages),
                 messages=messages,
                 str_route=str_route,
+                str_floor=str_floor,
                 str_operation="asend_conversation",
                 str_route_id=str_route_id,
             )

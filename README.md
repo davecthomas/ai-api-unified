@@ -1,4 +1,4 @@
-# ai-api-unified 3.7.0
+# ai-api-unified 3.8.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1648,6 +1648,56 @@ The classifier reads the latest user message only, cut to the engine's
 and carries no complexity signal. The tier descriptions carry the policy,
 and `classifier.instructions` prepends your own guidance.
 
+When the classifier is unsure, set `classifier.min_confidence` (0 to 1):
+a pick whose confidence is below it goes one tier up (method
+`low_confidence`). A wrong pick toward the stronger tier costs money; one
+toward the weaker tier costs a worse answer, so an unsure call takes the
+stronger tier. A classifier that reports no confidence (the
+structured-output classifier) keeps its pick, and a pick already on the
+top tier stays there. `openai-decisions` reports one.
+
+The classifier's input and time are capped (`max_input_chars`,
+`timeout_seconds`), and its cost lands on the request ledger as
+`classifier_usd_cost`. At startup the router also compares prices: when
+the classifier's input rate is at or above the cheapest tier primary's,
+it logs `classifier_costly` once, since classifying then costs about as
+much as sending every request to that tier. A per-call check is not
+possible: the routed call's cost is only known after it returns.
+
+### Thinking per tier
+
+Each tier may set its own `thinking` level (see
+[Thinking levels](#thinking-levels)); a tier without one uses the
+router's level (`completions.thinking`, the factory's `thinking=`, or
+`client.thinking_level`). A per-call level still wins.
+
+```json
+"tiers": [
+  {"name": "easy", "models": ["claude:claude-haiku-4-5"], "thinking": "off"},
+  {"name": "hard", "models": ["claude:claude-opus-5-5"],  "thinking": "high"}
+]
+```
+
+### Follow-up turns
+
+A plain conversation (no tool calls) is classified on each turn by
+default (`followup: "reclassify"`): a cheap follow-up such as "summarize
+that" may go to a cheaper tier, which is what routing is for. Two ways
+keep a conversation from dropping:
+
+- `provider_options={"route_floor": "medium"}` on a structured-output or
+  conversation call: the classifier's pick (or the default route) is
+  raised to at least that tier (method `floor`). A shared client serving
+  many conversations passes each conversation's floor this way, for
+  example the `client.last_tier` it recorded for that conversation.
+- `"followup": "ratchet"` in the router config: a turn whose history
+  already holds an assistant turn never goes below the tier that served
+  this client's previous call. The library has no conversation id, so
+  this is exact only with one client per conversation.
+
+An override (`route`) and a tool-shaped history (method `pinned`) are
+never moved by a floor.
+
 ### What happens on a request
 
 1. A per-call `route` option or `for_tier()` pins the tier (method
@@ -1655,17 +1705,26 @@ and `classifier.instructions` prepends your own guidance.
 2. A history that already holds engine-shaped entries (tool turns) skips
    the classifier and stays in a tier whose engines share that family,
    preferring the tier that served the previous turn (method `pinned`).
-3. Otherwise the classifier names a tier (method `classifier`). No
-   classifier, an error, a refusal, or an unknown tier name routes to
-   `default_tier` or the default route (method `default`) and logs
-   `classifier_failed`.
+3. Otherwise the classifier names a tier (method `classifier`), one tier
+   up when its confidence is below `min_confidence` (method
+   `low_confidence`). No classifier, an error, a refusal, or an unknown
+   tier name routes to `default_tier` or the default route (method
+   `default`) and logs `classifier_failed`. A `route_floor`, or the
+   follow-up ratchet, then raises the pick to the floor (method `floor`).
 4. The call runs on the tier's chain, which fails over inside the tier as
    any chain does, cooldowns included: a tier model resting after a
    failure is tried last ([Cooldowns](#cooldowns)).
 5. If the chain runs out of candidates on a trigger reason
    (`fallback_on`), the router escalates to the next tier up and logs
    `tier_exhausted`; with `on_exhausted: raise`, on a non-trigger error, or
-   on the top tier, the error propagates. Tier models that are missing or
+   on the top tier, the error propagates. With `on_exhausted: any`, once
+   no tier above can serve, the router moves down instead: the tiers
+   below the pick, nearest first, each logged as `tier_exhausted`
+   (`direction: down`) plus a `tier_descended` WARNING, since the answer
+   may be weaker than the classifier asked for. The default stays
+   `escalate`: a request the classifier called hard should fail visibly
+   rather than be answered by a weaker model without anyone asking for
+   that. Tier models that are missing or
    unreachable were pruned at startup by the configured-model check; if a
    tier's primary still cannot be built, the router logs
    `tier_unbuildable` once and skips the tier the same way.
@@ -1682,7 +1741,9 @@ parsing the message:
 | INFO | `routed` | Every call. Fields: `route_id`, `tier`, `tier_index`, `method`, `operation`, `classifier_engine`, `classifier_model`, `confidence`, `probabilities`, `classifier_latency_ms`, `classifier_input_tokens`, `classifier_token_source`, `classifier_usd_cost`, `caller_id`, `session_id`, `workflow_id`. |
 | WARNING | `classifier_unavailable` | Once at build: no classifier, with `reason` and `routed_to`. |
 | WARNING | `classifier_failed` | The classifier raised, refused, or named no tier; the call went to `routed_to`. Fields: `error`, `fallback_reason`, `latency_ms`. |
-| ERROR | `tier_exhausted` | A tier's chain ran out of candidates on a trigger reason; `escalate_to` names the next tier. |
+| ERROR | `tier_exhausted` | A tier's chain ran out of candidates on a trigger reason; `escalate_to` names the next tier, `direction` is `up` or `down`. |
+| WARNING | `tier_descended` | With `on_exhausted: any`, the call is moving below the classifier's pick. Fields: `tier`, `descend_to`, `fallback_reason`. |
+| WARNING | `classifier_costly` | Once at build: the classifier's input rate is at or above the cheapest tier primary's. Fields: `classifier_model`, `classifier_input_per_1m`, `cheapest_tier`, `cheapest_tier_input_per_1m`. |
 | ERROR | `tier_unbuildable` | A tier's primary could not be built; the tier is out for this process. |
 
 The router also pushes `route_id`, `route_tier`, and `route_method` onto
@@ -1695,7 +1756,9 @@ cost by tier needs no extra work. The classifier call itself carries
 
 - `provider_options={"route": "hard"}` pins one structured-output or
   conversation call to a tier; `"default"` pins it to the default route.
-  The router removes the key before options reach the engine.
+  `provider_options={"route_floor": "medium"}` sets a minimum tier
+  instead (see Follow-up turns). The router removes both keys before
+  options reach the engine.
 - `client.for_tier("hard")` returns that tier's chain client, for
   `send_prompt` and streaming, which take no `provider_options`.
 - `client.last_tier`, `client.last_decision`, and `client.last_route_client`
@@ -1705,8 +1768,9 @@ cost by tier needs no extra work. The classifier call itself carries
 
 | Setting | Meaning |
 | ------- | ------- |
-| `router` (`models.json`) | `tiers`, optional `classifier`, `default_tier`, `on_exhausted`, `fallback_on`. |
-| `classifier` (`models.json`) | The classifier the router uses when its own `classifier` entry is absent; `{"engine": "none"}` routes without one. |
+| `router` (`models.json`) | `tiers` (each with optional `description`, `fallback_on`, `thinking`), optional `classifier`, `default_tier`, `on_exhausted` (`escalate`, `any`, `raise`), `followup` (`reclassify`, `ratchet`), `fallback_on`. |
+| `router.classifier` | `engine`, `model`, `base_url`, `timeout_seconds`, `instructions`, `min_confidence`. |
+| `classifier` (`models.json`) | The classifier the router uses when its own `classifier` entry is absent, `min_confidence` included; `{"engine": "none"}` routes without one. |
 | `AIFactory.get_ai_completions_client(router=AIRouterConfig(...))` | Code-first configuration; overrides the setting. |
 
 Exports: `AiRouterCompletions`, `AIRouterConfig`, `AIRouterTier`,
