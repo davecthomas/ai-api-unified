@@ -605,9 +605,10 @@ class AIGoogleGeminiVideos(AIGoogleBase, AIBaseVideos):
                         )
                     total_output_bytes += len(video_bytes)
                     assert resolved_output_dir is not None
-                    file_path: Path = (
-                        resolved_output_dir
-                        / f"{current_job.provider_job_id.replace('/', '_')}_{index}.mp4"
+                    file_path: Path = self._video_artifact_path(
+                        resolved_output_dir,
+                        current_job.provider_job_id,
+                        f"_{index}",
                     )
                     file_path.write_bytes(video_bytes)
                 else:

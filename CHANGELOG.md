@@ -4,6 +4,21 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.5.1
+
+### Security
+
+- Downloaded video files stay inside the output directory. The OpenAI
+  engine named the file after the job id from the provider response
+  without sanitizing it, so a malicious or compromised endpoint (for
+  example a gateway behind `OPENAI_BASE_URL_OVERRIDE`) could return an id
+  such as `../../.ssh/authorized_keys` and overwrite a file outside
+  `VIDEO_OUTPUT_DIR`. All three video engines (OpenAI, Gemini, Bedrock Nova
+  Reel) now share one guard: characters other than letters, digits, `.`,
+  `-` and `_` become `_`, a name made only of dots raises `ValueError`, and
+  the resolved path must sit inside the output directory. Ordinary job ids
+  keep the same filenames as before.
+
 ## 3.5.0
 
 ### Added
