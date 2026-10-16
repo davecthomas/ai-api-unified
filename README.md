@@ -1,4 +1,4 @@
-# ai-api-unified 3.6.0
+# ai-api-unified 3.7.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1301,11 +1301,14 @@ Rules for the chain:
 
 ### What happens on a request
 
-1. The request goes to the primary. The engine's own retry schedule runs
-   first, so a rate limit fails over only after backoff runs out.
+1. The request goes to the primary, unless the primary is resting after a
+   recent failure (see [Cooldowns](#cooldowns)); it then starts at the
+   first candidate that is not resting. The engine's own retry schedule
+   runs first, so a rate limit fails over only after backoff runs out.
 2. If the engine raises `AiProviderRequestError` with a `fallback_reason` in
    the configured set, the client logs a warning naming both candidates and
-   the reason, and sends the request to the next candidate.
+   the reason, benches the failed candidate, and sends the request to the
+   next candidate.
 3. The client builds a fallback the first time a request needs it. The
    configured-model check has already pruned fallbacks that are missing or
    unreachable, so a build failure here is rare (an unsupported option,
@@ -1370,6 +1373,72 @@ A safety refusal is never a trigger: retrying a
 refused request on another model is a policy decision, not a reliability one,
 and it belongs in your code if you want it.
 
+### Cooldowns
+
+Without a cooldown, every request starts at the primary. During an outage
+each request then waits through the primary's retry backoff and sends one
+more doomed request before failing over. A cooldown remembers the failure:
+
+1. A request fails on the primary with a trigger reason and fails over.
+   The primary now rests for a period that depends on the reason.
+2. Requests during the rest skip the primary and start at the next
+   candidate. No backoff, no wasted request.
+3. When the rest ends, the primary is back in its place, and the next
+   request tries it. If it serves, its cooldown is over
+   (`candidate_recovered`); if it fails, it rests again.
+
+| Reason | Default rest |
+| ------ | ------------ |
+| `UNAVAILABLE`, `RATE_LIMITED`, `TIMEOUT` | 30 seconds |
+| `QUOTA_EXHAUSTED`, `MODEL_UNAVAILABLE` | 5 minutes |
+| `AUTH_REJECTED` | 1 hour, or until the engine's key or base URL changes |
+| `INVALID_OUTPUT` | none: a bad answer says nothing about the model's health |
+
+Only reasons in `fallback_on` bench a candidate. An account-wide failure
+(`QUOTA_EXHAUSTED` or `AUTH_REJECTED`, unless the engine marks it per-model)
+benches every candidate on that account. Any candidate can rest, not only
+the primary.
+
+A resting candidate moves to the end of the order; it is not removed. If
+every other candidate fails, the resting one is still tried, so a cooldown
+never fails a request that would have been served without one. When every
+candidate is resting, the chain's own order is used.
+
+Cooldowns are per process and shared by every chain and router tier in it,
+so a model benched by one chain is benched for all. A rotated key ends the
+cooldowns on that engine: each bench records a one-way fingerprint of the
+engine's credential settings (the same one the
+[configured-model check](#configured-model-check) uses), and a bench taken
+with other credentials is dropped. `AiCandidateCooldowns.reset()` ends every
+cooldown at once.
+
+Set the rest per reason, or turn cooldowns off, in `models.json`:
+
+```json
+"completions": {
+  "fallbacks": ["claude:claude-sonnet-5"],
+  "cooldown": {"enabled": true, "seconds": {"rate_limited": 10, "quota_exhausted": 600}}
+}
+```
+
+`"cooldown": false` restores the earlier behavior: every request starts at
+the primary. The factory takes the same values as `cooldown=`.
+
+### Provider outage at startup
+
+A primary whose provider is down when the process starts does not stop the
+client. The [configured-model check](#configured-model-check) reports a
+timeout, 5xx, or refused connection as `error` and keeps the model, and no
+engine needs its provider to be up to be built. (The Gemini engine checks
+its model while it is built; a 5xx, 429, timeout, or refused connection
+there logs a WARNING and the build goes on.) The first request then fails
+over and benches the primary, later requests start on the fallback, and
+the primary is tried again each time its rest ends. The fallback is never
+promoted for the life of the process.
+
+A configuration error still stops the build: a missing or rejected key, a
+missing extra, or a model the provider does not serve.
+
 ### Seeing which model answered
 
 Every failover is logged, on the logger
@@ -1385,6 +1454,9 @@ log processor can count and alert on them without parsing the message:
 | ERROR | `candidate_unbuildable` | A fallback could not be constructed and is out of the chain for this process. |
 | ERROR | `candidate_rejected_history` | On a family-bound turn, a sibling failed with no trigger reason, so it likely rejected the history. The failure that moved the call is about to be raised with this one as its cause. Fields: `operation`, `fallback_candidate`, `status_code`. |
 | WARNING | `candidate_skipped` | A fallback lacks a capability the call needs, or its account already failed the call with `QUOTA_EXHAUSTED` or `AUTH_REJECTED`. |
+| WARNING | `candidate_cooldown` | A candidate failed with a trigger reason and rests. Fields: `fallback_candidate`, `fallback_reason`, `cooldown_seconds`, `account_wide`. |
+| INFO | `candidate_recovered` | A candidate that had rested served a request; its cooldown is over. |
+| DEBUG | `candidate_resting` | A request is trying resting candidates last. Field: `fallback_resting`. |
 
 The messages start with `FALLBACK`, `FALLBACK SERVED`, or `FALLBACK
 EXHAUSTED`, so they stand out in plain log output too. A request the primary
@@ -1477,9 +1549,12 @@ across the chain.
 | `completions.fallback_on` | `AiFallbackReason` values (a list, or comma-separated) that trigger a move. Default `unavailable,rate_limited,quota_exhausted,auth_rejected`. |
 | `fallbacks=` (factory argument) | Same as the setting, as `(engine, model)` tuples or `AIFallbackCandidate` objects; overrides the setting. `[]` turns the chain off. |
 | `fallback_on=` (factory argument) | Same as the setting, as reasons or their values; overrides the setting. |
+| `completions.cooldown` | `true` (default), `false`, or `{"enabled": ..., "seconds": {"<reason>": <seconds>}}`; see [Cooldowns](#cooldowns). Applies to the chain and to every router tier. |
+| `cooldown=` (factory argument) | Same as the setting, or an `AIFallbackCooldownPolicy`; overrides the setting. |
 
 Exports: `AiFallbackCompletions`, `AIFallbackCandidate`,
-`DEFAULT_FALLBACK_REASONS`, `AiFallbackReason`.
+`DEFAULT_FALLBACK_REASONS`, `AiFallbackReason`, `AIFallbackCooldownPolicy`,
+`AiCandidateCooldowns`.
 
 ### Testing a chain against live providers
 
@@ -1494,6 +1569,17 @@ poetry run pytest -m nonmock tests/test_model_fallback_nonmock.py -q
 
 It needs `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in `.env` and skips without
 them.
+
+A second live test points a Gemini primary at a closed local port, so its
+connection is refused the way a down provider's is, with a Claude fallback.
+It proves the client starts, the first request is served by Claude and
+benches Gemini, and the next request goes to Claude without trying Gemini:
+
+```bash
+poetry run pytest -m nonmock tests/test_fallback_cooldown_nonmock.py -q -s
+```
+
+It needs `GOOGLE_GEMINI_API_KEY` and `ANTHROPIC_API_KEY`.
 
 ## Model routing
 
@@ -1574,7 +1660,8 @@ and `classifier.instructions` prepends your own guidance.
    `default_tier` or the default route (method `default`) and logs
    `classifier_failed`.
 4. The call runs on the tier's chain, which fails over inside the tier as
-   any chain does.
+   any chain does, cooldowns included: a tier model resting after a
+   failure is tried last ([Cooldowns](#cooldowns)).
 5. If the chain runs out of candidates on a trigger reason
    (`fallback_on`), the router escalates to the next tier up and logs
    `tier_exhausted`; with `on_exhausted: raise`, on a non-trigger error, or

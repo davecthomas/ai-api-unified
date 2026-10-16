@@ -297,6 +297,11 @@ def _isolate_from_developer_wrappers(
     # Tests that patch EnvSettings.get_setting bypass that variable, and the
     # check runs on every completions build, so mocked tests also swap each
     # registered probe for an offline one that answers "unverifiable".
+    # Cooldowns are process-wide; one test's benched candidate must not
+    # reorder the next test's chain.
+    from ai_api_unified.completions.ai_fallback_cooldown import AiCandidateCooldowns
+
+    AiCandidateCooldowns.reset()
     if request.node.get_closest_marker("nonmock") is None:
         from ai_api_unified.util.ai_model_checker import (
             AiModelChecker,

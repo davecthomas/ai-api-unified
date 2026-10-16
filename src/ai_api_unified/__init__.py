@@ -82,6 +82,10 @@ from .completions.ai_fallback_completions import (
     AIFallbackCandidate,
     AiFallbackCompletions,
 )
+from .completions.ai_fallback_cooldown import (
+    AiCandidateCooldowns,
+    AIFallbackCooldownPolicy,
+)
 from .thinking import (
     AIThinkingCapabilities,
     AIThinkingLevel,
@@ -110,6 +114,8 @@ __all__: list[str] = [
     "AIFactory",
     "AIFallbackCandidate",
     "AiFallbackCompletions",
+    "AiCandidateCooldowns",
+    "AIFallbackCooldownPolicy",
     "AiRouterCompletions",
     "AIRouterClassifierConfig",
     "AIRouterConfig",
