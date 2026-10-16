@@ -82,6 +82,7 @@ from .completions.ai_fallback_completions import (
     AIFallbackCandidate,
     AiFallbackCompletions,
 )
+from .routing.config_checks import AIConfigRequirements
 from .completions.ai_fallback_cooldown import (
     AiCandidateCooldowns,
     AIFallbackCooldownPolicy,
@@ -116,6 +117,7 @@ __all__: list[str] = [
     "AiFallbackCompletions",
     "AiCandidateCooldowns",
     "AIFallbackCooldownPolicy",
+    "AIConfigRequirements",
     "AiRouterCompletions",
     "AIRouterClassifierConfig",
     "AIRouterConfig",

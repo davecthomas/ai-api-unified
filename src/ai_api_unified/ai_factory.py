@@ -55,6 +55,12 @@ from .util.ai_model_checker import (
     prune_candidates,
     resolve_model_check_mode,
 )
+from .routing.config_checks import (
+    AIConfigRequirements,
+    compute_config_id,
+    enforce_requirements,
+    parse_config_requirements,
+)
 from .completions.ai_fallback_cooldown import (
     AIFallbackCooldownPolicy,
     parse_cooldown_policy,
@@ -318,6 +324,7 @@ class AIFactory:
         router: AIRouterConfig | None = None,
         thinking: AIThinkingLevel | str | None = None,
         cooldown: AIFallbackCooldownPolicy | bool | dict[str, Any] | None = None,
+        require: AIConfigRequirements | dict[str, Any] | None = None,
     ) -> AIBaseCompletions:
         """
         Instantiates the configured completions client.
@@ -352,6 +359,10 @@ class AIFactory:
                 trigger failure (an AIFallbackCooldownPolicy, a bool, or its
                 dict form); defaults to `completions.cooldown` in
                 models.json, then the built-in rest per reason.
+            require: What every route must offer (an AIConfigRequirements
+                or its dict form), checked once here; defaults to
+                `completions.require` in models.json. See
+                routing/config_checks.py.
 
         Returns:
             Concrete AIBaseCompletions implementation for the requested engine,
@@ -404,6 +415,10 @@ class AIFactory:
                             AI_PROVIDER_CAPABILITY_COMPLETIONS,
                             candidate.engine,
                         ) from exception
+        # The configured routing, before policy and model-check pruning, so
+        # the same configuration gives the same config_id in every process.
+        list_fallbacks_configured: list[AIFallbackCandidate] = list(list_fallbacks)
+        router_configured: AIRouterConfig | None = router_config
         policy: AIModelPolicy = AIFactory._model_policy(env_settings)
         AIFactory._require_allowed(
             policy, str_engine, str_model_name, "completions model"
@@ -430,27 +445,19 @@ class AIFactory:
             router_config=router_config,
             str_classifier_missing=str_classifier_missing,
         )
-        level_thinking: AIThinkingLevel | None = parse_thinking_level(thinking)
-
-        def _build_leveled(candidate: AIFallbackCandidate) -> AIBaseCompletions:
-            """Builds one candidate's client with the requested thinking level."""
-            client: AIBaseCompletions = AIFactory._build_completions_client(
-                candidate.engine, candidate.model, candidate.base_url
-            )
-            if level_thinking is not None:
-                client.thinking_level = level_thinking
-            # Normal return with the leveled client.
-            return client
-
-        primary: AIBaseCompletions = _build_leveled(
-            AIFallbackCandidate(
-                engine=str_engine, model=str_model_name, base_url=base_url
-            )
+        primary_candidate: AIFallbackCandidate = AIFallbackCandidate(
+            engine=str_engine, model=str_model_name, base_url=base_url
         )
-        if str_primary_unreachable is not None:
-            # The build raises its own typed error first (a missing extra or
-            # key); this covers a primary that builds but cannot be called.
-            raise AiProviderConfigurationError(str_primary_unreachable)
+        enforce_requirements(
+            AIFactory._resolve_requirements(env_settings=env_settings, require=require),
+            [("default", [primary_candidate, *list_fallbacks])]
+            + (
+                [(tier.name, tier.candidates) for tier in router_config.tiers]
+                if router_config is not None
+                else []
+            ),
+        )
+        level_thinking: AIThinkingLevel | None = parse_thinking_level(thinking)
         frozenset_reasons: frozenset[AiFallbackReason] = (
             AIFactory._resolve_fallback_reasons(
                 env_settings=env_settings, fallback_on=fallback_on
@@ -459,6 +466,50 @@ class AIFactory:
         policy_cooldown: AIFallbackCooldownPolicy = AIFactory._resolve_cooldown(
             env_settings=env_settings, cooldown=cooldown
         )
+        str_config_id: str = compute_config_id(
+            {
+                "primary": primary_candidate.model_dump(mode="json"),
+                "fallbacks": [
+                    c.model_dump(mode="json") for c in list_fallbacks_configured
+                ],
+                "fallback_on": sorted(r.value for r in frozenset_reasons),
+                "router": (
+                    router_configured.model_dump(mode="json", exclude={"pruned_tiers"})
+                    if router_configured is not None
+                    else None
+                ),
+                "cooldown": policy_cooldown.model_dump(mode="json"),
+                "thinking": AIFactory._resolve_thinking_label(
+                    env_settings=env_settings, level=level_thinking
+                ),
+            }
+        )
+        str_config_version: str | None = AIFactory._resolve_config_version(env_settings)
+
+        def _stamp_identity(client: Any) -> None:
+            """Records the configuration on a client that can carry it; a
+            registry-loaded class outside AIBase is left as it is."""
+            setter: Any = getattr(client, "set_config_identity", None)
+            if callable(setter):
+                setter(str_config_id, str_config_version)
+
+        def _build_leveled(candidate: AIFallbackCandidate) -> AIBaseCompletions:
+            """Builds one candidate's client with the thinking level and the
+            configuration's identity."""
+            client: AIBaseCompletions = AIFactory._build_completions_client(
+                candidate.engine, candidate.model, candidate.base_url
+            )
+            if level_thinking is not None:
+                client.thinking_level = level_thinking
+            _stamp_identity(client)
+            # Normal return with the leveled client.
+            return client
+
+        primary: AIBaseCompletions = _build_leveled(primary_candidate)
+        if str_primary_unreachable is not None:
+            # The build raises its own typed error first (a missing extra or
+            # key); this covers a primary that builds but cannot be called.
+            raise AiProviderConfigurationError(str_primary_unreachable)
         default_client: AIBaseCompletions = primary
         if list_fallbacks:
             default_client = AiFallbackCompletions(
@@ -471,6 +522,7 @@ class AIFactory:
                 client_builder=_build_leveled,
                 cooldown=policy_cooldown,
             )
+            _stamp_identity(default_client)
         if router_config is None:
             # Normal return without a router: the plain engine or its chain.
             return default_client
@@ -482,8 +534,7 @@ class AIFactory:
             classifier, str_unavailable = AIFactory._resolve_router_classifier(
                 env_settings=env_settings, router_config=router_config
             )
-        # Normal return with the routing client over the default route.
-        return AiRouterCompletions(
+        router_client: AiRouterCompletions = AiRouterCompletions(
             default_client=default_client,
             config=router_config,
             classifier=classifier,
@@ -492,6 +543,9 @@ class AIFactory:
             str_classifier_unavailable_reason=str_unavailable,
             cooldown=policy_cooldown,
         )
+        _stamp_identity(router_client)
+        # Normal return with the routing client over the default route.
+        return router_client
 
     _LIST_LAST_MODEL_CHECK: list[AiModelCheckResult] = []
 
@@ -998,6 +1052,41 @@ class AIFactory:
             )
             for item in fallbacks
         ]
+
+    @staticmethod
+    def _resolve_requirements(
+        *,
+        env_settings: EnvSettings,
+        require: AIConfigRequirements | dict[str, Any] | None,
+    ) -> AIConfigRequirements:
+        """The explicit requirements, else `completions.require`, else none."""
+        if require is not None:
+            # Early return with the explicit requirements.
+            return parse_config_requirements(require)
+        config: Any = env_settings.get_models_config()
+        # Normal return with the file's requirements, or none.
+        return parse_config_requirements(
+            config.completions.require if isinstance(config, AIModelsConfig) else None
+        )
+
+    @staticmethod
+    def _resolve_config_version(env_settings: EnvSettings) -> str | None:
+        """The models.json `config_version` label, or None."""
+        config: Any = env_settings.get_models_config()
+        # Normal return with the label, or None.
+        return config.config_version if isinstance(config, AIModelsConfig) else None
+
+    @staticmethod
+    def _resolve_thinking_label(
+        *, env_settings: EnvSettings, level: AIThinkingLevel | None
+    ) -> str | None:
+        """The thinking level the clients will use, for the config id."""
+        if level is not None:
+            # Early return with the explicit level.
+            return level.value
+        str_configured: Any = env_settings.get_setting("COMPLETIONS_THINKING", None)
+        # Normal return with the configured level, or None for the default.
+        return str(str_configured).strip().lower() if str_configured else None
 
     @staticmethod
     def _resolve_cooldown(

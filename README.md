@@ -1,4 +1,4 @@
-# ai-api-unified 3.8.0
+# ai-api-unified 3.9.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1853,6 +1853,69 @@ the results of the most recent check.
 | ------- | ------- |
 | `model_check.mode` (`models.json`) | `prune` (default): drop missing and unreachable fallbacks and tier models with a warning. `strict`: raise on any of them. `off`: skip the check. `model_check.timeout_seconds` bounds each probe (default 10). |
 
+### Startup requirements
+
+The model check proves each model exists and can be reached. It does not
+know what your callers need. Declare that in `completions.require`, and
+the factory checks it once at build, without building any client:
+
+```json
+"completions": {
+  "require": {
+    "capabilities": ["structured_output", "tool_use", "streaming"],
+    "second_provider": true,
+    "mode": "warn"
+  }
+}
+```
+
+The check covers each **route**: the default chain (the primary plus its
+fallbacks) and every router tier, after pruning.
+
+- `capabilities`: each route's primary must support every listed
+  capability: `structured_output`, `tool_use`, `streaming`, `async`,
+  `batch`, `token_counting`, `prompt_cache_hint`, or
+  `data_residency_constraint`. The primary is what counts: a call starts
+  there, and a primary without the capability raises, so a fallback that
+  has it does not help. Capabilities come from each engine's model table
+  (OpenAI, Anthropic, Gemini, Bedrock); a model with no table entry (an
+  OpenAI-compatible server, the engine default model) is logged at INFO
+  and not counted as a failure.
+- `second_provider`: each route must hold a model on a provider other than
+  its primary's, so one provider's outage cannot take the route down.
+  Claude on Bedrock counts as AWS, not Anthropic; each OpenAI-compatible
+  server is its own provider.
+- `mode`: `warn` (default) logs each unmet requirement as a WARNING with
+  `ai_config_event=requirement_unmet` on
+  `ai_api_unified.routing.config_checks`; `strict` raises `ValueError`
+  at build.
+
+The factory's `require=` takes the same values and overrides the file.
+
+### Which configuration routed a call
+
+Every completions client the factory builds records a `config_id`: a
+12-character hash of the routing configuration it was built from (primary,
+fallbacks, trigger reasons, router, cooldown, thinking level). The same
+configuration gives the same id in every process and on every machine;
+any change gives a new one. The hash is taken before the model check
+prunes anything, so a model that is down at startup does not change it.
+Add your own label with a top-level `config_version` in `models.json`
+(a date, a release, a commit).
+
+Both ride on every call:
+
+- as the `config_id` and `config_version` observability tags, so every
+  input, output, and cost event carries them (`tag_config_id`,
+  `tag_config_version`), and so does the request cost report
+  (`client.last_request_cost.tags`, the `ai_api_request_cost` event);
+- as `config_id` and `config_version` fields on the router's `routed`
+  record, and `config_id` on `tier_exhausted` and on the fallback chain's
+  `failover`, `served_by_fallback`, and `chain_exhausted` records.
+
+Tags you set on the observability context yourself win over these.
+`client.config_id` and `client.config_version` read them in code.
+
 ### Checking your own configuration
 
 ```bash
@@ -1961,9 +2024,10 @@ Every section of `models.json` is documented in
 
 | Section | Fields |
 | ------- | ------ |
-| `completions` | `engine`, `model`, `fallbacks` (see Model fallback), `fallback_on`, `retry_policy`, `thinking` (see Thinking levels) |
-| `classifier` | `engine`, `model`, `base_url`, `timeout_seconds`, `instructions` |
-| `router` | `tiers`, `classifier`, `default_tier`, `on_exhausted`, `fallback_on` (see Model routing) |
+| `config_version` | A label for this configuration (top level); see [Which configuration routed a call](#which-configuration-routed-a-call) |
+| `completions` | `engine`, `model`, `fallbacks` (see Model fallback), `fallback_on`, `retry_policy`, `thinking` (see Thinking levels), `cooldown` (see Cooldowns), `require` (see [Startup requirements](#startup-requirements)) |
+| `classifier` | `engine`, `model`, `base_url`, `timeout_seconds`, `instructions`, `min_confidence` |
+| `router` | `tiers`, `classifier`, `default_tier`, `on_exhausted`, `followup`, `fallback_on` (see Model routing) |
 | `model_check` | `mode` (`prune`, `strict`, `off`), `timeout_seconds` (see Configured-model check) |
 | `embeddings` | `engine`, `model` (`gemini-embedding-2` enables multimodal embeddings), `dimensions` (`0` keeps the provider default) |
 | `images` | `engine`, `model` |

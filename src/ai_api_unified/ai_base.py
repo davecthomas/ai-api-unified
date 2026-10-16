@@ -817,10 +817,43 @@ class AIBase(ABC):
     PROVIDER_ENGINE_VOYAGE = "voyage"
     _observability_middleware: AiApiObservabilityMiddleware | None = None
     _last_request_cost: AIRequestCostReport | None = None
+    # config_id / config_version tags the factory stamps on every client it
+    # builds; replaced, never mutated, so the class default stays empty.
+    _dict_config_tags: Mapping[str, str] = MappingProxyType({})
 
     def __init__(self, model: str | None = None, **kwargs):
         super().__init__()
         self.model: str | None = model
+
+    def set_config_identity(
+        self, config_id: str | None, config_version: str | None = None
+    ) -> None:
+        """
+        Records the configuration that built this client. Every request it
+        opens carries them as the `config_id` and `config_version` tags.
+
+        Args:
+            config_id: Hash of the routing configuration, or None.
+            config_version: The models.json `config_version` label, or None.
+        """
+        dict_tags: dict[str, str] = {}
+        if config_id:
+            dict_tags["config_id"] = config_id
+        if config_version:
+            dict_tags["config_version"] = config_version
+        self._dict_config_tags = MappingProxyType(dict_tags)
+
+    @property
+    def config_id(self) -> str | None:
+        """Hash of the routing configuration that built this client, if any."""
+        # Normal return with the stamped id.
+        return self._dict_config_tags.get("config_id")
+
+    @property
+    def config_version(self) -> str | None:
+        """The models.json `config_version` label, if any."""
+        # Normal return with the stamped label.
+        return self._dict_config_tags.get("config_version")
 
     @property
     def last_request_cost(self) -> AIRequestCostReport | None:
@@ -855,7 +888,11 @@ class AIBase(ABC):
         """
         scope: RequestCostScope | JoinedRequestCostScope | None = None
         try:
-            with request_cost_scope(operation, request_id=request_id) as scope:
+            with request_cost_scope(
+                operation,
+                request_id=request_id,
+                dict_default_tags=self._dict_config_tags,
+            ) as scope:
                 result: ProviderCallReturnType = callable_run()
                 scope.mark_served()
         finally:
@@ -874,7 +911,11 @@ class AIBase(ABC):
         """Async twin of _with_request_cost_scope; `callable_run` returns an awaitable."""
         scope: RequestCostScope | JoinedRequestCostScope | None = None
         try:
-            with request_cost_scope(operation, request_id=request_id) as scope:
+            with request_cost_scope(
+                operation,
+                request_id=request_id,
+                dict_default_tags=self._dict_config_tags,
+            ) as scope:
                 result: Any = await callable_run()
                 scope.mark_served()
         finally:
@@ -896,7 +937,11 @@ class AIBase(ABC):
         """
         scope: RequestCostScope | JoinedRequestCostScope | None = None
         try:
-            with request_cost_scope(operation, request_id=request_id) as scope:
+            with request_cost_scope(
+                operation,
+                request_id=request_id,
+                dict_default_tags=self._dict_config_tags,
+            ) as scope:
                 yield from callable_open_stream()
                 scope.mark_served()
         finally:
