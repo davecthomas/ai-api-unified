@@ -52,7 +52,7 @@ PII redaction is implemented as configurable middleware in the YAML middleware p
 
 To manage the growing stack of middleware components deterministically, the library uses a YAML-based configuration profile. This profile acts as the source of truth for both _which_ middleware is enabled and _how_ each component is configured, replacing raw boolean environment variables for complex behavior.
 
-- **File resolution:** The library reads `AI_MIDDLEWARE_CONFIG_PATH` and loads middleware YAML only when the path exists. The middleware YAML file is the source of truth for middleware enablement and settings across middleware types. If the path is unset or missing, middleware remains disabled. YAML parse/read/decode failures fall back to an empty middleware config.
+- **File resolution:** Middleware is configured in the `middleware` section of `models.json`, the source of truth for middleware enablement and settings across middleware types. The deprecated `AI_MIDDLEWARE_CONFIG_PATH` still names a YAML file holding the same list; when it is set, it wins and logs a deprecation warning. With neither, middleware remains disabled. An invalid entry is skipped with a warning; YAML parse/read/decode failures fall back to an empty middleware config.
 
 #### YAML Configuration Structure
 

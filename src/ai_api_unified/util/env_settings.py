@@ -32,7 +32,9 @@ class EnvSettings(BaseSettings):
     COMPLETIONS_MODEL_NAME: str | None = None
     EMBEDDING_DIMENSIONS: int | None = None
     VECTOR_METRIC: str = "cosine"
-    AWS_REGION: str = "us-east-1"
+    # No default here: an unset region falls through to models.json
+    # (providers.aws.region), and callers default to us-east-1.
+    AWS_REGION: str | None = None
     AI_API_GEO_RESIDENCY: str | None = None
     _SUPPORTED_DATA_RESIDENCY_GEOS: tuple[str, ...] = ("us", "usa", "united states")
     IMAGE_MODEL_NAME: str | None = None
@@ -112,9 +114,9 @@ class EnvSettings(BaseSettings):
             return None
         _SET_WARNED_DEPRECATED_SELECTIONS.add(setting)
         _LOGGER.warning(
-            "%s is set in the environment or .env; model selections live in "
-            "models.json (%s). The value still overrides the file. Move it with "
-            "`poetry run python scripts/migrate2json.py --comment-env`.",
+            "%s is set in the environment or .env; settings other than secrets "
+            "live in models.json (%s). The value still overrides the file. Move "
+            "it with `poetry run python scripts/migrate2json.py --comment-env`.",
             setting,
             str_field,
             extra={

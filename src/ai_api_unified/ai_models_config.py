@@ -205,6 +205,92 @@ class AIVideosSelection(BaseModel):
     output_dir: str | None = None
     poll_interval_seconds: int | None = None
     timeout_seconds: int | None = None
+    # S3 location Nova Reel writes to, unless a request names its own.
+    bedrock_output_s3_uri: str | None = None
+
+
+class AIOpenAIProviderSettings(BaseModel):
+    """`providers.openai`: the OpenAI engines (chat, Responses, Decisions)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # API base URL; https required except for loopback hosts.
+    base_url: str | None = None
+    # End-user id sent with each request.
+    user: str | None = None
+
+
+class AIAnthropicProviderSettings(BaseModel):
+    """`providers.anthropic`: the `claude` engine."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    base_url: str | None = None
+    # Admin API base URL for organization lookups; the admin key never
+    # follows the inference base_url.
+    admin_base_url: str | None = None
+    user: str | None = None
+
+
+class AIGoogleProviderSettings(BaseModel):
+    """`providers.google`: Gemini, Google images, video, and voice."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    auth_method: Literal["api_key", "service_account"] | None = None
+    # Vertex AI project and region, for service-account auth.
+    project_id: str | None = None
+    location: str | None = None
+    base_url: str | None = None
+
+
+class AIAwsProviderSettings(BaseModel):
+    """`providers.aws`: Bedrock. Credentials stay in the AWS credential chain."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    region: str | None = None
+
+
+class AIOpenAICompatibleProviderSettings(BaseModel):
+    """`providers.openai_compatible`: a self-hosted or third-party server."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    base_url: str | None = None
+    structured_output: Literal["json_schema", "json_object"] | None = None
+    # Input token limit for the context guard; unset disables the guard.
+    context_window: int | None = Field(default=None, gt=0)
+
+
+class AIAzureSpeechProviderSettings(BaseModel):
+    """`providers.azure_speech`: the Azure voice engine."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    region: str | None = None
+
+
+class AIProvidersSelection(BaseModel):
+    """
+    The `providers` section: per-provider settings that are not secrets.
+    API keys and other credentials stay in the environment.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    openai: AIOpenAIProviderSettings = Field(default_factory=AIOpenAIProviderSettings)
+    anthropic: AIAnthropicProviderSettings = Field(
+        default_factory=AIAnthropicProviderSettings
+    )
+    google: AIGoogleProviderSettings = Field(default_factory=AIGoogleProviderSettings)
+    aws: AIAwsProviderSettings = Field(default_factory=AIAwsProviderSettings)
+    openai_compatible: AIOpenAICompatibleProviderSettings = Field(
+        default_factory=AIOpenAICompatibleProviderSettings
+    )
+    azure_speech: AIAzureSpeechProviderSettings = Field(
+        default_factory=AIAzureSpeechProviderSettings
+    )
 
 
 class AIVoiceSelection(BaseModel):
@@ -230,6 +316,12 @@ class AIModelsConfig(BaseModel):
         model_check: The configured-model check mode and timeout.
         embeddings, images, videos, voice: Per-capability selections.
         geo_residency: Geo hint (`US`), as AI_API_GEO_RESIDENCY.
+        providers: Per-provider settings that are not secrets (base URLs,
+            regions, Vertex project, OpenAI-compatible server details).
+        middleware: The PII redaction and observability middleware, the
+            same list the middleware YAML holds under `middleware`.
+        strict_deprecations: True turns a deprecated-model warning into a
+            startup error.
         config_version: A label for this configuration (a date, a release,
             a commit); every call the completions client makes carries it
             as the `config_version` tag, next to the computed `config_id`.
@@ -253,6 +345,11 @@ class AIModelsConfig(BaseModel):
     videos: AIVideosSelection = Field(default_factory=AIVideosSelection)
     voice: AIVoiceSelection = Field(default_factory=AIVoiceSelection)
     geo_residency: str | None = None
+    providers: AIProvidersSelection = Field(default_factory=AIProvidersSelection)
+    # Entries are validated one by one when the middleware loads, as the YAML
+    # file's are, so one bad entry is skipped with a warning.
+    middleware: list[dict[str, Any]] | None = None
+    strict_deprecations: bool | None = None
 
     @field_validator("allow", "deny")
     @classmethod
@@ -378,6 +475,24 @@ DICT_SETTING_FIELD_NAMES: dict[str, str] = {
     "AI_VOICE_LANGUAGE": "voice.language",
     "DEFAULT_GEMINI_TTS_MODEL": "voice.tts_model",
     "AI_API_GEO_RESIDENCY": "geo_residency",
+    "OPENAI_BASE_URL_OVERRIDE": "providers.openai.base_url",
+    "OPENAI_USER": "providers.openai.user",
+    "ANTHROPIC_BASE_URL_OVERRIDE": "providers.anthropic.base_url",
+    "ANTHROPIC_ADMIN_BASE_URL_OVERRIDE": "providers.anthropic.admin_base_url",
+    "ANTHROPIC_USER": "providers.anthropic.user",
+    "GOOGLE_AUTH_METHOD": "providers.google.auth_method",
+    "GOOGLE_PROJECT_ID": "providers.google.project_id",
+    "GOOGLE_LOCATION": "providers.google.location",
+    "GOOGLE_GEMINI_BASE_URL_OVERRIDE": "providers.google.base_url",
+    "OPENAI_COMPATIBLE_BASE_URL": "providers.openai_compatible.base_url",
+    "OPENAI_COMPATIBLE_STRUCTURED_OUTPUT": (
+        "providers.openai_compatible.structured_output"
+    ),
+    "OPENAI_COMPATIBLE_CONTEXT_WINDOW": "providers.openai_compatible.context_window",
+    "MICROSOFT_COGNITIVE_SERVICES_REGION": "providers.azure_speech.region",
+    "BEDROCK_VIDEO_OUTPUT_S3_URI": "videos.bedrock_output_s3_uri",
+    "AI_STRICT_DEPRECATIONS": "strict_deprecations",
+    "AI_MIDDLEWARE_CONFIG_PATH": "middleware",
 }
 
 # Settings key -> the file value that stands in for it.
@@ -410,6 +525,28 @@ DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
     "AI_VOICE_LANGUAGE": lambda c: c.voice.language,
     "DEFAULT_GEMINI_TTS_MODEL": lambda c: c.voice.tts_model,
     "AI_API_GEO_RESIDENCY": lambda c: c.geo_residency,
+    "OPENAI_BASE_URL_OVERRIDE": lambda c: c.providers.openai.base_url,
+    "OPENAI_USER": lambda c: c.providers.openai.user,
+    "ANTHROPIC_BASE_URL_OVERRIDE": lambda c: c.providers.anthropic.base_url,
+    "ANTHROPIC_ADMIN_BASE_URL_OVERRIDE": lambda c: c.providers.anthropic.admin_base_url,
+    "ANTHROPIC_USER": lambda c: c.providers.anthropic.user,
+    "GOOGLE_AUTH_METHOD": lambda c: c.providers.google.auth_method,
+    "GOOGLE_PROJECT_ID": lambda c: c.providers.google.project_id,
+    "GOOGLE_LOCATION": lambda c: c.providers.google.location,
+    "GOOGLE_GEMINI_BASE_URL_OVERRIDE": lambda c: c.providers.google.base_url,
+    # AWS sets AWS_REGION itself on Lambda and other hosts, so the variable
+    # is not deprecated; the file serves it when the environment does not.
+    "AWS_REGION": lambda c: c.providers.aws.region,
+    "OPENAI_COMPATIBLE_BASE_URL": lambda c: c.providers.openai_compatible.base_url,
+    "OPENAI_COMPATIBLE_STRUCTURED_OUTPUT": (
+        lambda c: c.providers.openai_compatible.structured_output
+    ),
+    "OPENAI_COMPATIBLE_CONTEXT_WINDOW": (
+        lambda c: c.providers.openai_compatible.context_window
+    ),
+    "MICROSOFT_COGNITIVE_SERVICES_REGION": lambda c: c.providers.azure_speech.region,
+    "BEDROCK_VIDEO_OUTPUT_S3_URI": lambda c: c.videos.bedrock_output_s3_uri,
+    "AI_STRICT_DEPRECATIONS": lambda c: c.strict_deprecations,
 }
 
 FROZENSET_FILE_BACKED_SETTINGS: frozenset[str] = frozenset(DICT_SETTING_GETTERS)

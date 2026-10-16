@@ -1,40 +1,27 @@
 ########################################################################
-#   MODEL SELECTIONS LIVE IN models.json
+#   EVERYTHING BUT SECRETS LIVES IN models.json
 ########################################################################
-# Engines, models, the fallback chain and its triggers, the thinking level,
-# the router, the classifier, the configured-model check, embeddings,
-# images, videos, voice, and the allow/deny policy are authored in
-# models.json: copy models_sample.json, which documents every section.
+# Engines, models, the fallback chain, thinking, the router, the
+# classifier, the model check, provider base URLs and regions, the
+# OpenAI-compatible server, the PII and observability middleware, and the
+# allow/deny policy are authored in models.json: copy models_sample.json,
+# which documents every section, and check it with
+#   poetry run python -m ai_api_unified.config_schema validate models.json
 # AI_MODELS_CONFIG names the file (a path to .json, .yaml, or .yml, or
 # inline JSON). Unset means ./models.json when it exists; blank turns the
-# file off; a set path that does not exist is an error on every settings
-# read.
+# file off.
 # AI_MODELS_CONFIG=./models.json
 #
-# Do not repeat a selection here: a value in both places is read from .env
-# and the file entry stops meaning what it says. The pre-models.json .env
-# keys still override the file for deployments that pin one value; the
-# README "Configuration" section lists them.
+# This file holds secrets only. A pre-models.json setting left in .env
+# still overrides the file and logs a deprecation warning; move it with
+#   poetry run python scripts/migrate2json.py --comment-env
 
 
 ########################################################################
-#   OPENAI
+#   OPENAI (also the openai-compatible engine's key)
 ########################################################################
 OPENAI_API_KEY=
-# Optional API base-URL override; also points the openai engine at any
-# OpenAI-compatible server. Must be https:// unless it targets
-# localhost/127.0.0.1/::1.
-OPENAI_BASE_URL_OVERRIDE=
-
-# --- openai-compatible engine (vLLM, Ollama, DeepSeek, Qwen, ...) ---
-# The server's base URL and, when it needs one, its key. The model comes
-# from models.json (completions.model).
-# OPENAI_COMPATIBLE_BASE_URL=http://localhost:8000/v1
 # OPENAI_COMPATIBLE_API_KEY=
-# json_schema (default) or json_object, by what the server supports.
-# OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=json_schema
-# Context window of an uncataloged model, for the client-side guard.
-# OPENAI_COMPATIBLE_CONTEXT_WINDOW=128000
 
 
 ########################################################################
@@ -42,34 +29,16 @@ OPENAI_BASE_URL_OVERRIDE=
 ########################################################################
 ANTHROPIC_API_KEY=
 # Optional Admin API key (sk-ant-admin...) for organization-level finops
-# attribution: when set, cost events carry your org id AND name (resolved
-# once per client from the Admin API). When unset, cost events carry the org
-# id only, captured from one free count_tokens response header. Fails open:
-# cost events omit org identity if resolution fails.
+# attribution: cost events then carry your org id and name. Fails open.
 ANTHROPIC_ADMIN_KEY=
-# Optional API base-URL override for gateways, proxies, or local test
-# servers (LiteLLM, Helicone, Cloudflare AI Gateway, vLLM, Ollama). Must be
-# https:// unless it targets localhost/127.0.0.1/::1. Deliberately named
-# _OVERRIDE so it does not collide with the SDK's own ANTHROPIC_BASE_URL.
-ANTHROPIC_BASE_URL_OVERRIDE=
-# The Admin API key grants org-wide read/write, so it does NOT follow the
-# override above. Set this only if the admin lookup should also route through
-# a gateway (egress-restricted networks).
-ANTHROPIC_ADMIN_BASE_URL_OVERRIDE=
 
 
 ########################################################################
 #   GOOGLE (Gemini completions, embeddings, images, videos, voice)
 ########################################################################
 GOOGLE_GEMINI_API_KEY=
-# Optional API base-URL override for Gemini. Same https rule as above.
-GOOGLE_GEMINI_BASE_URL_OVERRIDE=
-# api_key (default) or service_account. Service-account / Vertex mode uses
-# the usual Google credentials below.
-GOOGLE_AUTH_METHOD=api_key
+# Service-account / Vertex auth (providers.google.auth_method in models.json):
 # GOOGLE_APPLICATION_CREDENTIALS=credentials/<filename>.json
-# GOOGLE_PROJECT_ID=
-# GOOGLE_LOCATION=us-central1
 
 
 ########################################################################
@@ -81,34 +50,19 @@ VOYAGE_API_KEY=
 ########################################################################
 #   AWS (Bedrock, Titan, Nova)
 ########################################################################
-AWS_REGION=us-east-1
 # AWS credentials for Bedrock are ephemeral and must be set at runtime.
 # Read more here: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 AWS_SESSION_TOKEN=
-# Required for Bedrock Nova Reel video unless passed on the request itself.
-# BEDROCK_VIDEO_OUTPUT_S3_URI=s3://your-bucket/ai-api-unified/video-output/
+# The region may live here (AWS hosts set it themselves) or in models.json
+# as providers.aws.region; the environment wins. Default us-east-1.
+# AWS_REGION=us-east-1
 
 
 ########################################################################
 #   VOICE PROVIDERS
 ########################################################################
-# ElevenLabs
 ELEVEN_LABS_API_KEY=
-# Azure
+# Azure speech; its region is providers.azure_speech.region in models.json.
 MICROSOFT_COGNITIVE_SERVICES_API_KEY=
-MICROSOFT_COGNITIVE_SERVICES_API_KEY_2=
-MICROSOFT_COGNITIVE_SERVICES_REGION=eastus
-MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=https://eastus.api.cognitive.microsoft.com/
-
-
-########################################################################
-#   LIBRARY SETTINGS THAT STAY IN .env
-########################################################################
-# Observability and PII middleware profile (YAML); see
-# docs/observability_middleware_example.yaml.
-# AI_MIDDLEWARE_CONFIG_PATH=./middleware.yaml
-# Vector metric for the embeddings consumer (cosine for Pinecone |
-# cosinesimil for OpenSearch | COSINE for Redis).
-VECTOR_METRIC=cosine

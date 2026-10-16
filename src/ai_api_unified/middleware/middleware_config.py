@@ -1254,8 +1254,17 @@ class MiddlewareConfig:
         str_configuration_path: str | None = env.get_setting(ENV_CONFIGURATION_PATH)
 
         if str_configuration_path is None:
-            self._configuration = MiddlewareConfigurationModel()
-            # Early return because no YAML config path was provided.
+            # No YAML path: the `middleware` section of models.json, if any.
+            config: Any = env.get_models_config()
+            list_from_models: Any = getattr(config, "middleware", None)
+            if list_from_models is None:
+                self._configuration = MiddlewareConfigurationModel()
+                # Early return because no middleware is configured anywhere.
+                return
+            self._configuration = self._validated_entries(
+                list_from_models, "models.json"
+            )
+            # Early return after loading the models.json middleware section.
             return
 
         if not os.path.exists(str_configuration_path):
@@ -1317,11 +1326,31 @@ class MiddlewareConfig:
             self._configuration = MiddlewareConfigurationModel()
             return
 
-        list_middlewares: Any = loaded_configuration.get(MIDDLEWARE_KEY, [])
+        self._configuration = self._validated_entries(
+            loaded_configuration.get(MIDDLEWARE_KEY, []), str_configuration_path
+        )
+        # Normal return after loading YAML middleware configuration.
+        return
+
+    @staticmethod
+    def _validated_entries(
+        list_middlewares: Any, str_source: str
+    ) -> MiddlewareConfigurationModel:
+        """
+        Validates a middleware list entry by entry, skipping an invalid entry
+        with a warning, wherever the list came from.
+
+        Args:
+            list_middlewares: The raw `middleware` list.
+            str_source: Where it came from, for the debug line.
+
+        Returns:
+            The typed configuration; empty when the list is not a list.
+        """
         if not isinstance(list_middlewares, list):
             logger.error(MIDDLEWARE_LIST_TYPE_ERROR_MESSAGE)
-            self._configuration = MiddlewareConfigurationModel()
-            return
+            # Early return with an empty configuration.
+            return MiddlewareConfigurationModel()
 
         list_entries: list[MiddlewareEntryModel] = []
 
@@ -1340,10 +1369,9 @@ class MiddlewareConfig:
                 continue
             list_entries.append(middleware_entry)
 
-        self._configuration = MiddlewareConfigurationModel(list_middleware=list_entries)
-        logger.debug("Loaded middleware config from %s", str_configuration_path)
-        # Normal return after loading YAML middleware configuration.
-        return
+        logger.debug("Loaded middleware config from %s", str_source)
+        # Normal return with the validated entries.
+        return MiddlewareConfigurationModel(list_middleware=list_entries)
 
     def _get_component_entry(self, name: str) -> MiddlewareEntryModel | None:
         """

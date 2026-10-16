@@ -1,4 +1,4 @@
-# ai-api-unified 3.10.0
+# ai-api-unified 3.11.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -210,15 +210,15 @@ poetry install --all-extras --with dev
 
 ### Environment File and models.json
 
-Two files: `.env` holds credentials and endpoint overrides; `models.json`
-holds every model selection. Copy [`env_template`](env_template) to `.env`
-and fill in only the providers you use, and copy
-[`models_sample.json`](models_sample.json) to `models.json` and keep the
-sections you need. The sample defaults to Google with API-key auth:
+Two files: `.env` holds secrets only; `models.json` holds everything else
+(model selections, provider settings, middleware). Copy
+[`env_template`](env_template) to `.env` and fill in the keys for the
+providers you use, and copy [`models_sample.json`](models_sample.json) to
+`models.json` and keep the sections you need. The sample defaults to Google
+with API-key auth (`providers.google.auth_method`):
 
 ```dotenv
 GOOGLE_GEMINI_API_KEY=...
-GOOGLE_AUTH_METHOD=api_key
 ```
 
 ```json
@@ -339,19 +339,25 @@ surface as the `openai` engine: `send_prompt`, streaming,
 `strict_schema_prompt`, and the async variants.
 
 ```json
-"completions": {"engine": "openai-compatible", "model": "Qwen/Qwen3-32B"}
+"completions": {"engine": "openai-compatible", "model": "Qwen/Qwen3-32B"},
+"providers": {
+  "openai_compatible": {
+    "base_url": "http://localhost:8000/v1",
+    "structured_output": "json_schema",
+    "context_window": 131072
+  }
+}
 ```
 
 ```dotenv
-OPENAI_COMPATIBLE_BASE_URL=http://localhost:8000/v1   # required
-OPENAI_COMPATIBLE_API_KEY=...                         # optional for local servers
-OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=json_schema       # or json_object
-OPENAI_COMPATIBLE_CONTEXT_WINDOW=131072               # optional context guard
+OPENAI_COMPATIBLE_API_KEY=...   # optional for local servers
 ```
 
-The base URL must be https:// unless it targets a loopback host. Requests
+`base_url` is required and must be https:// unless it targets a loopback
+host; `structured_output` (`json_schema` or `json_object`) and
+`context_window` (a client-side context guard) are optional. Requests
 send `max_tokens` rather than OpenAI's `max_completion_tokens`, which most
-compatible servers do not accept. Set `OPENAI_COMPATIBLE_STRUCTURED_OUTPUT`
+compatible servers do not accept. Set `structured_output`
 to `json_object` for servers that guarantee valid JSON but do not enforce a
 schema; the schema is then placed in the system prompt. The generic engine
 has no pricing, reports no organization identity, and labels observability
@@ -856,8 +862,9 @@ The pricing registry also carries model lifecycle status. Requesting a
 `AiProviderConfigurationError` at construction and names a replacement,
 surfacing the problem at setup. Requesting a **deprecated** model logs a
 warning and emits a `DeprecationWarning` once per process, naming the sunset
-date and replacement, then proceeds. Set `AI_STRICT_DEPRECATIONS=1` to escalate
-deprecated models to the same construction-time error (useful in CI).
+date and replacement, then proceeds. Set `"strict_deprecations": true` in
+`models.json` to escalate deprecated models to the same construction-time
+error (useful in CI).
 
 A retired model keeps whatever pricing it carried while it was active, so cost
 enrichment can still price usage recorded before the withdrawal date. As of
@@ -957,7 +964,7 @@ if SupportedDataType.IMAGE in client.capabilities.supported_data_types:
 ```
 
 Media attachments are capped at 20MB per attachment and per request. They also
-require API-key auth (`GOOGLE_AUTH_METHOD=api_key`): the google-genai SDK sends
+require API-key auth (`providers.google.auth_method` set to `api_key`): the google-genai SDK sends
 only text parts to the Vertex embedding endpoint, so in service-account mode
 the client rejects media attachments up front.
 
@@ -1026,7 +1033,6 @@ Environment:
 
 ```dotenv
 GOOGLE_GEMINI_API_KEY=...
-GOOGLE_AUTH_METHOD=api_key
 ```
 
 Code:
@@ -1113,7 +1119,7 @@ explicit `voice_engine` override, matching the other capability constructors.
 It delegates to `AIVoiceFactory.create()`, which remains supported and callable
 with no arguments.
 
-Calls are attributed to `OPENAI_USER` on the OpenAI engine, falling back to the
+Calls are attributed to `providers.openai.user` on the OpenAI engine, falling back to the
 `default_user` sentinel when it is unset — the same behavior the OpenAI
 completions, embeddings, images, and videos clients already have. The other
 voice engines expose no vendor user setting, so their calls carry no
@@ -1121,7 +1127,7 @@ originating caller id unless the application sets one through the
 observability context.
 
 The OpenAI voice client shares `AIOpenAIBase` with the other OpenAI-backed
-capabilities, so it honors `completions.retry_policy` and `OPENAI_BASE_URL_OVERRIDE`,
+capabilities, so it honors `completions.retry_policy` and `providers.openai.base_url`,
 and accepts the same `retry_policy` and `base_url` constructor arguments:
 
 ```python
@@ -1796,7 +1802,7 @@ at startup, not in the middle of a failover.
   those four changes: an edited `models.json` that names a new model or
   base URL, or a rotated key. Credentials enter the memo key as a
   one-way hash of the settings the probe reads (for example
-  `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL_OVERRIDE`); the key itself
+  `ANTHROPIC_API_KEY` and `providers.anthropic.base_url`); the key itself
   is never stored. AWS credentials from an instance role or an SSO cache
   are not in the hash; set `AWS_PROFILE` or the key variables when you
   need a rotation to force a recheck, or call
@@ -1811,7 +1817,7 @@ at startup, not in the middle of a failover.
 - One free metadata call per model, never a completion: OpenAI
   `models.retrieve`, Anthropic `models.retrieve`, Gemini `models.get` on
   the raw id, Bedrock `get_foundation_model` (or `get_inference_profile`
-  for `us.`, `eu.`, `apac.`, and `global.` ids) in `AWS_REGION`, an
+  for `us.`, `eu.`, `apac.`, and `global.` ids) in the configured AWS region, an
   OpenAI-compatible server's `/models` list, and the Decisions API's fixed
   model set. Calls run in parallel, so startup pays one round trip.
 - Each model gets one status:
@@ -1937,10 +1943,11 @@ injecting a bogus id in memory.
 
 ## Configuration
 
-### models.json: one file for model selections
+### models.json: one file for everything but secrets
 
 Engines, models, the fallback chain, the router, the classifier, the
-configured-model check, and the allow/deny policy live in one file,
+configured-model check, provider settings, the middleware, and the
+allow/deny policy live in one file,
 `models.json` (or `.yaml`). Copy `models_sample.json`, which sets every
 section, and point `AI_MODELS_CONFIG` at it (or leave it unset: the library
 picks up `./models.json` when it exists; a blank value turns the file off;
@@ -1982,8 +1989,10 @@ not break, and the library logs one warning per key naming the
 `models.json` field and the migrator command
 (`ai_config_event=deprecated_selection_key`). Precedence, highest first: an
 explicit factory argument, a deprecated environment key, the file, the
-library default. Secrets (API keys, AWS credentials), `AWS_REGION`,
-base-URL overrides, and `AI_MIDDLEWARE_CONFIG_PATH` stay in `.env`.
+library default. Only secrets stay in `.env`: API keys, AWS credentials,
+and `GOOGLE_APPLICATION_CREDENTIALS`. The AWS region may sit in either
+place, since AWS hosts set `AWS_REGION` themselves; the environment wins
+and draws no warning.
 
 ### Schemas and validation
 
@@ -1993,7 +2002,7 @@ models the library loads them with, so the two cannot disagree:
 | File | Schema |
 | ---- | ------ |
 | `models.json` | [`models.schema.json`](src/ai_api_unified/schemas/models.schema.json) |
-| Middleware YAML (`AI_MIDDLEWARE_CONFIG_PATH`) | [`middleware.schema.json`](src/ai_api_unified/schemas/middleware.schema.json) |
+| A separate middleware YAML, if you keep one | [`middleware.schema.json`](src/ai_api_unified/schemas/middleware.schema.json) |
 
 Both ship in the package under `ai_api_unified/schemas/`. Point your
 editor at one for completion and inline errors: add a `"$schema"` key at
@@ -2061,21 +2070,40 @@ Every section of `models.json` is documented in
 | `model_check` | `mode` (`prune`, `strict`, `off`), `timeout_seconds` (see Configured-model check) |
 | `embeddings` | `engine`, `model` (`gemini-embedding-2` enables multimodal embeddings), `dimensions` (`0` keeps the provider default) |
 | `images` | `engine`, `model` |
-| `videos` | `engine`, `model`, `output_dir`, `poll_interval_seconds`, `timeout_seconds` |
+| `videos` | `engine`, `model`, `output_dir`, `poll_interval_seconds`, `timeout_seconds`, `bedrock_output_s3_uri` (Nova Reel, unless a request names its own) |
 | `voice` | `engine`, `tts_model`, `language` |
 | `geo_residency` | `US`, `USA`, or `United States` normalize to US routing where supported |
+| `providers` | Per-provider settings that are not secrets; see [Provider settings](#provider-settings) |
+| `middleware` | The PII redaction and observability middleware list; see [Middleware](#middleware) |
+| `strict_deprecations` | `true` turns a deprecated-model warning into a startup error |
 
-### Settings that stay in `.env`
+### Provider settings
 
-| Environment variable        | Notes                                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------------------- |
-| `AI_MODELS_CONFIG` | Path to `models.json`/`.yaml`, or inline JSON; unset uses `./models.json` when present; blank turns the file off |
-| `BEDROCK_VIDEO_OUTPUT_S3_URI` | Required for Nova Reel unless provided per request                                        |
-| `AI_MIDDLEWARE_CONFIG_PATH` | Optional YAML config path for observability and PII middleware                              |
-| `ANTHROPIC_BASE_URL_OVERRIDE` | Optional API base-URL override for the `claude` engine (https required) |
-| `OPENAI_BASE_URL_OVERRIDE`  | Optional API base-URL override for the OpenAI engines (https required) |
-| `GOOGLE_GEMINI_BASE_URL_OVERRIDE` | Optional API base-URL override for `google-gemini` (https required) |
-| `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` | Optional separate override for the Anthropic Admin API lookup; the admin key does not follow the inference override |
+| Field | Meaning |
+| ----- | ------- |
+| `providers.openai.base_url` | API base-URL override for the OpenAI engines (https required) |
+| `providers.openai.user` | End-user id sent with each OpenAI request |
+| `providers.anthropic.base_url` | API base-URL override for the `claude` engine (https required) |
+| `providers.anthropic.admin_base_url` | Separate override for the Anthropic Admin API lookup; the admin key does not follow `base_url` |
+| `providers.anthropic.user` | End-user id for Claude calls |
+| `providers.google.auth_method` | `api_key` (default) or `service_account` (Vertex) |
+| `providers.google.project_id`, `providers.google.location` | Vertex project and region, for `service_account` |
+| `providers.google.base_url` | API base-URL override for `google-gemini` (https required) |
+| `providers.aws.region` | Bedrock region, used when the environment sets no `AWS_REGION` (default `us-east-1`) |
+| `providers.openai_compatible.base_url` | The server's `/v1` base URL (required for `openai-compatible`) |
+| `providers.openai_compatible.structured_output` | `json_schema` (default) or `json_object` |
+| `providers.openai_compatible.context_window` | Input token limit for the client-side context guard |
+| `providers.azure_speech.region` | Azure speech region |
+
+### What stays in `.env`
+
+Secrets only: `OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`,
+`ANTHROPIC_API_KEY`, `ANTHROPIC_ADMIN_KEY`, `GOOGLE_GEMINI_API_KEY`,
+`GOOGLE_APPLICATION_CREDENTIALS`, `VOYAGE_API_KEY`, the AWS credentials,
+`ELEVEN_LABS_API_KEY`, and `MICROSOFT_COGNITIVE_SERVICES_API_KEY`; plus
+`AI_MODELS_CONFIG`, which names the file (a path to `models.json`/`.yaml`,
+or inline JSON; unset uses `./models.json` when present; blank turns the
+file off). `AWS_REGION` may sit here too, since AWS hosts set it.
 
 ### Cataloged Completions Models
 
@@ -2099,20 +2127,22 @@ The `claude`, `openai`, `openai-responses`, `openai-compatible`, and
 route through an LLM gateway, a corporate egress proxy, a recording proxy in
 tests, or any OpenAI-compatible server:
 
-| Engine | Setting |
+| Engine | `models.json` field |
 | --- | --- |
-| `claude` | `ANTHROPIC_BASE_URL_OVERRIDE` |
-| `openai`, `openai-responses` | `OPENAI_BASE_URL_OVERRIDE` |
-| `openai-compatible` | `OPENAI_COMPATIBLE_BASE_URL` (required) |
-| `google-gemini` | `GOOGLE_GEMINI_BASE_URL_OVERRIDE` |
+| `claude` | `providers.anthropic.base_url` |
+| `openai`, `openai-responses` | `providers.openai.base_url` |
+| `openai-compatible` | `providers.openai_compatible.base_url` (required) |
+| `google-gemini` | `providers.google.base_url` |
 
-```dotenv
-# Route Claude traffic through a gateway
-ANTHROPIC_BASE_URL_OVERRIDE=https://llm-gateway.internal/anthropic
-
-# Point the openai engine at a local OpenAI-compatible server
-OPENAI_BASE_URL_OVERRIDE=http://localhost:11434/v1
+```json
+"providers": {
+  "anthropic": {"base_url": "https://llm-gateway.internal/anthropic"},
+  "openai":    {"base_url": "http://localhost:11434/v1"}
+}
 ```
+
+The first routes Claude traffic through a gateway; the second points the
+`openai` engine at a local OpenAI-compatible server.
 
 Per client, when one process needs several destinations:
 
@@ -2129,22 +2159,22 @@ Rules and rationale:
   plain `http://` is rejected with `AiProviderConfigurationError` unless the
   host is `localhost`, `127.0.0.1`, or `::1` (local gateways and test
   servers).
-- **The `_OVERRIDE` suffix is deliberate.** The OpenAI, Anthropic, and Google
-  SDKs read their own `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, and
-  `GOOGLE_GEMINI_BASE_URL` variables. Using distinct names, and passing the
-  resolved value to the SDK explicitly, keeps a stray native variable from
-  taking effect without the https check. (On `google-gemini` with no override
+- **The SDKs' own variables never take effect unvalidated.** The OpenAI,
+  Anthropic, and Google SDKs read their own `OPENAI_BASE_URL`,
+  `ANTHROPIC_BASE_URL`, and `GOOGLE_GEMINI_BASE_URL` variables. The library
+  passes the resolved value to the SDK explicitly, which keeps a stray native
+  variable from taking effect without the https check. (On `google-gemini` with no override
   set, the SDK still resolves its own default, including those native
   variables, which this library does not validate.)
-- **Precedence:** the `base_url` argument, then `<ENGINE>_BASE_URL_OVERRIDE`,
-  then (OpenAI only) the deprecated `OPENAI_BASE_URL` and geo-residency
+- **Precedence:** the `base_url` argument, then the `providers.<name>.base_url`
+  field, then (OpenAI only) the deprecated `OPENAI_BASE_URL` and geo-residency
   routing, then the provider default.
 - **Organization lookups follow the override**, so finops attribution does not
   bypass your gateway — with one deliberate exception: the Anthropic **Admin
   API key** grants org-wide read/write, far beyond the inference key, so it
-  does not follow `ANTHROPIC_BASE_URL_OVERRIDE`. Routing inference through a
+  does not follow `providers.anthropic.base_url`. Routing inference through a
   gateway never silently hands that gateway an administration credential. Set
-  `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE` to opt the admin lookup in as well.
+  `providers.anthropic.admin_base_url` to opt the admin lookup in as well.
 - The same rules validate the deprecated `OPENAI_BASE_URL`, since other
   tooling commonly sets that name process-wide.
 - Engines without SDK support (Bedrock-routed, `titan`, `voyage`, voice)
@@ -2159,7 +2189,7 @@ Required:
 
 - `OPENAI_API_KEY`
 
-Optional: `OPENAI_BASE_URL_OVERRIDE`. Models and dimensions are selected in
+Optional: `providers.openai.base_url`. Models and dimensions are selected in
 `models.json`.
 
 #### Anthropic (native Claude API)
@@ -2183,10 +2213,11 @@ For current model IDs and pricing, use the Anthropic documentation:
 
 Required:
 
-- `AWS_REGION`
 - standard AWS credentials in environment or runtime IAM context
+- a region: `AWS_REGION` in the environment, or `providers.aws.region` in
+  `models.json` (default `us-east-1`)
 
-Optional: `BEDROCK_VIDEO_OUTPUT_S3_URI` (Nova Reel). Models and dimensions
+Optional: `videos.bedrock_output_s3_uri` (Nova Reel). Models and dimensions
 are selected in `models.json`.
 
 If your AWS profile uses `aws login` (a `login_session` profile), install
@@ -2202,7 +2233,6 @@ and never reach DeepSeek, Alibaba, or Z.ai.
 ```
 
 ```dotenv
-AWS_REGION=us-east-1
 AWS_PROFILE=<your profile>
 ```
 
@@ -2220,8 +2250,8 @@ AWS_PROFILE=<your profile>
 
 All are text-only, stream, and are priced in the registry. None supports
 `count_tokens`. Enable each model under **Model access** in the Bedrock
-console first. For a model outside your default region, set `AWS_REGION` or
-pass `region=` to `AiBedrockCompletions`.
+console first. For a model outside your default region, set
+`providers.aws.region` or pass `region=` to `AiBedrockCompletions`.
 
 For current Bedrock model IDs, use the AWS documentation:
 
@@ -2234,22 +2264,23 @@ Required for the default OSS path:
 
 - `GOOGLE_GEMINI_API_KEY`
 
-Default auth mode:
-
-- `GOOGLE_AUTH_METHOD=api_key`
+Default auth mode: `providers.google.auth_method` set to `api_key`.
 
 Optional service-account mode:
 
-- `GOOGLE_AUTH_METHOD=service_account`
-- `GOOGLE_APPLICATION_CREDENTIALS=/path/to/service_account.json`
-- `GOOGLE_PROJECT_ID=<gcp-project-id>`
-- `GOOGLE_LOCATION=us-central1`
+```json
+"providers": {"google": {"auth_method": "service_account", "project_id": "<gcp-project-id>", "location": "us-central1"}}
+```
+
+```dotenv
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service_account.json
+```
 
 This auth policy applies across Google completions, embeddings, images, videos, and voice.
 
 ##### Google auth modes per capability
 
-The two `GOOGLE_AUTH_METHOD` values select different google-genai clients:
+The two `providers.google.auth_method` values select different google-genai clients:
 `api_key` creates the Gemini Developer client
 (`genai.Client(api_key=...)`, generativelanguage endpoint) and
 `service_account` creates the Vertex client
@@ -2268,7 +2299,7 @@ work in only one client:
 
 Pick the mode for what you need: multimodal-media embeddings and
 text-to-video-with-download require `api_key`, and `source_video` requires
-`service_account`. Running both families means switching `GOOGLE_AUTH_METHOD`
+`service_account`. Running both families means switching `auth_method`
 between runs or constructing two clients. For a single call, `get_client(...,
 use_api_key=True)` on the shared Google base forces the Developer client
 without changing the environment.
@@ -2277,13 +2308,10 @@ without changing the environment.
 
 Required:
 
-- `MICROSOFT_COGNITIVE_SERVICES_API_KEY`
-- `MICROSOFT_COGNITIVE_SERVICES_REGION`
+- `MICROSOFT_COGNITIVE_SERVICES_API_KEY` in `.env`
+- `providers.azure_speech.region` in `models.json`
 
-Optional:
-
-- `MICROSOFT_COGNITIVE_SERVICES_ENDPOINT`
-- `voice.language` in `models.json`
+Optional: `voice.language` in `models.json`.
 
 #### ElevenLabs
 
@@ -2334,11 +2362,15 @@ Typical factory failure modes:
 - selected provider extra is not installed: `AiProviderDependencyUnavailableError`
 - provider load/runtime failure: `AiProviderRuntimeError`
 - input modality unsupported by the configured embedding model: `AiProviderCapabilityUnsupportedError`
-- retired model requested (or deprecated model under `AI_STRICT_DEPRECATIONS`): `AiProviderConfigurationError`
+- retired model requested (or deprecated model under `"strict_deprecations": true`): `AiProviderConfigurationError`
 
 ## Middleware
 
-A YAML file named by `AI_MIDDLEWARE_CONFIG_PATH` configures middleware.
+The `middleware` section of `models.json` configures middleware: a list of
+entries, each with a `name` (`observability` or `pii_redaction`), `enabled`,
+and `settings`. An entry that fails validation is skipped with a warning.
+The [middleware schema](src/ai_api_unified/schemas/middleware.schema.json)
+documents every setting, and `config_schema validate` checks the entries.
 
 ### Observability
 
@@ -2352,10 +2384,8 @@ Features:
 
 Minimal config:
 
-```yaml
-middleware:
-  - name: 'observability'
-    enabled: true
+```json
+"middleware": [{"name": "observability", "enabled": true}]
 ```
 
 #### Request-scoped context and tags
@@ -2442,14 +2472,14 @@ the cost. Five Bedrock entries are in that second state today: the hosted Claude
 model and the four Amazon Nova models, all partner-priced with no
 authoritative AWS cache-write rate sourced.
 
-```yaml
-middleware:
-  - name: 'observability'
-    enabled: true
-    settings:
-      emit_cost: true
-      # emit_cost_topic: 'my.cost.logger'   # optional logger-name override
+```json
+"middleware": [
+  {"name": "observability", "enabled": true,
+   "settings": {"emit_cost": true}}
+]
 ```
+
+`emit_cost_topic` in `settings` overrides the cost logger's name.
 
 Cost enrichment fires whenever `emit_cost` is on, even when output events are
 disabled by `direction`. See [`docs/finops_middleware_design.md`](docs/finops_middleware_design.md).
@@ -2464,7 +2494,7 @@ when identity is unavailable):
 | `claude` (native Anthropic) | always | with `ANTHROPIC_ADMIN_KEY` | Admin API; else a free `count_tokens` response header |
 | `openai` / `openai-responses` | always | always | account API (`/v1/me`) with the regular key; header-probe fallback |
 | Bedrock-routed | always | with `iam:ListAccountAliases` | STS caller identity; IAM account alias |
-| `google-gemini` | with `GOOGLE_PROJECT_ID` | unsupported | configured GCP project id |
+| `google-gemini` | with `providers.google.project_id` | unsupported | configured GCP project id |
 | `voyage`, `titan` | unsupported | unsupported | the platforms expose no caller identity |
 
 Callers can also fetch the identity on demand from any client:
@@ -2556,12 +2586,11 @@ PII redaction is optional and requires one of:
 
 Minimal config:
 
-```yaml
-middleware:
-  - name: 'pii_redaction'
-    enabled: true
-    settings:
-      direction: 'input_only'
+```json
+"middleware": [
+  {"name": "pii_redaction", "enabled": true,
+   "settings": {"direction": "input_only"}}
+]
 ```
 
 Notes:
@@ -2571,7 +2600,7 @@ Notes:
 - install a matching spaCy model separately, for example `poetry run python -m spacy download en_core_web_sm` for `balanced` or `poetry run python -m spacy download en_core_web_lg` for `high_accuracy`
 - `middleware-pii-redaction-small` and `middleware-pii-redaction-large` are compatibility aliases for the same Python dependency set; the spaCy model is still installed as a separate build/runtime asset
 - for no-egress images and Lambda-style deployments, install the spaCy model wheel into the build artifact (runtime model downloads need egress)
-- recognizer customization is configured in YAML
+- recognizer customization is configured in the entry's `settings`
 
 See [`docs/pii_redaction_design.md`](docs/pii_redaction_design.md) for the fuller contract and deployment tradeoffs.
 
@@ -2706,7 +2735,7 @@ git push origin v<version>
 
 - An engine `must be configured explicitly` error: set that capability's `engine` in `models.json`.
 - `AiProviderDependencyUnavailableError`: install the extra for the selected provider.
-- Google auth errors: the OSS default is `GOOGLE_AUTH_METHOD=api_key`. If you switch to `service_account`, point `GOOGLE_APPLICATION_CREDENTIALS` at a valid local JSON credential file. Set `GOOGLE_PROJECT_ID` and `GOOGLE_LOCATION` when required.
+- Google auth errors: the OSS default is `providers.google.auth_method` set to `api_key`. If you switch to `service_account`, point `GOOGLE_APPLICATION_CREDENTIALS` at a valid local JSON credential file, and set `providers.google.project_id` and `providers.google.location`.
 - Unexpected embeddings dimensions: leave `embeddings.dimensions` at `0` unless you intentionally want a non-default size.
 - Google image generation or TTS failures in live tests often come from account or service state: a disabled cloud API, or missing paid-plan access. Check those before suspecting a library bug.
 - `geo_residency: "US"` is a best-effort routing hint. Only providers that expose regional routing controls can honor it directly.

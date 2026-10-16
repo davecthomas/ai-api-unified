@@ -48,5 +48,24 @@
   "videos":     {"engine": "google-gemini", "model": "veo-3.1-lite-generate-preview", "output_dir": "./videos"},
   "voice":      {"engine": "google", "tts_model": "gemini-2.5-pro-tts", "language": "en-US"},
 
-  "geo_residency": null
+  "geo_residency": null,
+
+  "providers": {
+    "openai":            {"base_url": null, "user": null},
+    "anthropic":         {"base_url": null, "admin_base_url": null, "user": null},
+    "google":            {"auth_method": "api_key", "project_id": null, "location": "us-central1", "base_url": null},
+    "aws":               {"region": "us-east-1"},
+    "openai_compatible": {"base_url": null, "structured_output": "json_schema", "context_window": null},
+    "azure_speech":      {"region": "eastus"}
+  },
+
+  "middleware": [
+    {"name": "observability", "enabled": false,
+     "settings": {"direction": "input_output", "capabilities": ["completions", "embeddings", "images", "tts"],
+                  "log_level": "INFO", "token_count_mode": "provider_or_estimate"}},
+    {"name": "pii_redaction", "enabled": false,
+     "settings": {"direction": "input_only"}}
+  ],
+
+  "strict_deprecations": false
 }
