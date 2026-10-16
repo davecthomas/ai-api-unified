@@ -407,18 +407,20 @@ class AIFactory:
                 router_config=router_config,
             )
         )
-        if router_config is not None or list_fallbacks:
-            list_fallbacks, router_config, str_classifier_missing = (
-                AIFactory._check_configured_models(
-                    env_settings=env_settings,
-                    primary_candidate=AIFallbackCandidate(
-                        engine=str_engine, model=str_model_name, base_url=base_url
-                    ),
-                    list_fallbacks=list_fallbacks,
-                    router_config=router_config,
-                    str_classifier_missing=str_classifier_missing,
-                )
-            )
+        (
+            list_fallbacks,
+            router_config,
+            str_classifier_missing,
+            str_primary_unreachable,
+        ) = AIFactory._check_configured_models(
+            env_settings=env_settings,
+            primary_candidate=AIFallbackCandidate(
+                engine=str_engine, model=str_model_name, base_url=base_url
+            ),
+            list_fallbacks=list_fallbacks,
+            router_config=router_config,
+            str_classifier_missing=str_classifier_missing,
+        )
         level_thinking: AIThinkingLevel | None = parse_thinking_level(thinking)
 
         def _build_leveled(candidate: AIFallbackCandidate) -> AIBaseCompletions:
@@ -436,6 +438,10 @@ class AIFactory:
                 engine=str_engine, model=str_model_name, base_url=base_url
             )
         )
+        if str_primary_unreachable is not None:
+            # The build raises its own typed error first (a missing extra or
+            # key); this covers a primary that builds but cannot be called.
+            raise AiProviderConfigurationError(str_primary_unreachable)
         frozenset_reasons: frozenset[AiFallbackReason] = (
             AIFactory._resolve_fallback_reasons(
                 env_settings=env_settings, fallback_on=fallback_on
@@ -637,16 +643,22 @@ class AIFactory:
         list_fallbacks: list[AIFallbackCandidate],
         router_config: AIRouterConfig | None,
         str_classifier_missing: str | None = None,
-    ) -> tuple[list[AIFallbackCandidate], AIRouterConfig | None, str | None]:
+    ) -> tuple[
+        list[AIFallbackCandidate], AIRouterConfig | None, str | None, str | None
+    ]:
         """
-        Verifies every configured model once and prunes the missing ones.
+        Verifies every configured model and prunes the missing and the
+        unreachable.
 
-        Runs when a chain or a router is configured (a lone primary fails on
-        its own at build). AI_MODEL_CHECK selects the mode: "prune"
-        (default) drops missing fallback and tier models with a warning,
-        "strict" raises on any missing model, "off" skips the check. The
-        primary cannot be pruned: when it is missing the factory raises in
-        every mode but "off".
+        Runs on every completions client build, a lone primary included;
+        results are memoized per (engine, model, base_url, credentials), so
+        a model is probed again only when one of those changes.
+        model_check.mode selects the mode: "prune" (default) drops missing
+        or unreachable fallback and tier models with a warning, "strict"
+        raises on any of them, "off" skips the check. The primary cannot be
+        pruned: when it is missing the factory raises ValueError, and when
+        it is unreachable the caller raises AiProviderConfigurationError
+        after the build, in every mode but "off".
 
         Args:
             env_settings: Shared environment/settings accessor.
@@ -659,18 +671,19 @@ class AIFactory:
 
         Returns:
             (pruned chain, pruned router config or None when no tier
-            survived, reason the router classifier is unusable or None).
+            survived, reason the router classifier is unusable or None,
+            reason the primary cannot be reached or None).
 
         Raises:
             ValueError: The primary is missing, or strict mode found a
-                missing model.
+                missing or unreachable fallback, tier, or classifier model.
         """
         str_mode: str = resolve_model_check_mode(
             env_settings.get_setting(AI_MODEL_CHECK_KEY, "")
         )
         if str_mode == MODEL_CHECK_MODE_OFF:
             # Early return: the check is turned off.
-            return list_fallbacks, router_config, str_classifier_missing
+            return list_fallbacks, router_config, str_classifier_missing, None
         list_candidates: list[AIFallbackCandidate] = [
             primary_candidate,
             *list_fallbacks,
@@ -707,33 +720,69 @@ class AIFactory:
             )
             return result is None or result.keeps_model
 
-        list_missing: list[AiModelCheckResult] = [
-            result
-            for result in list_results
-            if result.status is AiModelCheckStatus.MISSING
-        ]
-        if not _keep(primary_candidate):
+        primary_result: AiModelCheckResult | None = dict_results.get(
+            (
+                primary_candidate.engine,
+                primary_candidate.model,
+                primary_candidate.base_url,
+            )
+        )
+        if (
+            primary_result is not None
+            and primary_result.status is AiModelCheckStatus.MISSING
+        ):
             raise ValueError(
                 f"The configured completions model {primary_candidate.label} is not "
                 "available and cannot be pruned: it is the default route. Fix "
-                "COMPLETIONS_ENGINE / COMPLETIONS_MODEL_NAME."
+                "completions.engine / completions.model in models.json."
             )
-        if str_mode == MODEL_CHECK_MODE_STRICT and list_missing:
+        str_primary_unreachable: str | None = None
+        if (
+            primary_result is not None
+            and primary_result.status is AiModelCheckStatus.UNREACHABLE
+        ):
+            str_primary_unreachable = (
+                f"The configured completions model {primary_candidate.label} cannot "
+                f"be reached ({primary_result.detail}) and cannot be pruned: it is "
+                "the default route. Fix its credentials or extra."
+            )
+        list_failed: list[AiModelCheckResult] = [
+            result
+            for result in list_results
+            if not result.keeps_model and result is not primary_result
+        ]
+        if str_mode == MODEL_CHECK_MODE_STRICT and list_failed:
             raise ValueError(
-                "AI_MODEL_CHECK=strict: configured models not available: "
-                + ", ".join(f"{r.label} ({r.detail})" for r in list_missing)
+                "model_check.mode=strict: configured models missing or unreachable: "
+                + ", ".join(
+                    f"{r.label} ({r.status.value}: {r.detail})" for r in list_failed
+                )
             )
         list_fallbacks = prune_candidates(list_fallbacks, dict_results)
         if classifier_candidate is not None and not _keep(classifier_candidate):
             str_classifier_missing = (
                 f"classifier model {classifier_candidate.label} is not available"
+                if dict_results[
+                    (
+                        classifier_candidate.engine,
+                        classifier_candidate.model,
+                        classifier_candidate.base_url,
+                    )
+                ].status
+                is AiModelCheckStatus.MISSING
+                else f"classifier model {classifier_candidate.label} cannot be reached"
             )
         if router_config is not None:
             router_config = AIFactory._prune_router_tiers(
                 router_config, _keep, str_why="not available"
             )
         # Normal return with the pruned configuration.
-        return list_fallbacks, router_config, str_classifier_missing
+        return (
+            list_fallbacks,
+            router_config,
+            str_classifier_missing,
+            str_primary_unreachable,
+        )
 
     @staticmethod
     def _router_classifier_candidate(

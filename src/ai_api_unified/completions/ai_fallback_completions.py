@@ -4,8 +4,12 @@ Completions client that retries a failed request on another model.
 
 AiFallbackCompletions wraps an ordered list of (engine, model) candidates.
 The first is the primary, constructed up front as usual. The rest are built
-lazily, the first time a request needs them, so a fallback whose optional
-extra is missing or whose credentials are wrong cannot break startup.
+lazily, the first time a request needs them. Before that, the factory's
+configured-model check (util/ai_model_checker.py) has already probed every
+candidate: a fallback that does not exist or cannot be reached (no key,
+rejected key, extra not installed) is pruned at startup with a WARNING, so
+it never breaks startup and never surprises a failover. A build that still
+fails at failover time takes the candidate out for the rest of the process.
 
 A request moves to the next candidate only when the engine raises
 AiProviderRequestError with a fallback_reason in the configured set (by

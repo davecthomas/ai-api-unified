@@ -4,6 +4,34 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.6.0
+
+### Changed
+
+- The configured-model check now verifies that each model can be reached,
+  not only that it exists. A new status, `unreachable`, covers a missing
+  key, a key the provider rejects as invalid, a missing base URL for an
+  OpenAI-compatible server, and a missing extra. In `prune` mode an
+  unreachable fallback, tier model, or classifier is dropped with a
+  WARNING (`ai_model_check_event=model_unreachable`); `strict` raises on
+  it; an unreachable primary raises `AiProviderConfigurationError`.
+  Before, these were `unverifiable` and kept, so a fallback with a bad
+  key surfaced only at the first failover. A 403 permission denial on
+  the catalog call stays `unverifiable`, since it may not cover inference.
+- The check runs on every completions client build, including a lone
+  primary with no chain or router. It used to run only when a chain or
+  router was configured.
+- Check results are memoized per engine, model, base URL, and a one-way
+  hash of the engine's credential settings, so a rotated key or an edited
+  `models.json` re-probes exactly the models it affects, and nothing else
+  is probed twice. A transient probe error is no longer memoized.
+- Bedrock client-side errors other than missing credentials (a bad
+  region, an unreachable endpoint) are now `error` instead of
+  `unverifiable`, so they are retried on the next build.
+- The missing-primary error names `completions.engine` /
+  `completions.model` in models.json instead of the deprecated `.env`
+  keys. ADR-0022.
+
 ## 3.5.1
 
 ### Security

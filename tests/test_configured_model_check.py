@@ -1,8 +1,9 @@
 # tests/test_configured_model_check.py
 """
-The factory's configured-model check: pruning of fallback and tier models,
-dropped tiers remapped upward, the primary that cannot be pruned, strict
-and off modes, a missing classifier model, and the exposed report.
+The factory's configured-model check: pruning of missing and unreachable
+fallback and tier models, dropped tiers remapped upward, the primary that
+cannot be pruned (checked even with no chain or router), strict and off
+modes, a missing classifier model, and the exposed report.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from unittest.mock import patch
 import pytest
 
 from ai_api_unified import AIFactory, AiFallbackCompletions, AiRouterCompletions
+from ai_api_unified.ai_provider_exceptions import AiProviderConfigurationError
 from ai_api_unified.util.ai_model_checker import AiModelChecker, AiModelCheckStatus as S
 
 LOGGER_FACTORY: str = "ai_api_unified.ai_factory"
@@ -53,11 +55,14 @@ def _fake_probes() -> Iterator[None]:
     """Every engine answers from a fixed table: ids containing 'gone' are missing."""
     pytest.importorskip("anthropic")
     dict_saved = dict(AiModelChecker._DICT_PROBE_BY_ENGINE)
+    dict_saved_settings = dict(AiModelChecker._DICT_CREDENTIAL_SETTINGS_BY_ENGINE)
     AiModelChecker.reset_cache()
 
     def _probe(model: str, base_url: str | None):
         if "gone" in model:
             return S.MISSING, "fake 404"
+        if "badkey" in model:
+            return S.UNREACHABLE, "fake 401"
         if model == "unverifiable":
             return S.UNVERIFIABLE, "no key"
         return S.AVAILABLE, "ok"
@@ -67,6 +72,8 @@ def _fake_probes() -> Iterator[None]:
     yield
     AiModelChecker._DICT_PROBE_BY_ENGINE.clear()
     AiModelChecker._DICT_PROBE_BY_ENGINE.update(dict_saved)
+    AiModelChecker._DICT_CREDENTIAL_SETTINGS_BY_ENGINE.clear()
+    AiModelChecker._DICT_CREDENTIAL_SETTINGS_BY_ENGINE.update(dict_saved_settings)
     AiModelChecker.reset_cache()
 
 
@@ -89,6 +96,28 @@ class TestFallbackChain:
         ]
         assert any(
             "claude:claude-gone-1 is not available and will be ignored"
+            in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_unreachable_fallback_is_pruned_with_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with (
+            _settings(
+                AI_MODEL_CHECK="prune",
+                COMPLETIONS_FALLBACKS="claude:claude-badkey-1,claude:claude-sonnet-5",
+            ),
+            caplog.at_level(logging.WARNING, logger=LOGGER_CHECK),
+        ):
+            client = AIFactory.get_ai_completions_client()
+        assert isinstance(client, AiFallbackCompletions)
+        assert [c.label for c in client.candidates] == [
+            "claude:claude-haiku-4-5",
+            "claude:claude-sonnet-5",
+        ]
+        assert any(
+            "claude:claude-badkey-1 cannot be reached and will be ignored"
             in r.getMessage()
             for r in caplog.records
         )
@@ -123,6 +152,13 @@ class TestFallbackChain:
             with pytest.raises(ValueError, match="strict.*claude:claude-gone-1"):
                 AIFactory.get_ai_completions_client()
 
+    def test_strict_mode_raises_on_an_unreachable_model(self) -> None:
+        with _settings(
+            AI_MODEL_CHECK="strict", COMPLETIONS_FALLBACKS="claude:claude-badkey-1"
+        ):
+            with pytest.raises(ValueError, match="unreachable.*claude-badkey-1"):
+                AIFactory.get_ai_completions_client()
+
     def test_off_mode_skips_the_check(self) -> None:
         with _settings(
             AI_MODEL_CHECK="off", COMPLETIONS_FALLBACKS="claude:claude-gone-1"
@@ -131,9 +167,17 @@ class TestFallbackChain:
         assert isinstance(client, AiFallbackCompletions) and len(client.candidates) == 2
         assert AiModelChecker.cached(client.candidates[1]) is None
 
-    def test_no_chain_and_no_router_runs_no_check(self) -> None:
-        with _settings(AI_MODEL_CHECK="strict", COMPLETIONS_MODEL_NAME="claude-gone-0"):
-            AIFactory.get_ai_completions_client()  # the engine itself would complain at call time
+    def test_lone_primary_is_checked(self) -> None:
+        with _settings(AI_MODEL_CHECK="prune", COMPLETIONS_MODEL_NAME="claude-gone-0"):
+            with pytest.raises(ValueError, match="default route"):
+                AIFactory.get_ai_completions_client()
+
+    def test_unreachable_primary_raises_a_configuration_error(self) -> None:
+        with _settings(
+            AI_MODEL_CHECK="prune", COMPLETIONS_MODEL_NAME="claude-badkey-0"
+        ):
+            with pytest.raises(AiProviderConfigurationError, match="cannot be reached"):
+                AIFactory.get_ai_completions_client()
 
     def test_report_is_exposed(self) -> None:
         with _settings(

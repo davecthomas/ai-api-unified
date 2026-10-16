@@ -1,4 +1,4 @@
-# ai-api-unified 3.5.1
+# ai-api-unified 3.6.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1292,7 +1292,10 @@ Rules for the chain:
   as it would if it were the primary.
 - The factory checks every fallback engine token against the provider
   registry when it builds the client, so a typo fails at startup, long
-  before any outage.
+  before any outage. The [configured-model check](#configured-model-check)
+  then probes each fallback model with its engine's credentials and prunes,
+  with a WARNING, any that does not exist or cannot be reached (no key,
+  rejected key, extra not installed).
 - Passing `fallbacks=[]` in code turns the chain off even when the setting
   is present.
 
@@ -1303,11 +1306,13 @@ Rules for the chain:
 2. If the engine raises `AiProviderRequestError` with a `fallback_reason` in
    the configured set, the client logs a warning naming both candidates and
    the reason, and sends the request to the next candidate.
-3. The client builds a fallback the first time a request needs it. When a
-   build fails (missing extra, bad credentials, unsupported option), the
-   client logs it once and skips that candidate for the rest of the
-   process, so a broken fallback never breaks startup or blocks the rest
-   of the chain.
+3. The client builds a fallback the first time a request needs it. The
+   configured-model check has already pruned fallbacks that are missing or
+   unreachable, so a build failure here is rare (an unsupported option,
+   for example). A key revoked after startup fails the request instead,
+   as `AUTH_REJECTED` (see step 5). When a build fails, the client logs it
+   once and skips that candidate for the rest of the process, so it never
+   blocks the rest of the chain.
 4. The client skips, with a warning, a fallback that lacks a capability the
    call needs (structured output, tool use, async, streaming).
 5. After a `QUOTA_EXHAUSTED` or `AUTH_REJECTED` failure, the client skips
@@ -1546,9 +1551,11 @@ classifier fails, or when `default_tier` is unset.
 The router uses a classification engine (see Classification). Resolution
 order: the router's own `classifier` entry, then the top-level
 `classifier` section of `models.json`, then `openai-decisions` when
-`OPENAI_API_KEY` is set. Set either to `none` to route without a classifier; if the
-classifier cannot be built, the router logs `classifier_unavailable` once
-and degrades to the default route, and never raises at startup.
+`OPENAI_API_KEY` is set. Set either to `none` to route without a classifier. The
+configured-model check probes the classifier model with the tiers; if it
+is missing or unreachable, or the classifier cannot be built, the router
+logs `classifier_unavailable` once and degrades to the default route, and
+never raises at startup.
 
 The classifier reads the latest user message only, cut to the engine's
 `max_input_chars`. The system prompt is left out: it is long, constant,
@@ -1571,9 +1578,10 @@ and `classifier.instructions` prepends your own guidance.
 5. If the chain runs out of candidates on a trigger reason
    (`fallback_on`), the router escalates to the next tier up and logs
    `tier_exhausted`; with `on_exhausted: raise`, on a non-trigger error, or
-   on the top tier, the error propagates; if a tier's primary cannot be
-   built, the router logs `tier_unbuildable` once and skips the tier the
-   same way.
+   on the top tier, the error propagates. Tier models that are missing or
+   unreachable were pruned at startup by the configured-model check; if a
+   tier's primary still cannot be built, the router logs
+   `tier_unbuildable` once and skips the tier the same way.
 
 ### Seeing where a request went
 
@@ -1619,13 +1627,33 @@ Exports: `AiRouterCompletions`, `AIRouterConfig`, `AIRouterTier`,
 
 ## Configured-model check
 
-A fallback chain or a router names models the process expects to call
-later. A typo, a retired id, or a model not offered in your region would
-otherwise surface only when that model is finally tried, in the middle of
-a failover. So whenever you configure a chain or a router, the factory
-verifies every configured model before it builds the client: the
-completions LLM, each chain candidate, each tier candidate, and the
-router's classifier.
+Every model the completions client may call is checked before the client
+is returned: the completions LLM, each fallback, each router tier
+candidate, and the router's classifier. The check asks two questions:
+does the provider serve this model, and can this process reach it with
+the credentials the engine will use? A typo, a retired id, a model not
+offered in your region, or a fallback whose key is missing then shows up
+at startup, not in the middle of a failover.
+
+### When it runs
+
+- On every `AIFactory.get_ai_completions_client()` call, with or without
+  a chain or router. A lone primary is checked too.
+- Each model is probed at most once per process for a given engine,
+  model id, base URL, and credentials. Later factory calls reuse the
+  result and make no network call. A probe runs again only when one of
+  those four changes: an edited `models.json` that names a new model or
+  base URL, or a rotated key. Credentials enter the memo key as a
+  one-way hash of the settings the probe reads (for example
+  `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL_OVERRIDE`); the key itself
+  is never stored. AWS credentials from an instance role or an SSO cache
+  are not in the hash; set `AWS_PROFILE` or the key variables when you
+  need a rotation to force a recheck, or call
+  `AiModelChecker.reset_cache()`.
+- A probe that failed for a transient reason (timeout, 5xx, dropped
+  connection) is not cached, so the next factory call probes that model
+  again.
+- `models.json` itself is reloaded when its modification time changes.
 
 ### What it does
 
@@ -1634,32 +1662,37 @@ router's classifier.
   the raw id, Bedrock `get_foundation_model` (or `get_inference_profile`
   for `us.`, `eu.`, `apac.`, and `global.` ids) in `AWS_REGION`, an
   OpenAI-compatible server's `/models` list, and the Decisions API's fixed
-  model set.
-- Calls run in parallel, and the checker probes each `(engine, model,
-  base_url)` once per process however many clients, chains, or tiers name
-  it. Startup
-  pays one round trip, and later factory calls pay nothing.
-- The factory prunes a model the provider reports **missing** from the
-  effective configuration with a WARNING: `configured model openai:gpt-nope
-  is not available and will be ignored`. A chain drops the candidate; a
-  router tier drops the candidate, and the router drops a tier left with no
-  models. A request for a dropped tier (by the classifier, a `route`
-  override, or `for_tier`) goes to the next **higher** surviving tier, never
-  a lower one, and to the default route when nothing is above. A dropped
-  `default_tier` moves the same way.
+  model set. Calls run in parallel, so startup pays one round trip.
+- Each model gets one status:
+
+| Status | Meaning | Effect |
+| ------ | ------- | ------ |
+| `available` | The provider returned the model's metadata. | Kept. |
+| `missing` | The provider has no such model (404, or an id outside a fixed catalog). | Pruned, WARNING. |
+| `unreachable` | The engine cannot call the model: no key, a key rejected as invalid (401, Gemini `API_KEY_INVALID`, Bedrock `UnrecognizedClient` / `InvalidSignature` / `ExpiredToken`, no AWS credentials), no base URL for an OpenAI-compatible server, or the engine's extra not installed. | Pruned, WARNING. |
+| `unverifiable` | The probe cannot ask, but nothing says the call would fail: the engine default model (no id configured), a permission denial (403, Bedrock `AccessDenied`) that may cover only the catalog call, Vertex auth, or a server without a model catalog. | Kept, INFO. |
+| `error` | The probe failed for another reason (timeout, 5xx, network). | Kept, WARNING; not cached. |
+
+- A pruned fallback leaves the chain: `configured model openai:gpt-nope
+  is not available and will be ignored`, or `configured model
+  claude:claude-haiku-4-5 cannot be reached and will be ignored`. A
+  pruned tier candidate leaves its tier, and the router drops a tier left
+  with no models. A request for a dropped tier (by the classifier, a
+  `route` override, or `for_tier`) goes to the next **higher** surviving
+  tier, never a lower one, and to the default route when nothing is
+  above. A dropped `default_tier` moves the same way.
 - The primary completions model cannot be pruned: it is the default
-  route, so when it is missing the factory raises.
-- A missing classifier model logs `classifier_unavailable`, and the router
-  degrades to its default route.
-- A model the probe cannot ask about (no credentials, no extra installed,
-  credentials rejected, a server with no model catalog, Vertex auth) is
-  **unverifiable** and kept, logged at INFO. A probe error (network, 5xx)
-  keeps the model and logs a WARNING. Neither counts as missing.
+  route. A missing primary raises `ValueError`; an unreachable one raises
+  `AiProviderConfigurationError` (the engine's own error comes first when
+  its constructor already refuses, for example a missing extra).
+- A missing or unreachable classifier model logs `classifier_unavailable`,
+  and the router degrades to its default route.
 
 Log records go to `ai_api_unified.util.ai_model_checker` with an
-`ai_model_check_event` field: `model_missing` (WARNING), `model_check_error`
-(WARNING), `model_unverifiable` (INFO), `model_available` (DEBUG); the
-factory adds `router_tier_pruned` and `router_disabled` (WARNING) on
+`ai_model_check_event` field: `model_missing` (WARNING),
+`model_unreachable` (WARNING), `model_check_error` (WARNING),
+`model_unverifiable` (INFO), `model_available` (DEBUG); the factory adds
+`router_tier_pruned` and `router_disabled` (WARNING) on
 `ai_api_unified.ai_factory`. `AIFactory.last_model_check_report()` returns
 the results of the most recent check.
 
@@ -1667,10 +1700,7 @@ the results of the most recent check.
 
 | Setting | Meaning |
 | ------- | ------- |
-| `model_check.mode` (`models.json`) | `prune` (default): drop missing models with a warning. `strict`: raise on any missing model. `off`: skip the check. `model_check.timeout_seconds` bounds each probe (default 10). |
-
-A client with only a primary and no chain or router runs no check: the
-engine fails on its own at build.
+| `model_check.mode` (`models.json`) | `prune` (default): drop missing and unreachable fallbacks and tier models with a warning. `strict`: raise on any of them. `off`: skip the check. `model_check.timeout_seconds` bounds each probe (default 10). |
 
 ### Checking your own configuration
 
@@ -1678,8 +1708,8 @@ engine fails on its own at build.
 poetry run pytest -m nonmock tests/test_configured_models_nonmock.py -q -s --models-config ./models.json
 ```
 
-prints every model the file names with its status and fails on any the
-provider reports missing. To watch the pruning itself:
+prints every model the file names with its status and fails on any that
+is missing or unreachable. To watch the pruning itself:
 
 ```bash
 poetry run pytest -m nonmock tests/test_model_check_nonmock.py -q -s
