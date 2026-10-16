@@ -1,4 +1,4 @@
-# ai-api-unified 3.9.0
+# ai-api-unified 3.10.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1984,6 +1984,36 @@ not break, and the library logs one warning per key naming the
 explicit factory argument, a deprecated environment key, the file, the
 library default. Secrets (API keys, AWS credentials), `AWS_REGION`,
 base-URL overrides, and `AI_MIDDLEWARE_CONFIG_PATH` stay in `.env`.
+
+### Schemas and validation
+
+Both configuration files have a published JSON Schema, generated from the
+models the library loads them with, so the two cannot disagree:
+
+| File | Schema |
+| ---- | ------ |
+| `models.json` | [`models.schema.json`](src/ai_api_unified/schemas/models.schema.json) |
+| Middleware YAML (`AI_MIDDLEWARE_CONFIG_PATH`) | [`middleware.schema.json`](src/ai_api_unified/schemas/middleware.schema.json) |
+
+Both ship in the package under `ai_api_unified/schemas/`. Point your
+editor at one for completion and inline errors: add a `"$schema"` key at
+the top of `models.json` (as `models_sample.json` does), or a
+`# yaml-language-server: $schema=<url>` line at the top of the YAML. The
+URLs are `https://raw.githubusercontent.com/davecthomas/ai-api-unified/main/src/ai_api_unified/schemas/models.schema.json`
+and the same path ending in `middleware.schema.json`.
+
+To check a file the way the library loads it (useful in CI):
+
+```bash
+poetry run python -m ai_api_unified.config_schema validate models.json middleware.yaml
+```
+
+It prints `valid` or `INVALID` with the errors for each file and exits 1
+when any file fails. `print models` or `print middleware` writes a schema
+to stdout. Where a loader accepts more than one spelling (a tier's
+`models` or `candidates`, `fallback_on` as a list or a comma-separated
+string), the schema accepts each one, so a file the library loads never
+fails its schema.
 
 ### Allow and deny lists
 
