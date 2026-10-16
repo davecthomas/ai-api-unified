@@ -34,6 +34,10 @@ Three limits follow from the engines' request shapes:
   unless the engine marks it per-model) makes the call skip later candidates
   on the same account (same engine and base_url) instead of spending a
   request on each.
+- A trigger failure also benches the candidate for a while (see
+  ai_fallback_cooldown.py), so later calls start at the next candidate
+  instead of paying the failed one's retry backoff again. A resting
+  candidate is tried last, never dropped.
 - A streaming call fails over only if the error arrives before the first
   chunk; after that the caller already holds partial output.
 - Batches, token counting, and capabilities always go to the primary. Cost
@@ -65,6 +69,12 @@ from ..ai_base import (
 )
 from ..ai_provider_exceptions import AiFallbackReason, AiProviderRequestError
 from ..thinking import parse_thinking_level
+from .ai_fallback_cooldown import (
+    FALLBACK_EVENT_RESTING,
+    AiCandidateCooldowns,
+    AIFallbackCooldownPolicy,
+    parse_cooldown_policy,
+)
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -346,6 +356,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         fallback_candidates: Sequence[AIFallbackCandidate],
         client_builder: Callable[[AIFallbackCandidate], AIBaseCompletions],
         fallback_on: Iterable[AiFallbackReason] = DEFAULT_FALLBACK_REASONS,
+        cooldown: AIFallbackCooldownPolicy | bool | dict[str, Any] | None = None,
     ) -> None:
         """
         Args:
@@ -355,6 +366,8 @@ class AiFallbackCompletions(AIBaseCompletions):
             fallback_candidates: Candidates to try, in order, after the primary.
             client_builder: Builds a client for one candidate; called lazily.
             fallback_on: Reasons that move a request to the next candidate.
+            cooldown: How long a candidate rests after a trigger failure;
+                None means the defaults, False turns cooldowns off.
         """
         super().__init__(model=primary.model)
         self._candidates: list[AIFallbackCandidate] = [
@@ -366,6 +379,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             client_builder
         )
         self._fallback_on: frozenset[AiFallbackReason] = frozenset(fallback_on)
+        self._cooldown: AIFallbackCooldownPolicy = parse_cooldown_policy(cooldown)
         # Index of the candidate that served the most recent call of any kind.
         self._last_route_index: int = 0
 
@@ -388,6 +402,12 @@ class AiFallbackCompletions(AIBaseCompletions):
         """Reasons that move a request to the next candidate."""
         # Normal return with the configured reason set.
         return self._fallback_on
+
+    @property
+    def cooldown(self) -> AIFallbackCooldownPolicy:
+        """How long a candidate rests after a trigger failure."""
+        # Normal return with the policy.
+        return self._cooldown
 
     @property
     def last_route(self) -> AIFallbackCandidate:
@@ -617,9 +637,13 @@ class AiFallbackCompletions(AIBaseCompletions):
         tuple_capabilities: tuple[str, ...],
         set_failed_accounts: set[tuple[str, str | None]],
         str_family: str | None = None,
-    ) -> Iterator[tuple[int, AIBaseCompletions, bool]]:
+    ) -> Iterator[tuple[int, AIBaseCompletions, bool, int | None]]:
         """
         Yields the candidates one call may try, in order.
+
+        A candidate resting after a recent trigger failure moves to the end
+        of the order, unless every candidate is resting; the order is then
+        the chain's own.
 
         The starting candidate is never skipped: the engine's own template
         method raises the typed capability error there, as it would without
@@ -640,7 +664,8 @@ class AiFallbackCompletions(AIBaseCompletions):
                 family may follow the starting one.
 
         Yields:
-            (index, client, is_last) for each candidate to try.
+            (index, client, is_last, index tried next or None) for each
+            candidate to try.
         """
         list_indexes: list[int] = (
             list(range(int_start, len(self._candidates)))
@@ -656,8 +681,10 @@ class AiFallbackCompletions(AIBaseCompletions):
                 if int_index == int_start
                 or self._candidate_family(int_index) in (str_family, None)
             ]
+        if bool_allow_fallback and len(list_indexes) > 1:
+            list_indexes = self._order_by_rest(list_indexes)
         # Loop over the chain positions this call may use.
-        for int_index in list_indexes:
+        for int_position, int_index in enumerate(list_indexes):
             candidate: AIFallbackCandidate = self._candidates[int_index]
             if candidate.account_key in set_failed_accounts:
                 _LOGGER.warning(
@@ -697,7 +724,57 @@ class AiFallbackCompletions(AIBaseCompletions):
                         },
                     )
                     continue
-            yield int_index, client, int_index == list_indexes[-1]
+            int_next: int | None = (
+                list_indexes[int_position + 1]
+                if int_position + 1 < len(list_indexes)
+                else None
+            )
+            yield int_index, client, int_next is None, int_next
+
+    def _order_by_rest(self, list_indexes: list[int]) -> list[int]:
+        """
+        Moves resting candidates behind the others, keeping each group's
+        chain order; returns the order unchanged when all, or none, rest.
+        """
+        if not self._cooldown.enabled:
+            # Early return: cooldowns are off.
+            return list_indexes
+        list_ready: list[int] = []
+        list_resting: list[int] = []
+        # Loop over the positions to split ready from resting.
+        for int_index in list_indexes:
+            candidate: AIFallbackCandidate = self._candidates[int_index]
+            if AiCandidateCooldowns.resting(
+                str_engine=candidate.engine,
+                str_model=candidate.model,
+                base_url=candidate.base_url,
+            ):
+                list_resting.append(int_index)
+            else:
+                list_ready.append(int_index)
+        if not list_resting or not list_ready:
+            # Early return: nothing to reorder.
+            return list_indexes
+        _LOGGER.debug(
+            "FALLBACK: %s resting; this call tries them last.",
+            ", ".join(self._candidates[i].label for i in list_resting),
+            extra={
+                "ai_fallback_event": FALLBACK_EVENT_RESTING,
+                "fallback_resting": [self._candidates[i].label for i in list_resting],
+            },
+        )
+        # Normal return: ready candidates first, resting ones last.
+        return list_ready + list_resting
+
+    def _mark_served(self, int_index: int) -> None:
+        """Ends the cooldown of the candidate that served a call."""
+        candidate: AIFallbackCandidate = self._candidates[int_index]
+        AiCandidateCooldowns.clear(
+            str_engine=candidate.engine,
+            str_model=candidate.model,
+            base_url=candidate.base_url,
+            str_label=candidate.label,
+        )
 
     def _should_continue(
         self,
@@ -707,14 +784,17 @@ class AiFallbackCompletions(AIBaseCompletions):
         bool_is_last: bool,
         str_operation: str,
         set_failed_accounts: set[tuple[str, str | None]],
+        int_next: int | None = None,
     ) -> bool:
         """
-        Decides whether a failed attempt moves the call to the next candidate.
+        Decides whether a failed attempt moves the call to the next candidate,
+        and benches the failed candidate on a trigger failure.
 
         Args:
             error: The typed request error the candidate raised.
             int_index: Chain position that failed.
             bool_is_last: True when no candidate follows.
+            int_next: Chain position tried next, for the log line.
             str_operation: Method name, for logs.
             set_failed_accounts: Gains the failed candidate's account key when
                 the error is account-wide, so _attempts skips its siblings.
@@ -726,13 +806,26 @@ class AiFallbackCompletions(AIBaseCompletions):
             # Early return: not a fallback trigger, so the error propagates.
             return False
         str_reason: str = error.fallback_reason.value if error.fallback_reason else ""
+        failed: AIFallbackCandidate = self._candidates[int_index]
         if error.account_wide:
-            set_failed_accounts.add(self._candidates[int_index].account_key)
+            set_failed_accounts.add(failed.account_key)
+        if error.fallback_reason is not None:
+            AiCandidateCooldowns.bench(
+                str_engine=failed.engine,
+                str_model=failed.model,
+                base_url=failed.base_url,
+                reason=error.fallback_reason,
+                bool_account_wide=error.account_wide,
+                float_seconds=self._cooldown.seconds_for(error.fallback_reason),
+                str_label=failed.label,
+            )
         if bool_is_last:
             self._log_exhausted(str_operation, error, self._candidates[int_index].label)
             # Early return: nothing left to try; the caller re-raises.
             return False
-        str_next: str = self._candidates[int_index + 1].label
+        str_next: str = self._candidates[
+            int_next if int_next is not None else int_index + 1
+        ].label
         _LOGGER.error(
             "FALLBACK: %s failed on %s (%s, status %s); trying %s next: %s",
             str_operation,
@@ -799,7 +892,7 @@ class AiFallbackCompletions(AIBaseCompletions):
 
         Args:
             int_index: Chain position that served the call.
-            int_start: Chain position the call started from.
+            int_start: Chain position whose failure started the failover.
             str_operation: Method name, for logs.
             error: The failure that started the failover.
         """
@@ -930,9 +1023,10 @@ class AiFallbackCompletions(AIBaseCompletions):
                 cause.
         """
         last_error: AiProviderRequestError | None = None
+        int_failed_from: int = int_start
         set_failed_accounts: set[tuple[str, str | None]] = set()
         # Loop over the chain until a candidate serves the call.
-        for int_index, client, bool_is_last in self._attempts(
+        for int_index, client, bool_is_last, int_next in self._attempts(
             int_start=int_start,
             bool_allow_fallback=bool_allow_fallback,
             tuple_capabilities=tuple_capabilities,
@@ -948,6 +1042,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                     bool_is_last=bool_is_last,
                     str_operation=str_operation,
                     set_failed_accounts=set_failed_accounts,
+                    int_next=int_next,
                 ):
                     raised: AiProviderRequestError = self._first_failure(
                         error, last_error, int_index, str_operation, str_family
@@ -956,12 +1051,15 @@ class AiFallbackCompletions(AIBaseCompletions):
                         # Bare re-raise keeps the engine's own cause chain.
                         raise
                     raise raised from error
+                if last_error is None:
+                    int_failed_from = int_index
                 last_error = error
                 continue
             if last_error is not None:
                 self._log_served_by_fallback(
-                    int_index, int_start, str_operation, last_error
+                    int_index, int_failed_from, str_operation, last_error
                 )
+            self._mark_served(int_index)
             # Early return with the first result.
             return self._stamp_route(result, int_index)
         # Normal exit: every later candidate was skipped after a failure.
@@ -1003,9 +1101,10 @@ class AiFallbackCompletions(AIBaseCompletions):
     ) -> T:
         """Async twin of _run_chain."""
         last_error: AiProviderRequestError | None = None
+        int_failed_from: int = int_start
         set_failed_accounts: set[tuple[str, str | None]] = set()
         # Loop over the chain until a candidate serves the call.
-        for int_index, client, bool_is_last in self._attempts(
+        for int_index, client, bool_is_last, int_next in self._attempts(
             int_start=int_start,
             bool_allow_fallback=bool_allow_fallback,
             tuple_capabilities=tuple_capabilities,
@@ -1021,6 +1120,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                     bool_is_last=bool_is_last,
                     str_operation=str_operation,
                     set_failed_accounts=set_failed_accounts,
+                    int_next=int_next,
                 ):
                     raised: AiProviderRequestError = self._first_failure(
                         error, last_error, int_index, str_operation, str_family
@@ -1029,12 +1129,15 @@ class AiFallbackCompletions(AIBaseCompletions):
                         # Bare re-raise keeps the engine's own cause chain.
                         raise
                     raise raised from error
+                if last_error is None:
+                    int_failed_from = int_index
                 last_error = error
                 continue
             if last_error is not None:
                 self._log_served_by_fallback(
-                    int_index, int_start, str_operation, last_error
+                    int_index, int_failed_from, str_operation, last_error
                 )
+            self._mark_served(int_index)
             # Early return with the first result.
             return self._stamp_route(result, int_index)
         # Normal exit: every later candidate was skipped after a failure.
@@ -1248,9 +1351,10 @@ class AiFallbackCompletions(AIBaseCompletions):
     ) -> Iterator[str]:
         """Generator behind send_prompt_streaming."""
         last_error: AiProviderRequestError | None = None
+        int_failed_from: int = 0
         set_failed_accounts: set[tuple[str, str | None]] = set()
         # Loop over the chain until a candidate yields its first chunk.
-        for int_index, client, bool_is_last in self._attempts(
+        for int_index, client, bool_is_last, int_next in self._attempts(
             int_start=0,
             bool_allow_fallback=True,
             tuple_capabilities=("supports_streaming",),
@@ -1262,6 +1366,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             try:
                 str_first: str = next(iterator)
             except StopIteration:
+                self._mark_served(int_index)
                 self._last_route_index = int_index
                 # Early return: the candidate served an empty stream.
                 return
@@ -1277,14 +1382,18 @@ class AiFallbackCompletions(AIBaseCompletions):
                     bool_is_last=bool_is_last,
                     str_operation="send_prompt_streaming",
                     set_failed_accounts=set_failed_accounts,
+                    int_next=int_next,
                 ):
                     raise error if error is not None else exception
+                if last_error is None:
+                    int_failed_from = int_index
                 last_error = error
                 continue
             if last_error is not None:
                 self._log_served_by_fallback(
-                    int_index, 0, "send_prompt_streaming", last_error
+                    int_index, int_failed_from, "send_prompt_streaming", last_error
                 )
+            self._mark_served(int_index)
             self._last_route_index = int_index
             yield str_first
             yield from iterator

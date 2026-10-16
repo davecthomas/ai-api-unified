@@ -260,6 +260,8 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_ai_base_videos.py": ("videos",),
     "test_frame_helpers.py": ("videos",),
     "test_google_gemini_videos.py": ("videos", "engine_gemini"),
+    "test_gemini_init_outage.py": ("engine_gemini", "completions"),
+    "test_fallback_cooldown_nonmock.py": ("completions", "engine_gemini"),
     "test_nova_reel_videos.py": ("videos", "engine_bedrock"),
     "test_openai_videos.py": ("videos", "engine_openai"),
     "test_video_generation_nonmock.py": ("videos",),

@@ -63,6 +63,7 @@ from ..routing.router_config import (
     AIRouterTier,
     classification_text_for,
 )
+from .ai_fallback_cooldown import AIFallbackCooldownPolicy
 from .ai_fallback_completions import (
     DICT_ENGINE_FAMILY_BY_TOKEN,
     AIFallbackCandidate,
@@ -124,6 +125,7 @@ class AiRouterCompletions(AIBaseCompletions):
         client_builder: Callable[[AIFallbackCandidate], AIBaseCompletions],
         fallback_on: frozenset[AiFallbackReason],
         str_classifier_unavailable_reason: str | None = None,
+        cooldown: AIFallbackCooldownPolicy | None = None,
     ) -> None:
         """
         Args:
@@ -136,6 +138,8 @@ class AiRouterCompletions(AIBaseCompletions):
             fallback_on: Trigger reasons for tiers that set none.
             str_classifier_unavailable_reason: Why no classifier was built,
                 logged once; None when one was.
+            cooldown: Rest policy for every tier's chain; None means the
+                defaults.
         """
         super().__init__(model=default_client.model_name)
         self._default_client: AIBaseCompletions = default_client
@@ -145,6 +149,7 @@ class AiRouterCompletions(AIBaseCompletions):
             client_builder
         )
         self._fallback_on: frozenset[AiFallbackReason] = frozenset(fallback_on)
+        self._cooldown: AIFallbackCooldownPolicy | None = cooldown
         self._tier_clients: dict[int, AiFallbackCompletions | None] = {}
         self._last_tier_index: int | None = None
         self._last_route_client: AIBaseCompletions = default_client
@@ -415,6 +420,7 @@ class AiRouterCompletions(AIBaseCompletions):
             fallback_candidates=tier.candidates[1:],
             client_builder=self._client_builder,
             fallback_on=tier.fallback_on or self._fallback_on,
+            cooldown=self._cooldown,
         )
         if self._thinking_level is not None:
             client.thinking_level = self._thinking_level

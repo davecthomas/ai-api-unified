@@ -55,6 +55,10 @@ from .util.ai_model_checker import (
     prune_candidates,
     resolve_model_check_mode,
 )
+from .completions.ai_fallback_cooldown import (
+    AIFallbackCooldownPolicy,
+    parse_cooldown_policy,
+)
 from .completions.ai_fallback_completions import (
     DEFAULT_FALLBACK_REASONS,
     AIFallbackCandidate,
@@ -313,6 +317,7 @@ class AIFactory:
         fallback_on: Iterable[AiFallbackReason | str] | None = None,
         router: AIRouterConfig | None = None,
         thinking: AIThinkingLevel | str | None = None,
+        cooldown: AIFallbackCooldownPolicy | bool | dict[str, Any] | None = None,
     ) -> AIBaseCompletions:
         """
         Instantiates the configured completions client.
@@ -343,6 +348,10 @@ class AIFactory:
                 max) applied to every client this call builds, the primary,
                 its fallbacks, and the router's tiers; defaults to
                 `completions.thinking` in models.json, then medium.
+            cooldown: How long a fallback or tier candidate rests after a
+                trigger failure (an AIFallbackCooldownPolicy, a bool, or its
+                dict form); defaults to `completions.cooldown` in
+                models.json, then the built-in rest per reason.
 
         Returns:
             Concrete AIBaseCompletions implementation for the requested engine,
@@ -447,6 +456,9 @@ class AIFactory:
                 env_settings=env_settings, fallback_on=fallback_on
             )
         )
+        policy_cooldown: AIFallbackCooldownPolicy = AIFactory._resolve_cooldown(
+            env_settings=env_settings, cooldown=cooldown
+        )
         default_client: AIBaseCompletions = primary
         if list_fallbacks:
             default_client = AiFallbackCompletions(
@@ -457,6 +469,7 @@ class AIFactory:
                 fallback_candidates=list_fallbacks,
                 fallback_on=frozenset_reasons,
                 client_builder=_build_leveled,
+                cooldown=policy_cooldown,
             )
         if router_config is None:
             # Normal return without a router: the plain engine or its chain.
@@ -477,6 +490,7 @@ class AIFactory:
             client_builder=_build_leveled,
             fallback_on=router_config.fallback_on or frozenset_reasons,
             str_classifier_unavailable_reason=str_unavailable,
+            cooldown=policy_cooldown,
         )
 
     _LIST_LAST_MODEL_CHECK: list[AiModelCheckResult] = []
@@ -984,6 +998,33 @@ class AIFactory:
             )
             for item in fallbacks
         ]
+
+    @staticmethod
+    def _resolve_cooldown(
+        *,
+        env_settings: EnvSettings,
+        cooldown: AIFallbackCooldownPolicy | bool | dict[str, Any] | None,
+    ) -> AIFallbackCooldownPolicy:
+        """
+        Resolves the rest policy for fallback and tier candidates.
+
+        Args:
+            env_settings: Shared environment/settings accessor.
+            cooldown: Explicit policy, or None to read `completions.cooldown`
+                from models.json.
+
+        Returns:
+            The policy; the defaults when nothing is configured.
+        """
+        if cooldown is not None:
+            # Early return with the explicit policy.
+            return parse_cooldown_policy(cooldown)
+        config: Any = env_settings.get_models_config()
+        object_value: Any = (
+            config.completions.cooldown if isinstance(config, AIModelsConfig) else None
+        )
+        # Normal return with the file's policy, or the defaults.
+        return parse_cooldown_policy(object_value)
 
     @staticmethod
     def _resolve_fallback_reasons(

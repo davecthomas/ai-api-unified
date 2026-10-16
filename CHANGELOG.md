@@ -4,6 +4,41 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.7.0
+
+### Added
+
+- Cooldowns for fallback chains and router tiers. A candidate that fails
+  with a trigger reason now rests for a period keyed to the reason (30 s
+  for `unavailable`, `rate_limited`, `timeout`; 5 min for
+  `quota_exhausted`, `model_unavailable`; 1 h for `auth_rejected`; none
+  for `invalid_output`), and requests during the rest start at the next
+  candidate instead of paying its retry backoff again. A resting
+  candidate is tried last, never dropped, so a cooldown cannot fail a
+  request that would otherwise be served. Benches are per process, shared
+  by every chain and tier, end when the candidate serves a request, and
+  are dropped when the engine's credentials change. Configure with
+  `completions.cooldown` in models.json (`true`, `false`, or
+  `{"enabled": ..., "seconds": {...}}`) or the factory's `cooldown=`.
+  New log events `candidate_cooldown` (WARNING), `candidate_recovered`
+  (INFO), `candidate_resting` (DEBUG). Exports `AIFallbackCooldownPolicy`
+  and `AiCandidateCooldowns`. ADR-0023.
+
+### Changed
+
+- On by default: a chain that used to start every request at a failing
+  primary now starts at the next candidate for the rest period. Set
+  `"cooldown": false` to keep the old behavior.
+- A provider outage at startup no longer stops the client. The Gemini
+  engine's init-time `models.get` treats a 5xx, a 429 rate limit, a
+  timeout, or a refused connection as an outage: it logs a WARNING and the
+  build goes on. A bad key, a denial, an unknown model, or a daily quota
+  still raises. Every other engine already built without calling its
+  provider, so a primary that is down at startup now serves through its
+  chain and is retried each time its rest ends.
+- The `served_by_fallback` log names the candidate whose failure started
+  the failover, which is no longer always the starting one.
+
 ## 3.6.0
 
 ### Changed

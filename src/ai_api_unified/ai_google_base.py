@@ -58,6 +58,51 @@ TUPLE_GEMINI_AUTH_HINTS: tuple[str, ...] = (
 )
 
 
+# Reasons a failure of the init-time metadata call is treated as a provider
+# outage rather than a configuration error: the client is still returned, so
+# a fallback chain can start and serve while the provider is down.
+FROZENSET_GEMINI_INIT_TRANSIENT_REASONS: frozenset[AiFallbackReason] = frozenset(
+    {
+        AiFallbackReason.UNAVAILABLE,
+        AiFallbackReason.RATE_LIMITED,
+        AiFallbackReason.TIMEOUT,
+    }
+)
+
+
+def gemini_init_failure_is_transient(error: Exception) -> bool:
+    """
+    True when the init-time models.get failed because the provider is down
+    or slow (5xx, 429, timeout, refused connection), not because the
+    configuration is wrong.
+
+    Args:
+        error: What models.get raised.
+
+    Returns:
+        True for an outage; False for anything that should stop the build.
+    """
+    import httpx
+
+    if isinstance(error, httpx.TimeoutException):
+        # Early return: the request timed out.
+        return True
+    if isinstance(error, httpx.TransportError):
+        # Early return: the host could not be reached.
+        return True
+    if isinstance(error, (gexc.ServiceUnavailable, gexc.DeadlineExceeded)):
+        # Early return: api_core's outage errors.
+        return True
+    raw_code: Any = getattr(error, "code", None)
+    int_status: int | None = raw_code if isinstance(raw_code, int) else None
+    # Normal return: transient only for an outage-class status.
+    return (
+        int_status is not None
+        and classify_gemini_fallback_reason(int_status, str(error))
+        in FROZENSET_GEMINI_INIT_TRANSIENT_REASONS
+    )
+
+
 def classify_gemini_fallback_reason(
     status_code: int | None, message: str
 ) -> AiFallbackReason | None:
@@ -246,6 +291,17 @@ class AIGoogleBase:
                     f"Invalid model type for Google Gemini operations: {type_error}"
                 ) from type_error
             except Exception as model_error:
+                if gemini_init_failure_is_transient(model_error):
+                    # The provider is down, not misconfigured: return the
+                    # client so the factory can start; the first request
+                    # fails over and the chain's cooldown rests this model.
+                    _LOGGER.warning(
+                        "Gemini model %s could not be checked at startup "
+                        "(provider unavailable: %s); starting anyway.",
+                        model,
+                        model_error,
+                    )
+                    return client
                 _LOGGER.warning(
                     "Failed to initialize model %s: %s",
                     model,

@@ -480,7 +480,12 @@ class TestFailover:
                 wrapper.send_prompt("hi")
         assert exc_info.value.fallback_reason is R.QUOTA_EXHAUSTED
         list_events = [r.ai_fallback_event for r in caplog.records]
-        assert list_events == ["failover", "chain_exhausted"]
+        assert list_events == [
+            "candidate_cooldown",
+            "failover",
+            "candidate_cooldown",
+            "chain_exhausted",
+        ]
         assert caplog.records[-1].levelno == logging.ERROR
 
     def test_failover_and_served_events_are_logged(
@@ -685,7 +690,8 @@ class TestConversations:
     def test_one_client_serves_conversations_on_different_engines(self) -> None:
         primary = _FakeEngine("p", family="anthropic")
         fallback = _FakeEngine("f", family="openai")
-        wrapper = _chain(primary, fallback)
+        # Recovery on the very next call is the point here, so no rest.
+        wrapper = _chain(primary, fallback, cooldown=False)
         # Conversation A fails over to "f" on its first turn.
         primary.fail = _err(R.UNAVAILABLE)
         list_a: list[dict[str, Any]] = [{"role": "user", "content": "a"}]
@@ -841,7 +847,8 @@ class TestConversations:
     def test_next_turn_routes_back_to_the_first_family_candidate(self) -> None:
         primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
         sibling = _FakeEngine("s")
-        wrapper = _chain(primary, sibling)
+        # Recovery on the very next call is the point here, so no rest.
+        wrapper = _chain(primary, sibling, cooldown=False)
         list_messages = _anthropic_history()
         wrapper.extend_messages_with_turn(
             list_messages, wrapper.send_conversation("sys", list_messages)
@@ -1301,3 +1308,251 @@ class TestNeutralityEdges:
         turn = wrapper.send_conversation("sys", list_messages)
         assert turn.text == "f:turn"
         assert primary.calls.count("send_conversation") == 1
+
+
+# ── Cooldowns ───────────────────────────────────────────────────────────────
+
+
+class _Clock:
+    """A settable stand-in for time.monotonic."""
+
+    def __init__(self) -> None:
+        self.float_now: float = 1000.0
+
+    def __call__(self) -> float:
+        return self.float_now
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
+    from ai_api_unified.completions.ai_fallback_cooldown import AiCandidateCooldowns
+
+    fake: _Clock = _Clock()
+    monkeypatch.setattr(AiCandidateCooldowns, "callable_now", fake)
+    return fake
+
+
+class TestCooldown:
+    def test_failed_primary_rests_and_later_calls_start_at_the_fallback(
+        self, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
+        fallback = _FakeEngine("f")
+        wrapper = _chain(primary, fallback)
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            assert wrapper.send_prompt("hi") == "f:ok"
+        bench = [
+            r
+            for r in caplog.records
+            if getattr(r, "ai_fallback_event", "") == "candidate_cooldown"
+        ]
+        assert bench[0].fallback_candidate == "fake:p"
+        assert bench[0].cooldown_seconds == 30.0
+        primary.calls.clear()
+        # Within the rest, the primary is not called at all.
+        clock.float_now += 29
+        assert wrapper.send_prompt("hi") == "f:ok"
+        assert wrapper.send_prompt("hi") == "f:ok"
+        assert primary.calls == []
+        assert wrapper.last_route.label == "fake:f"
+
+    def test_primary_is_retried_when_the_rest_ends_and_recovery_is_logged(
+        self, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        primary = _FakeEngine("p", fail=_err(R.RATE_LIMITED, 429))
+        wrapper = _chain(primary, _FakeEngine("f"))
+        wrapper.send_prompt("hi")
+        primary.fail = None
+        clock.float_now += 31
+        with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
+            assert wrapper.send_prompt("hi") == "p:ok"
+        assert any(
+            getattr(r, "ai_fallback_event", "") == "candidate_recovered"
+            for r in caplog.records
+        )
+
+    def test_resting_candidate_is_still_tried_last(self, clock: _Clock) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
+        fallback = _FakeEngine("f")
+        wrapper = _chain(primary, fallback)
+        wrapper.send_prompt("hi")
+        # The primary recovers but is still resting; the fallback breaks.
+        primary.fail = None
+        fallback.fail = _err(R.UNAVAILABLE)
+        primary.calls.clear()
+        assert wrapper.send_prompt("hi") == "p:ok"
+        assert primary.calls == ["send_prompt"]
+
+    def test_every_candidate_resting_keeps_the_chain_order(self, clock: _Clock) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
+        fallback = _FakeEngine("f", fail=_err(R.UNAVAILABLE))
+        wrapper = _chain(primary, fallback)
+        with pytest.raises(AiProviderRequestError):
+            wrapper.send_prompt("hi")
+        primary.fail = None
+        assert wrapper.send_prompt("hi") == "p:ok"
+
+    def test_account_wide_failure_rests_the_whole_account(self, clock: _Clock) -> None:
+        primary = _FakeEngine("p", fail=_err(R.QUOTA_EXHAUSTED, 429))
+        sibling = _FakeEngine("s")
+        other = _FakeEngine("o")
+        wrapper = _chain(primary, sibling, other, shared_account=True)
+        with pytest.raises(AiProviderRequestError):
+            # The same-account skip leaves nothing else on this call.
+            wrapper.send_prompt("hi")
+        from ai_api_unified.completions.ai_fallback_cooldown import (
+            AiCandidateCooldowns,
+        )
+
+        rest = AiCandidateCooldowns.resting(
+            str_engine="fake", str_model="s", base_url=None
+        )
+        assert rest is not None and rest.reason is R.QUOTA_EXHAUSTED
+        assert rest.float_until == clock.float_now + 300
+
+    def test_non_trigger_and_invalid_output_do_not_rest(self, clock: _Clock) -> None:
+        primary = _FakeEngine("p", fail=_err(R.MODEL_UNAVAILABLE, 404))
+        wrapper = _chain(primary, _FakeEngine("f"))
+        with pytest.raises(AiProviderRequestError):
+            wrapper.send_prompt("hi")
+        primary.fail = _err(R.INVALID_OUTPUT, None)
+        wrapper_invalid = _chain(
+            primary, _FakeEngine("f"), fallback_on=[R.INVALID_OUTPUT]
+        )
+        assert wrapper_invalid.send_prompt("hi") == "f:ok"
+        primary.fail = None
+        primary.calls.clear()
+        assert wrapper.send_prompt("hi") == "p:ok"
+        assert wrapper_invalid.send_prompt("hi") == "p:ok"
+
+    def test_policy_overrides_and_disable(self, clock: _Clock) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
+        wrapper = _chain(
+            primary, _FakeEngine("f"), cooldown={"seconds": {"unavailable": 5}}
+        )
+        wrapper.send_prompt("hi")
+        primary.fail = None
+        clock.float_now += 4
+        assert wrapper.send_prompt("hi") == "f:ok"
+        clock.float_now += 2
+        assert wrapper.send_prompt("hi") == "p:ok"
+        off = _chain(
+            _FakeEngine("p2", fail=_err(R.UNAVAILABLE)),
+            _FakeEngine("f2"),
+            cooldown=False,
+        )
+        off.send_prompt("hi")
+        off.primary.fail = None  # type: ignore[attr-defined]
+        assert off.send_prompt("hi") == "p2:ok"
+
+    def test_rotated_credentials_end_the_rest(
+        self, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ai_api_unified.util.ai_model_checker import AiModelChecker
+
+        monkeypatch.setitem(
+            AiModelChecker._DICT_CREDENTIAL_SETTINGS_BY_ENGINE, "fake", ("FAKE_KEY",)
+        )
+        monkeypatch.setenv("FAKE_KEY", "old")
+        primary = _FakeEngine("p", fail=_err(R.AUTH_REJECTED, 401))
+        wrapper = _chain(primary, _FakeEngine("f"))
+        wrapper.send_prompt("hi")
+        primary.fail = None
+        assert wrapper.send_prompt("hi") == "f:ok"
+        monkeypatch.setenv("FAKE_KEY", "new")
+        assert wrapper.send_prompt("hi") == "p:ok"
+
+    def test_rest_is_shared_across_chains(self, clock: _Clock) -> None:
+        first = _chain(_FakeEngine("p", fail=_err(R.UNAVAILABLE)), _FakeEngine("f"))
+        first.send_prompt("hi")
+        healthy_primary = _FakeEngine("p")
+        second = _chain(healthy_primary, _FakeEngine("f"))
+        assert second.send_prompt("hi") == "f:ok"
+        assert healthy_primary.calls == []
+
+    def test_async_and_streaming_honor_the_rest(self, clock: _Clock) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
+        wrapper = _chain(primary, _FakeEngine("f"))
+        wrapper.send_prompt("hi")
+        primary.fail = None
+        primary.calls.clear()
+        assert asyncio.run(wrapper.asend_prompt("hi")) == "f:ok"
+        assert list(wrapper.send_prompt_streaming("hi")) == ["f-1", "f-2"]
+        assert primary.calls == []
+
+    def test_served_log_names_the_candidate_that_failed(
+        self, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        primary = _FakeEngine("p", fail=_err(R.UNAVAILABLE))
+        second = _FakeEngine("s")
+        third = _FakeEngine("t")
+        wrapper = _chain(primary, second, third)
+        wrapper.send_prompt("hi")
+        second.fail = _err(R.UNAVAILABLE)
+        clock.float_now += 1
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            assert wrapper.send_prompt("hi") == "t:ok"
+        served = [
+            r
+            for r in caplog.records
+            if getattr(r, "ai_fallback_event", "") == "served_by_fallback"
+        ]
+        assert served[-1].fallback_from == "fake:s"
+
+
+class TestCooldownPolicy:
+    def test_parse_forms(self) -> None:
+        from ai_api_unified import AIFallbackCooldownPolicy
+        from ai_api_unified.completions.ai_fallback_cooldown import (
+            parse_cooldown_policy,
+        )
+
+        assert parse_cooldown_policy(None).seconds_for(R.QUOTA_EXHAUSTED) == 300
+        assert parse_cooldown_policy(False).seconds_for(R.UNAVAILABLE) == 0
+        policy = parse_cooldown_policy({"seconds": {"Rate_Limited": 7}})
+        assert isinstance(policy, AIFallbackCooldownPolicy)
+        assert policy.seconds_for(R.RATE_LIMITED) == 7
+        assert policy.seconds_for(R.UNAVAILABLE) == 30
+        assert policy.seconds_for(R.INVALID_OUTPUT) == 0
+
+    @pytest.mark.parametrize(
+        "bad", [{"seconds": {"nope": 1}}, {"seconds": {"unavailable": -1}}]
+    )
+    def test_bad_policy_is_rejected(self, bad: dict[str, Any]) -> None:
+        from ai_api_unified.completions.ai_fallback_cooldown import (
+            parse_cooldown_policy,
+        )
+
+        with pytest.raises(ValueError):
+            parse_cooldown_policy(bad)
+
+    def test_factory_reads_models_json(self, tmp_path: Any) -> None:
+        import json
+
+        from ai_api_unified.ai_models_config import clear_models_config_cache
+
+        path = tmp_path / "models.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "completions": {
+                        "engine": "claude",
+                        "model": "claude-haiku-4-5",
+                        "cooldown": {"seconds": {"unavailable": 12}},
+                    }
+                }
+            )
+        )
+        clear_models_config_cache()
+        with patch.dict(os.environ, {"AI_MODELS_CONFIG": str(path)}):
+            from ai_api_unified.util.env_settings import EnvSettings
+
+            policy = AIFactory._resolve_cooldown(
+                env_settings=EnvSettings(), cooldown=None
+            )
+            assert policy.seconds_for(R.UNAVAILABLE) == 12
+            explicit = AIFactory._resolve_cooldown(
+                env_settings=EnvSettings(), cooldown=False
+            )
+            assert not explicit.enabled
+        clear_models_config_cache()

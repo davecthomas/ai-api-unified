@@ -132,6 +132,9 @@ class AICompletionsSelection(BaseModel):
     retry_policy: str | None = None
     # Provider-neutral thinking level: off, minimal, low, medium, high, max.
     thinking: str | None = None
+    # How long a failed candidate rests: true/false, or
+    # {"enabled": true, "seconds": {"rate_limited": 30, ...}}.
+    cooldown: bool | dict[str, Any] | None = None
 
 
 class AIClassifierSelection(BaseModel):
