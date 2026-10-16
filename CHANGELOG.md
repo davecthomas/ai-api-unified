@@ -4,6 +4,46 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.11.0
+
+### Added
+
+- models.json holds everything but secrets. New sections:
+  - `providers`: `openai` (`base_url`, `user`), `anthropic` (`base_url`,
+    `admin_base_url`, `user`), `google` (`auth_method`, `project_id`,
+    `location`, `base_url`), `aws` (`region`), `openai_compatible`
+    (`base_url`, `structured_output`, `context_window`), and
+    `azure_speech` (`region`);
+  - `middleware`: the PII redaction and observability list the middleware
+    YAML held, validated entry by entry the same way;
+  - `videos.bedrock_output_s3_uri` and top-level `strict_deprecations`.
+- The schema covers the new sections, and `config_schema validate` checks
+  the middleware entries in models.json too.
+- `scripts/migrate2json.py` moves the new keys and embeds the YAML that
+  `AI_MIDDLEWARE_CONFIG_PATH` names.
+
+### Deprecated
+
+- The environment keys these fields replace: `OPENAI_BASE_URL_OVERRIDE`,
+  `OPENAI_USER`, `ANTHROPIC_BASE_URL_OVERRIDE`,
+  `ANTHROPIC_ADMIN_BASE_URL_OVERRIDE`, `ANTHROPIC_USER`,
+  `GOOGLE_AUTH_METHOD`, `GOOGLE_PROJECT_ID`, `GOOGLE_LOCATION`,
+  `GOOGLE_GEMINI_BASE_URL_OVERRIDE`, `OPENAI_COMPATIBLE_BASE_URL`,
+  `OPENAI_COMPATIBLE_STRUCTURED_OUTPUT`, `OPENAI_COMPATIBLE_CONTEXT_WINDOW`,
+  `MICROSOFT_COGNITIVE_SERVICES_REGION`, `BEDROCK_VIDEO_OUTPUT_S3_URI`,
+  `AI_STRICT_DEPRECATIONS`, and `AI_MIDDLEWARE_CONFIG_PATH`. One still set
+  is accepted and wins over the file, with one warning per key naming the
+  models.json field (`ai_config_event=deprecated_selection_key`).
+  `AWS_REGION` is not deprecated: AWS hosts set it themselves, so it wins
+  without a warning, and `providers.aws.region` serves when it is unset.
+
+### Changed
+
+- `env_template` lists secrets only. The README documents models.json
+  fields in place of the deprecated keys.
+- A base-URL validation error names the models.json field as well as the
+  environment key.
+
 ## 3.10.0
 
 ### Added

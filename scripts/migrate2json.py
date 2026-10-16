@@ -2,10 +2,13 @@
 """
 Generates models.json from the current directory's .env.
 
-Reads the model-selection keys in .env (engines, models, the fallback chain
-and its reasons, the retry policy, the classifier, the router config, the
-model check, embeddings, images, videos, voice, geo residency), places each
-in its models.json section, and fills the structural defaults from
+Reads every setting in .env that is not a secret (engines, models, the
+fallback chain and its reasons, the retry policy, the classifier, the router
+config, the model check, embeddings, images, videos, voice, geo residency,
+provider base URLs and Vertex project, the OpenAI-compatible server, the
+Azure speech region, strict deprecations) and the middleware YAML that
+AI_MIDDLEWARE_CONFIG_PATH names, places each in its models.json section,
+and fills the structural defaults from
 models_sample.json (model_check mode and timeout, fallback_on, the router's
 on_exhausted). The allow and deny lists are left empty: a policy is a
 decision, not a default. A router file named by COMPLETIONS_ROUTER_CONFIG
@@ -18,8 +21,10 @@ Usage:
     poetry run python scripts/migrate2json.py --out cfg/models.json --env deploy.env
     poetry run python scripts/migrate2json.py --comment-env   # also comments the moved keys out of .env
 
-Secrets and environment plumbing (API keys, AWS region, base-URL overrides,
-the middleware config path) are never moved; they stay in .env.
+Secrets (API keys, AWS credentials, GOOGLE_APPLICATION_CREDENTIALS) are
+never moved; they stay in .env. AWS_REGION also stays: AWS hosts set it
+themselves, and models.json's providers.aws.region is read only when the
+environment leaves it unset.
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+
+import yaml
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +66,26 @@ DICT_KEY_TO_FIELD: dict[str, tuple[str, str]] = {
     "AI_VOICE_ENGINE": ("voice", "engine"),
     "AI_VOICE_LANGUAGE": ("voice", "language"),
     "DEFAULT_GEMINI_TTS_MODEL": ("voice", "tts_model"),
+    "BEDROCK_VIDEO_OUTPUT_S3_URI": ("videos", "bedrock_output_s3_uri"),
 }
+# .env key -> (provider, field) under the providers section.
+DICT_PROVIDER_KEY_TO_FIELD: dict[str, tuple[str, str]] = {
+    "OPENAI_BASE_URL_OVERRIDE": ("openai", "base_url"),
+    "OPENAI_USER": ("openai", "user"),
+    "ANTHROPIC_BASE_URL_OVERRIDE": ("anthropic", "base_url"),
+    "ANTHROPIC_ADMIN_BASE_URL_OVERRIDE": ("anthropic", "admin_base_url"),
+    "ANTHROPIC_USER": ("anthropic", "user"),
+    "GOOGLE_AUTH_METHOD": ("google", "auth_method"),
+    "GOOGLE_PROJECT_ID": ("google", "project_id"),
+    "GOOGLE_LOCATION": ("google", "location"),
+    "GOOGLE_GEMINI_BASE_URL_OVERRIDE": ("google", "base_url"),
+    "OPENAI_COMPATIBLE_BASE_URL": ("openai_compatible", "base_url"),
+    "OPENAI_COMPATIBLE_STRUCTURED_OUTPUT": ("openai_compatible", "structured_output"),
+    "OPENAI_COMPATIBLE_CONTEXT_WINDOW": ("openai_compatible", "context_window"),
+    "MICROSOFT_COGNITIVE_SERVICES_REGION": ("azure_speech", "region"),
+}
+STR_MIDDLEWARE_KEY: str = "AI_MIDDLEWARE_CONFIG_PATH"
+STR_STRICT_KEY: str = "AI_STRICT_DEPRECATIONS"
 STR_ROUTER_KEY: str = "COMPLETIONS_ROUTER_CONFIG"
 STR_ROUTER_CLASSIFIER_KEY: str = "COMPLETIONS_ROUTER_CLASSIFIER"
 STR_GEO_KEY: str = "AI_API_GEO_RESIDENCY"
@@ -71,6 +97,7 @@ FROZENSET_INT_FIELDS: frozenset[tuple[str, str]] = frozenset(
         ("embeddings", "dimensions"),
         ("videos", "poll_interval_seconds"),
         ("videos", "timeout_seconds"),
+        ("openai_compatible", "context_window"),
     }
 )
 # Structural defaults copied from the sample when .env says nothing.
@@ -92,6 +119,9 @@ TUPLE_SECTION_ORDER: tuple[str, ...] = (
     "videos",
     "voice",
     "geo_residency",
+    "providers",
+    "middleware",
+    "strict_deprecations",
 )
 
 
@@ -138,6 +168,31 @@ def _load_router(str_value: str, path_env_dir: Path) -> dict[str, Any] | None:
         return None
     # Normal return with the file's content.
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_middleware(str_value: str, path_env_dir: Path) -> list[Any] | None:
+    """The middleware list from the YAML that AI_MIDDLEWARE_CONFIG_PATH names."""
+    str_stripped: str = str_value.strip()
+    if not str_stripped:
+        # Early return: no middleware file.
+        return None
+    path: Path = Path(str_stripped).expanduser()
+    if not path.is_absolute():
+        path = path_env_dir / path
+    if not path.is_file():
+        print(
+            f"warning: {STR_MIDDLEWARE_KEY} names {path}, which does not exist; "
+            "middleware omitted",
+            file=sys.stderr,
+        )
+        # Early return: nothing to embed.
+        return None
+    loaded: Any = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    list_middleware: Any = (
+        loaded.get("middleware") if isinstance(loaded, dict) else None
+    )
+    # Normal return with the list, or None when the file holds none.
+    return list_middleware if isinstance(list_middleware, list) else None
 
 
 def build_models_config(
@@ -189,6 +244,25 @@ def build_models_config(
     if str_geo:
         dict_out["geo_residency"] = str_geo
         list_moved.append(STR_GEO_KEY)
+    # Loop over provider keys so each lands under providers.<provider>.
+    for str_key, (str_provider, str_field) in DICT_PROVIDER_KEY_TO_FIELD.items():
+        raw_provider: str | None = dict_env.get(str_key)
+        if raw_provider is None or not str(raw_provider).strip():
+            continue
+        dict_out.setdefault("providers", {}).setdefault(str_provider, {})[str_field] = (
+            _coerce(str_provider, str_field, str(raw_provider))
+        )
+        list_moved.append(str_key)
+    list_middleware: list[Any] | None = _load_middleware(
+        str(dict_env.get(STR_MIDDLEWARE_KEY) or ""), path_env_dir
+    )
+    if list_middleware is not None:
+        dict_out["middleware"] = list_middleware
+        list_moved.append(STR_MIDDLEWARE_KEY)
+    str_strict: str = str(dict_env.get(STR_STRICT_KEY) or "").strip().lower()
+    if str_strict:
+        dict_out["strict_deprecations"] = str_strict in {"1", "true", "yes", "on"}
+        list_moved.append(STR_STRICT_KEY)
     # Loop over structural defaults the sample provides.
     for str_section, str_field in TUPLE_SAMPLE_DEFAULTS:
         if str_field not in dict_out.get(

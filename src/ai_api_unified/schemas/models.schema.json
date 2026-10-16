@@ -2,6 +2,90 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/davecthomas/ai-api-unified/main/src/ai_api_unified/schemas/models.schema.json",
   "$defs": {
+    "AIAnthropicProviderSettings": {
+      "additionalProperties": false,
+      "description": "`providers.anthropic`: the `claude` engine.",
+      "properties": {
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        },
+        "admin_base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Admin Base Url"
+        },
+        "user": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User"
+        }
+      },
+      "title": "AIAnthropicProviderSettings",
+      "type": "object"
+    },
+    "AIAwsProviderSettings": {
+      "additionalProperties": false,
+      "description": "`providers.aws`: Bedrock. Credentials stay in the AWS credential chain.",
+      "properties": {
+        "region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        }
+      },
+      "title": "AIAwsProviderSettings",
+      "type": "object"
+    },
+    "AIAzureSpeechProviderSettings": {
+      "additionalProperties": false,
+      "description": "`providers.azure_speech`: the Azure voice engine.",
+      "properties": {
+        "region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        }
+      },
+      "title": "AIAzureSpeechProviderSettings",
+      "type": "object"
+    },
     "AIClassifierSelection": {
       "description": "The `classifier` section; also the router's classifier.",
       "properties": {
@@ -325,6 +409,66 @@
       "title": "AIFallbackCooldownPolicy",
       "type": "object"
     },
+    "AIGoogleProviderSettings": {
+      "additionalProperties": false,
+      "description": "`providers.google`: Gemini, Google images, video, and voice.",
+      "properties": {
+        "auth_method": {
+          "anyOf": [
+            {
+              "enum": [
+                "api_key",
+                "service_account"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Auth Method"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Location"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        }
+      },
+      "title": "AIGoogleProviderSettings",
+      "type": "object"
+    },
     "AIImagesSelection": {
       "description": "The `images` section.",
       "properties": {
@@ -390,6 +534,113 @@
         }
       },
       "title": "AIModelCheckSelection",
+      "type": "object"
+    },
+    "AIOpenAICompatibleProviderSettings": {
+      "additionalProperties": false,
+      "description": "`providers.openai_compatible`: a self-hosted or third-party server.",
+      "properties": {
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        },
+        "structured_output": {
+          "anyOf": [
+            {
+              "enum": [
+                "json_schema",
+                "json_object"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Structured Output"
+        },
+        "context_window": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Window"
+        }
+      },
+      "title": "AIOpenAICompatibleProviderSettings",
+      "type": "object"
+    },
+    "AIOpenAIProviderSettings": {
+      "additionalProperties": false,
+      "description": "`providers.openai`: the OpenAI engines (chat, Responses, Decisions).",
+      "properties": {
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        },
+        "user": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User"
+        }
+      },
+      "title": "AIOpenAIProviderSettings",
+      "type": "object"
+    },
+    "AIProvidersSelection": {
+      "additionalProperties": false,
+      "description": "The `providers` section: per-provider settings that are not secrets.\nAPI keys and other credentials stay in the environment.",
+      "properties": {
+        "openai": {
+          "$ref": "#/$defs/AIOpenAIProviderSettings"
+        },
+        "anthropic": {
+          "$ref": "#/$defs/AIAnthropicProviderSettings"
+        },
+        "google": {
+          "$ref": "#/$defs/AIGoogleProviderSettings"
+        },
+        "aws": {
+          "$ref": "#/$defs/AIAwsProviderSettings"
+        },
+        "openai_compatible": {
+          "$ref": "#/$defs/AIOpenAICompatibleProviderSettings"
+        },
+        "azure_speech": {
+          "$ref": "#/$defs/AIAzureSpeechProviderSettings"
+        }
+      },
+      "title": "AIProvidersSelection",
       "type": "object"
     },
     "AIRouterClassifierConfig": {
@@ -718,6 +969,18 @@
           ],
           "default": null,
           "title": "Timeout Seconds"
+        },
+        "bedrock_output_s3_uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bedrock Output S3 Uri"
         }
       },
       "title": "AIVideosSelection",
@@ -779,10 +1042,228 @@
       ],
       "title": "AiFallbackReason",
       "type": "string"
+    },
+    "RedactionRecognizerRuleSettingsModel": {
+      "additionalProperties": true,
+      "description": "Typed model for one configurable custom recognizer rule block.\n\nThis model intentionally exposes middleware-level semantics only.\nIt does not expose implementation-provider identifiers in the YAML contract.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "confidence_threshold": {
+          "default": 0.0,
+          "title": "Confidence Threshold"
+        },
+        "context_terms": {
+          "title": "Context Terms"
+        },
+        "negative_context_terms": {
+          "title": "Negative Context Terms"
+        }
+      },
+      "title": "RedactionRecognizerRuleSettingsModel",
+      "type": "object"
+    },
+    "RedactionRecognizersSettingsModel": {
+      "additionalProperties": true,
+      "description": "Typed model for `redaction_recognizers` middleware extension settings.",
+      "properties": {
+        "proximity_window_chars": {
+          "default": 28,
+          "title": "Proximity Window Chars"
+        },
+        "ssn_last4": {},
+        "cc_last4": {},
+        "dob": {}
+      },
+      "title": "RedactionRecognizersSettingsModel",
+      "type": "object"
+    },
+    "PiiRedactionSettingsModel": {
+      "additionalProperties": true,
+      "description": "Typed model for the `pii_redaction.settings` block.\nDefaults are intentionally lenient to keep configuration migration smooth.",
+      "properties": {
+        "direction": {
+          "default": "input_only",
+          "title": "Direction"
+        },
+        "strict_mode": {
+          "default": false,
+          "title": "Strict Mode",
+          "type": "boolean"
+        },
+        "detection_profile": {
+          "default": "balanced",
+          "title": "Detection Profile"
+        },
+        "language": {
+          "default": "en",
+          "title": "Language"
+        },
+        "country_scope": {
+          "default": "US",
+          "title": "Country Scope"
+        },
+        "address_detection_enabled": {
+          "default": true,
+          "title": "Address Detection Enabled",
+          "type": "boolean"
+        },
+        "address_detection_provider": {
+          "default": "usaddress",
+          "title": "Address Detection Provider"
+        },
+        "span_conflict_policy": {
+          "default": "prefer_usaddress_longest",
+          "title": "Span Conflict Policy"
+        },
+        "default_redaction_label": {
+          "default": "REDACTED",
+          "title": "Default Redaction Label",
+          "type": "string"
+        },
+        "allowed_entities": {
+          "title": "Allowed Entities"
+        },
+        "entity_label_map": {
+          "title": "Entity Label Map"
+        },
+        "redaction_recognizers": {}
+      },
+      "title": "PiiRedactionSettingsModel",
+      "type": "object"
+    },
+    "ObservabilitySettingsModel": {
+      "additionalProperties": true,
+      "description": "Typed model for logger-backed observability middleware settings.",
+      "properties": {
+        "direction": {
+          "default": "input_output",
+          "title": "Direction"
+        },
+        "capabilities": {
+          "title": "Capabilities"
+        },
+        "log_level": {
+          "default": "INFO",
+          "title": "Log Level"
+        },
+        "token_count_mode": {
+          "default": "provider_or_estimate",
+          "title": "Token Count Mode"
+        },
+        "include_media_details": {
+          "default": true,
+          "title": "Include Media Details",
+          "type": "boolean"
+        },
+        "include_provider_usage": {
+          "default": true,
+          "title": "Include Provider Usage",
+          "type": "boolean"
+        },
+        "include_audio_byte_count": {
+          "default": true,
+          "title": "Include Audio Byte Count",
+          "type": "boolean"
+        },
+        "include_image_byte_count": {
+          "default": true,
+          "title": "Include Image Byte Count",
+          "type": "boolean"
+        },
+        "include_video_byte_count": {
+          "default": true,
+          "title": "Include Video Byte Count",
+          "type": "boolean"
+        },
+        "emit_error_events": {
+          "default": true,
+          "title": "Emit Error Events",
+          "type": "boolean"
+        },
+        "emit_cost": {
+          "default": false,
+          "title": "Emit Cost",
+          "type": "boolean"
+        },
+        "emit_cost_topic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Emit Cost Topic"
+        }
+      },
+      "title": "ObservabilitySettingsModel",
+      "type": "object"
+    },
+    "MiddlewareEntry": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "observability",
+            "pii_redaction"
+          ]
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "settings": {
+          "description": "Settings for the named middleware."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "name": {
+                "const": "observability"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "settings": {
+                "$ref": "#/$defs/ObservabilitySettingsModel"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "name": {
+                "const": "pii_redaction"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "settings": {
+                "$ref": "#/$defs/PiiRedactionSettingsModel"
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "additionalProperties": false,
-  "description": "The whole file.\n\nAttributes:\n    allow: Model globs the library may use; empty means all.\n    deny: Model globs the library may never use; wins over allow.\n    completions: Primary engine and model, chain, reasons, retry policy.\n    classifier: The classification engine and model.\n    router: The complexity router.\n    model_check: The configured-model check mode and timeout.\n    embeddings, images, videos, voice: Per-capability selections.\n    geo_residency: Geo hint (`US`), as AI_API_GEO_RESIDENCY.\n    config_version: A label for this configuration (a date, a release,\n        a commit); every call the completions client makes carries it\n        as the `config_version` tag, next to the computed `config_id`.",
+  "description": "The whole file.\n\nAttributes:\n    allow: Model globs the library may use; empty means all.\n    deny: Model globs the library may never use; wins over allow.\n    completions: Primary engine and model, chain, reasons, retry policy.\n    classifier: The classification engine and model.\n    router: The complexity router.\n    model_check: The configured-model check mode and timeout.\n    embeddings, images, videos, voice: Per-capability selections.\n    geo_residency: Geo hint (`US`), as AI_API_GEO_RESIDENCY.\n    providers: Per-provider settings that are not secrets (base URLs,\n        regions, Vertex project, OpenAI-compatible server details).\n    middleware: The PII redaction and observability middleware, the\n        same list the middleware YAML holds under `middleware`.\n    strict_deprecations: True turns a deprecated-model warning into a\n        startup error.\n    config_version: A label for this configuration (a date, a release,\n        a commit); every call the completions client makes carries it\n        as the `config_version` tag, next to the computed `config_id`.",
   "properties": {
     "_comment": {
       "anyOf": [
@@ -877,6 +1358,37 @@
       ],
       "default": null,
       "title": "Geo Residency"
+    },
+    "providers": {
+      "$ref": "#/$defs/AIProvidersSelection"
+    },
+    "middleware": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MiddlewareEntry"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Middleware",
+      "description": "PII redaction and observability middleware; the same list the middleware YAML holds under `middleware`."
+    },
+    "strict_deprecations": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Strict Deprecations"
     }
   },
   "title": "AIModelsConfig",

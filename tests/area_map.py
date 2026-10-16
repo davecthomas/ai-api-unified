@@ -265,6 +265,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_router_options_nonmock.py": ("completions", "engine_anthropic"),
     "test_config_checks.py": ("completions",),
     "test_config_schemas.py": ("completions",),
+    "test_one_config_file.py": ("completions",),
     "test_nova_reel_videos.py": ("videos", "engine_bedrock"),
     "test_openai_videos.py": ("videos", "engine_openai"),
     "test_video_generation_nonmock.py": ("videos",),

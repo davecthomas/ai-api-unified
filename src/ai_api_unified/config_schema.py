@@ -116,6 +116,22 @@ def models_config_schema() -> dict[str, Any]:
         by_alias=True, mode="validation"
     )
     dict_schema = _patch_models_schema(dict_schema)
+    # The middleware section is the middleware YAML's list, entry for entry.
+    dict_middleware_defs, dict_entry = _middleware_defs_and_entry()
+    dict_schema["$defs"].update(dict_middleware_defs)
+    dict_schema["$defs"]["MiddlewareEntry"] = dict_entry
+    dict_schema["properties"]["middleware"] = {
+        "anyOf": [
+            {"type": "array", "items": {"$ref": "#/$defs/MiddlewareEntry"}},
+            {"type": "null"},
+        ],
+        "default": None,
+        "title": "Middleware",
+        "description": (
+            "PII redaction and observability middleware; the same list the "
+            "middleware YAML holds under `middleware`."
+        ),
+    }
     # Normal return with the dialect and id first, for readers.
     return {
         "$schema": SCHEMA_DIALECT,
@@ -153,10 +169,12 @@ def _relax_before_validated(
     return dict_schema
 
 
-def middleware_config_schema() -> dict[str, Any]:
-    """The JSON Schema for the middleware YAML."""
+def _middleware_defs_and_entry() -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    The middleware settings definitions and the schema of one `middleware`
+    entry, shared by the middleware YAML schema and models.json's section.
+    """
     from .middleware.middleware_config import (
-        MIDDLEWARE_KEY,
         OBSERVABILITY,
         PII_REDACTION,
         ObservabilitySettingsModel,
@@ -199,6 +217,15 @@ def middleware_config_schema() -> dict[str, Any]:
             for str_name, str_ref in sorted(dict_settings_refs.items())
         ],
     }
+    # Normal return with the definitions and the entry schema.
+    return dict_defs, dict_entry
+
+
+def middleware_config_schema() -> dict[str, Any]:
+    """The JSON Schema for the middleware YAML."""
+    from .middleware.middleware_config import MIDDLEWARE_KEY
+
+    dict_defs, dict_entry = _middleware_defs_and_entry()
     # Normal return with the whole file's schema.
     return {
         "$schema": SCHEMA_DIALECT,
@@ -254,44 +281,52 @@ def validate_config_file(str_path: str) -> list[str]:
     except (json.JSONDecodeError, yaml.YAMLError) as exception:
         # Early return: not parseable.
         return [f"{str_path}: {exception}"]
-    if isinstance(raw, dict) and "middleware" in raw:
-        from .middleware.middleware_config import (
-            MiddlewareConfigurationModel,
-            ObservabilitySettingsModel,
-            PiiRedactionSettingsModel,
-        )
-
-        list_errors: list[str] = []
-        try:
-            configuration = MiddlewareConfigurationModel.model_validate(raw)
-        except ValidationError as error:
-            # Early return with the structural errors.
-            return [str(error)]
-        dict_models: dict[str, type[BaseModel]] = {
-            "pii_redaction": PiiRedactionSettingsModel,
-            "observability": ObservabilitySettingsModel,
-        }
-        # Loop over entries so each block is checked by its own model.
-        for entry in configuration.list_middleware:
-            model: type[BaseModel] | None = dict_models.get(entry.name)
-            if model is None:
-                list_errors.append(f"unknown middleware {entry.name!r}")
-                continue
-            try:
-                model.model_validate(entry.settings or {})
-            except ValidationError as error:
-                list_errors.append(f"{entry.name}: {error}")
-        # Early return with the middleware errors.
-        return list_errors
+    if isinstance(raw, dict) and set(raw) <= {"middleware"}:
+        # Early return: a middleware YAML holds only the middleware list.
+        return _middleware_errors(raw.get("middleware"))
     from .ai_models_config import AIModelsConfig
 
     try:
-        AIModelsConfig.model_validate(raw)
+        config = AIModelsConfig.model_validate(raw)
     except ValidationError as error:
         # Early return with the models.json errors.
         return [str(error)]
-    # Normal return: valid.
-    return []
+    # Normal return with the middleware section's errors, if any.
+    return _middleware_errors(config.middleware) if config.middleware else []
+
+
+def _middleware_errors(list_middleware: Any) -> list[str]:
+    """Each middleware entry checked by its own settings model."""
+    from .middleware.middleware_config import (
+        MiddlewareConfigurationModel,
+        ObservabilitySettingsModel,
+        PiiRedactionSettingsModel,
+    )
+
+    try:
+        configuration = MiddlewareConfigurationModel.model_validate(
+            {"middleware": list_middleware or []}
+        )
+    except ValidationError as error:
+        # Early return with the structural errors.
+        return [str(error)]
+    dict_models: dict[str, type[BaseModel]] = {
+        "pii_redaction": PiiRedactionSettingsModel,
+        "observability": ObservabilitySettingsModel,
+    }
+    list_errors: list[str] = []
+    # Loop over entries so each block is checked by its own model.
+    for entry in configuration.list_middleware:
+        model: type[BaseModel] | None = dict_models.get(entry.name)
+        if model is None:
+            list_errors.append(f"unknown middleware {entry.name!r}")
+            continue
+        try:
+            model.model_validate(entry.settings or {})
+        except ValidationError as error:
+            list_errors.append(f"{entry.name}: {error}")
+    # Normal return with every entry's errors.
+    return list_errors
 
 
 def main(list_args: list[str]) -> int:

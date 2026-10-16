@@ -529,13 +529,20 @@ def resolve_base_url_override(
         Validated override URL, or None when no override is configured.
     """
     str_candidate: str = str_explicit or ""
+    str_label: str = "base_url argument" if str_candidate.strip() else str_env_key
     if not str_candidate.strip():
         str_candidate = str(env_settings.get_setting(str_env_key, "") or "")
+        from ai_api_unified.ai_models_config import DICT_SETTING_FIELD_NAMES
+
+        str_field: str | None = DICT_SETTING_FIELD_NAMES.get(str_env_key)
+        if str_field is not None:
+            # The value may come from models.json, so name both places.
+            str_label = f"{str_field} in models.json (or {str_env_key})"
     if not str_candidate.strip():
         # Early return because no override is configured.
         return None
     # Normal return with the validated override URL.
-    return validate_base_url_override(str_candidate, str_env_key=str_env_key)
+    return validate_base_url_override(str_candidate, str_env_key=str_label)
 
 
 def normalize_retry_policy(retry_policy: str) -> str:
