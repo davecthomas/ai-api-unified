@@ -74,7 +74,7 @@ class TestAiFactoryVoiceClient:
         ):
             with pytest.raises(
                 ValueError,
-                match="AI_VOICE_ENGINE must be configured explicitly",
+                match="voice.engine in models.json must be configured explicitly",
             ):
                 AIFactory.get_ai_voice_client()
 

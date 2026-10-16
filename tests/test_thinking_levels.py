@@ -77,8 +77,8 @@ class _Word(AIStructuredPrompt):
 
 @pytest.fixture(autouse=True)
 def _no_configured_level(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keeps a developer's COMPLETIONS_THINKING out of the suite."""
-    monkeypatch.setenv("COMPLETIONS_THINKING", "")
+    """The suite's conftest blanks AI_MODELS_CONFIG; the level then defaults."""
+    monkeypatch.delenv("COMPLETIONS_THINKING", raising=False)
 
 
 # ── The level, the capabilities, the resolution ─────────────────────────────
@@ -475,10 +475,12 @@ class TestBedrockRequests:
 
 
 class TestConfiguration:
-    def test_setting_and_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_models_json_sets_the_level_and_the_default_is_medium(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         client = _anthropic("claude-opus-4-8")
         assert client.thinking_level is L.MEDIUM
-        monkeypatch.setenv("COMPLETIONS_THINKING", "high")
+        monkeypatch.setenv("AI_MODELS_CONFIG", '{"completions": {"thinking": "high"}}')
         client.thinking_level = None  # re-read configuration
         assert client.thinking_level is L.HIGH
 
@@ -497,9 +499,11 @@ class TestConfiguration:
     def test_factory_argument_levels_primary_and_fallbacks(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("COMPLETIONS_ENGINE", "claude")
-        monkeypatch.setenv("COMPLETIONS_MODEL_NAME", "claude-opus-4-8")
-        monkeypatch.setenv("AI_MODEL_CHECK", "off")
+        monkeypatch.setenv(
+            "AI_MODELS_CONFIG",
+            '{"completions": {"engine": "claude", "model": "claude-opus-4-8"},'
+            ' "model_check": {"mode": "off"}}',
+        )
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k", "OPENAI_API_KEY": "k"}):
             chain = AIFactory.get_ai_completions_client(
                 fallbacks=[("openai", "gpt-5.4")], thinking="high"

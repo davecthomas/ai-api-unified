@@ -7,6 +7,15 @@ from typing import Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+# Selection keys already reported this process; one warning per key.
+_SET_WARNED_DEPRECATED_SELECTIONS: set[str] = set()
+
+
+def reset_deprecated_selection_warnings() -> None:
+    """Forgets which deprecated selection keys were reported (tests)."""
+    _SET_WARNED_DEPRECATED_SELECTIONS.clear()
+    # Normal return after clearing the once-per-process record.
+    return None
 
 
 class EnvSettings(BaseSettings):
@@ -53,10 +62,12 @@ class EnvSettings(BaseSettings):
         if hasattr(self, setting):
             setting_value: Any = getattr(self, setting)
             if setting_value is not None:
+                self._warn_deprecated_selection(setting, setting_value)
                 return setting_value
         if setting in os.environ:
             # Early return: the process environment beats .env for undeclared
             # keys, as it does for declared fields.
+            self._warn_deprecated_selection(setting, os.environ[setting])
             return os.environ[setting]
         # pydantic-settings stores undeclared .env keys lowercased, so a setting
         # read by its documented upper-case name must match the lowercased key.
@@ -65,6 +76,7 @@ class EnvSettings(BaseSettings):
         str_dotenv_key: str = setting.lower()
         if self.model_extra and str_dotenv_key in self.model_extra:
             # Early return with the .env value.
+            self._warn_deprecated_selection(setting, self.model_extra[str_dotenv_key])
             return self.model_extra[str_dotenv_key]
         str_from_file: str | None = self._models_config_setting(setting)
         if str_from_file is not None:
@@ -72,6 +84,47 @@ class EnvSettings(BaseSettings):
             return str_from_file
         # Normal return with the default.
         return default
+
+    @staticmethod
+    def _warn_deprecated_selection(setting: str, value: Any) -> None:
+        """
+        Warns once per process when a model selection is still set in the
+        environment or .env. Selections live in models.json; the key keeps
+        overriding the file so a deployment does not break, and the warning
+        names the field and the migrator that moves it.
+
+        Args:
+            setting: The settings key that was read.
+            value: The value found; blank means unset and draws no warning.
+
+        Returns:
+            None after logging, or when the key is not a selection or was
+            already reported.
+        """
+        from ..ai_models_config import DICT_SETTING_FIELD_NAMES
+
+        str_field: str | None = DICT_SETTING_FIELD_NAMES.get(setting)
+        if str_field is None or not str(value).strip():
+            # Early return: not a selection key, or set to blank.
+            return None
+        if setting in _SET_WARNED_DEPRECATED_SELECTIONS:
+            # Early return: reported once already.
+            return None
+        _SET_WARNED_DEPRECATED_SELECTIONS.add(setting)
+        _LOGGER.warning(
+            "%s is set in the environment or .env; model selections live in "
+            "models.json (%s). The value still overrides the file. Move it with "
+            "`poetry run python scripts/migrate2json.py --comment-env`.",
+            setting,
+            str_field,
+            extra={
+                "ai_config_event": "deprecated_selection_key",
+                "setting": setting,
+                "models_config_field": str_field,
+            },
+        )
+        # Normal return after the one-time warning.
+        return None
 
     def _models_config_setting(self, setting: str) -> str | None:
         """

@@ -283,7 +283,7 @@ class TestAiFactoryProviderLoading:
         ):
             with pytest.raises(
                 ValueError,
-                match="COMPLETIONS_ENGINE must be configured explicitly",
+                match="completions.engine in models.json must be configured explicitly",
             ):
                 AIFactory.get_ai_completions_client()
 
@@ -297,7 +297,7 @@ class TestAiFactoryProviderLoading:
         ):
             with pytest.raises(
                 ValueError,
-                match="EMBEDDING_ENGINE must be configured explicitly",
+                match="embeddings.engine in models.json must be configured explicitly",
             ):
                 AIFactory.get_ai_embedding_client()
 
@@ -311,7 +311,7 @@ class TestAiFactoryProviderLoading:
         ):
             with pytest.raises(
                 ValueError,
-                match="IMAGE_ENGINE must be configured explicitly",
+                match="images.engine in models.json must be configured explicitly",
             ):
                 AIFactory.get_ai_images_client()
 
@@ -403,6 +403,6 @@ class TestAiFactoryProviderLoading:
         ):
             with pytest.raises(
                 ValueError,
-                match="VIDEO_ENGINE must be configured explicitly",
+                match="videos.engine in models.json must be configured explicitly",
             ):
                 AIFactory.get_ai_video_client()

@@ -318,6 +318,37 @@ def _router_with_classifier(config: AIModelsConfig) -> AIRouterConfig | None:
     )
 
 
+# Settings key -> the models.json field that replaced it, for the
+# deprecation warning when a key is still set in the environment or .env.
+DICT_SETTING_FIELD_NAMES: dict[str, str] = {
+    "COMPLETIONS_ENGINE": "completions.engine",
+    "COMPLETIONS_MODEL_NAME": "completions.model",
+    "COMPLETIONS_FALLBACKS": "completions.fallbacks",
+    "COMPLETIONS_FALLBACK_ON": "completions.fallback_on",
+    "COMPLETIONS_RETRY_POLICY": "completions.retry_policy",
+    "COMPLETIONS_THINKING": "completions.thinking",
+    "CLASSIFIER_ENGINE": "classifier.engine",
+    "CLASSIFIER_MODEL_NAME": "classifier.model",
+    "COMPLETIONS_ROUTER_CLASSIFIER": "classifier",
+    "COMPLETIONS_ROUTER_CONFIG": "router",
+    "AI_MODEL_CHECK": "model_check.mode",
+    "AI_MODEL_CHECK_TIMEOUT_SECONDS": "model_check.timeout_seconds",
+    "EMBEDDING_ENGINE": "embeddings.engine",
+    "EMBEDDING_MODEL_NAME": "embeddings.model",
+    "EMBEDDING_DIMENSIONS": "embeddings.dimensions",
+    "IMAGE_ENGINE": "images.engine",
+    "IMAGE_MODEL_NAME": "images.model",
+    "VIDEO_ENGINE": "videos.engine",
+    "VIDEO_MODEL_NAME": "videos.model",
+    "VIDEO_OUTPUT_DIR": "videos.output_dir",
+    "VIDEO_POLL_INTERVAL_SECONDS": "videos.poll_interval_seconds",
+    "VIDEO_TIMEOUT_SECONDS": "videos.timeout_seconds",
+    "AI_VOICE_ENGINE": "voice.engine",
+    "AI_VOICE_LANGUAGE": "voice.language",
+    "DEFAULT_GEMINI_TTS_MODEL": "voice.tts_model",
+    "AI_API_GEO_RESIDENCY": "geo_residency",
+}
+
 # Settings key -> the file value that stands in for it.
 DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
     "COMPLETIONS_ENGINE": lambda c: c.completions.engine,
@@ -325,6 +356,8 @@ DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
     "COMPLETIONS_FALLBACKS": lambda c: c.completions.fallbacks,
     "COMPLETIONS_FALLBACK_ON": lambda c: c.completions.fallback_on,
     "COMPLETIONS_RETRY_POLICY": lambda c: c.completions.retry_policy,
+    # The thinking level has no .env key of its own; this is the settings
+    # name the clients read, served from the file.
     "COMPLETIONS_THINKING": lambda c: c.completions.thinking,
     "CLASSIFIER_ENGINE": lambda c: c.classifier.engine,
     "CLASSIFIER_MODEL_NAME": lambda c: c.classifier.model,

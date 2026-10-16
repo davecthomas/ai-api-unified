@@ -16,8 +16,8 @@ version lives in `pyproject.toml` (see the README release section).
   `reasoning_effort` (Chat) and `reasoning.effort` (Responses), Gemini
   `thinking_level` (3.x) or `thinking_budget` (2.5), and the same Claude
   fields under Bedrock's `additionalModelRequestFields`. Set it with
-  `COMPLETIONS_THINKING`, `completions.thinking` in `models.json`, the
-  `thinking=` factory argument, `client.thinking_level`, per call with
+  `completions.thinking` in `models.json`, the `thinking=` factory
+  argument, `client.thinking_level`, per call with
   `other_params.thinking` (text methods) or
   `provider_options={"thinking_level": ...}` (conversation and structured
   methods). `capabilities.thinking` lists the standard levels a model honors
@@ -29,6 +29,19 @@ version lives in `pyproject.toml` (see the README release section).
   prefill, or a `max_tokens` too small for a thinking budget turns thinking
   off on models that allow it, with the reason recorded.
 
+### Deprecated
+
+- The `.env` model-selection keys (`COMPLETIONS_ENGINE`,
+  `COMPLETIONS_MODEL_NAME`, `COMPLETIONS_FALLBACKS`, `EMBEDDING_ENGINE`,
+  `IMAGE_MODEL_NAME`, `AI_VOICE_ENGINE`, and the rest of the keys
+  `models.json` replaced in 3.2.0). A key still set in the process
+  environment or `.env` is accepted and overrides the file, and the library
+  logs one warning per key naming the `models.json` field and the migrator
+  (`poetry run python scripts/migrate2json.py --comment-env`;
+  `ai_config_event=deprecated_selection_key`). `env_template` and the
+  README no longer list them; `models_sample.json` documents every
+  selection. The thinking level has no `.env` key at all.
+
 ### Changed
 
 - **The default thinking level is `medium` on every model with a thinking
@@ -37,9 +50,9 @@ version lives in `pyproject.toml` (see the README release section).
   adaptive thinking, Claude 4.5 and older with a 4096-token budget, Gemini
   2.5 with an 8192-token budget, OpenAI reasoning models at
   `reasoning_effort: medium`) now think at medium by default, which raises
-  their output tokens, latency, and cost. Set `COMPLETIONS_THINKING=off`
-  (or `completions.thinking: "off"`) to keep the previous behavior where
-  the model allows it. A caller's own provider option (`thinking`,
+  their output tokens, latency, and cost. Set `completions.thinking` to
+  `"off"` in `models.json` to keep the previous behavior where the model
+  allows it. A caller's own provider option (`thinking`,
   `reasoning_effort`, `thinking_config`) still wins over the level.
 
 ## 3.4.0

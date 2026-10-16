@@ -37,6 +37,7 @@ from .routing.router_config import (
     prune_router_config,
 )
 from .ai_models_config import (
+    DICT_SETTING_FIELD_NAMES,
     MODEL_POLICY_EVENT_DENIED,
     AIModelPolicy,
     AIModelsConfig,
@@ -266,7 +267,8 @@ class AIFactory:
         str_engine_normalized: str = str_engine_value.strip().lower()
         if not str_engine_normalized:
             raise ValueError(
-                f"{str_engine_key} must be configured explicitly; there is no default provider."
+                f"{DICT_SETTING_FIELD_NAMES.get(str_engine_key, str_engine_key)} in "
+                "models.json must be configured explicitly; there is no default provider."
             )
         return str_engine_normalized
 
@@ -339,8 +341,8 @@ class AIFactory:
             thinking: Optional provider-neutral thinking level (an
                 AIThinkingLevel or its value: off, minimal, low, medium, high,
                 max) applied to every client this call builds, the primary,
-                its fallbacks, and the router's tiers; defaults to the
-                COMPLETIONS_THINKING setting, then medium.
+                its fallbacks, and the router's tiers; defaults to
+                `completions.thinking` in models.json, then medium.
 
         Returns:
             Concrete AIBaseCompletions implementation for the requested engine,
@@ -1174,7 +1176,7 @@ class AIFactory:
             # Early return with the key-backed default.
             return DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY
         raise ValueError(
-            f"{CLASSIFIER_ENGINE_KEY} must be configured explicitly, or set "
+            "classifier.engine in models.json must be configured explicitly, or set "
             f"{OPENAI_API_KEY_SETTING} to use the default "
             f"{DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY} classifier."
         )

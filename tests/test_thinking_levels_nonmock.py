@@ -88,10 +88,9 @@ def test_configured_and_per_call_levels_reach_the_provider(
     level_off_expected: AIThinkingLevel,
 ) -> None:
     _skip_without(str_key, str_host)
-    monkeypatch.setenv("COMPLETIONS_ENGINE", str_engine)
-    monkeypatch.setenv("COMPLETIONS_MODEL_NAME", str_model)
-    monkeypatch.setenv("COMPLETIONS_THINKING", "low")
-    client = AIFactory.get_ai_completions_client()
+    client = AIFactory.get_ai_completions_client(
+        completions_engine=str_engine, model_name=str_model, thinking="low"
+    )
     assert client.thinking_level is AIThinkingLevel.LOW
     try:
         text = client.send_prompt(STR_PROMPT, max_response_tokens=4096)
@@ -123,10 +122,9 @@ def test_always_on_model_applies_nearest_level_and_records_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _skip_without("ANTHROPIC_API_KEY", "api.anthropic.com")
-    monkeypatch.setenv("COMPLETIONS_ENGINE", "claude")
-    monkeypatch.setenv("COMPLETIONS_MODEL_NAME", "claude-opus-5-5")
-    monkeypatch.setenv("COMPLETIONS_THINKING", "off")
-    client = AIFactory.get_ai_completions_client()
+    client = AIFactory.get_ai_completions_client(
+        completions_engine="claude", model_name="claude-opus-5-5", thinking="off"
+    )
     try:
         text = client.send_prompt(STR_PROMPT, max_response_tokens=4096)
     except AiProviderRequestError as exception:

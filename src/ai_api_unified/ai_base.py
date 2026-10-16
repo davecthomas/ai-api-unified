@@ -2735,9 +2735,9 @@ class AIBaseCompletions(AIBase):
     def thinking_level(self) -> AIThinkingLevel:
         """
         The thinking level this client requests on every call unless a call
-        overrides it: the `thinking=` factory argument, else the
-        COMPLETIONS_THINKING setting (`completions.thinking` in models.json),
-        else medium. Set it to change the default for later calls.
+        overrides it: the `thinking=` factory argument, else
+        `completions.thinking` in models.json, else medium. Set it to change
+        the default for later calls.
         """
         if self._thinking_level is None:
             from ai_api_unified.util.env_settings import EnvSettings

@@ -1,21 +1,45 @@
 ########################################################################
-#   CORE ENGINE SELECTION
+#   MODEL SELECTIONS LIVE IN models.json
 ########################################################################
-# Which embedding model family?   openai | titan | google-gemini | voyage
-# EMBEDDING_ENGINE=titan
-# EMBEDDING_ENGINE=voyage
-# EMBEDDING_ENGINE=google-gemini
+# Engines, models, the fallback chain and its triggers, the thinking level,
+# the router, the classifier, the configured-model check, embeddings,
+# images, videos, voice, and the allow/deny policy are authored in
+# models.json: copy models_sample.json, which documents every section.
+# AI_MODELS_CONFIG names the file (a path to .json, .yaml, or .yml, or
+# inline JSON). Unset means ./models.json when it exists; blank turns the
+# file off; a set path that does not exist is an error on every settings
+# read.
+# AI_MODELS_CONFIG=./models.json
+#
+# Do not repeat a selection here: a value in both places is read from .env
+# and the file entry stops meaning what it says. The pre-models.json .env
+# keys still override the file for deployments that pin one value; the
+# README "Configuration" section lists them.
 
 
 ########################################################################
-#   OPENAI / TITAN / Google API CREDENTIALS
+#   OPENAI
 ########################################################################
-# --- OpenAI ---
 OPENAI_API_KEY=
 # Optional API base-URL override; also points the openai engine at any
-# OpenAI-compatible server. Same https rule as above.
+# OpenAI-compatible server. Must be https:// unless it targets
+# localhost/127.0.0.1/::1.
 OPENAI_BASE_URL_OVERRIDE=
-# --- Anthropic (native Claude API; used by COMPLETIONS_ENGINE=claude) ---
+
+# --- openai-compatible engine (vLLM, Ollama, DeepSeek, Qwen, ...) ---
+# The server's base URL and, when it needs one, its key. The model comes
+# from models.json (completions.model).
+# OPENAI_COMPATIBLE_BASE_URL=http://localhost:8000/v1
+# OPENAI_COMPATIBLE_API_KEY=
+# json_schema (default) or json_object, by what the server supports.
+# OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=json_schema
+# Context window of an uncataloged model, for the client-side guard.
+# OPENAI_COMPATIBLE_CONTEXT_WINDOW=128000
+
+
+########################################################################
+#   ANTHROPIC (native Claude API; engine "claude")
+########################################################################
 ANTHROPIC_API_KEY=
 # Optional Admin API key (sk-ant-admin...) for organization-level finops
 # attribution: when set, cost events carry your org id AND name (resolved
@@ -32,162 +56,59 @@ ANTHROPIC_BASE_URL_OVERRIDE=
 # override above. Set this only if the admin lookup should also route through
 # a gateway (egress-restricted networks).
 ANTHROPIC_ADMIN_BASE_URL_OVERRIDE=
-# Geo-residency constraint (optional: US | USA | United States)
-AI_API_GEO_RESIDENCY=
-# --- Voyage AI (embeddings; used by EMBEDDING_ENGINE=voyage) ---
-VOYAGE_API_KEY=
+
+
+########################################################################
+#   GOOGLE (Gemini completions, embeddings, images, videos, voice)
+########################################################################
 GOOGLE_GEMINI_API_KEY=
 # Optional API base-URL override for Gemini. Same https rule as above.
 GOOGLE_GEMINI_BASE_URL_OVERRIDE=
+# api_key (default) or service_account. Service-account / Vertex mode uses
+# the usual Google credentials below.
 GOOGLE_AUTH_METHOD=api_key
-# --- Model selections live in models.json ---------------------------------
-# Engines, models, the fallback chain, the router, the classifier, the
-# configured-model check, and the allow/deny policy are authored in
-# models.json (copy models_sample.json). AI_MODELS_CONFIG names the file or
-# holds inline JSON; unset means ./models.json when it exists; blank turns
-# the file off. Every selection key below still works and overrides the
-# file when set, so a deployment can pin one value without editing the file.
-# Leave it unset to pick up ./models.json when present: a set path that does
-# not exist is an error on every settings read.
-# AI_MODELS_CONFIG=./models.json
-# Completions engine (openai | openai-responses | claude | google-gemini | nova | anthropic | ...)
-# COMPLETIONS_ENGINE=google-gemini
+# GOOGLE_APPLICATION_CREDENTIALS=credentials/<filename>.json
+# GOOGLE_PROJECT_ID=
+# GOOGLE_LOCATION=us-central1
 
-# Generic AI settings
-# Embedding model name (text-embedding-3-small | amazon.titan-embed-text-v2:0 | gemini-embedding-001 | voyage-3 | voyage-4)
-# EMBEDDING_MODEL_NAME=gemini-embedding-001
-# Classification engine (openai-decisions | openai | openai-responses |
-# openai-compatible | claude | google-gemini | bedrock | anthropic). When unset,
-# openai-decisions is used if OPENAI_API_KEY is set. A completions engine token
-# classifies through that engine's structured output. See README "Classification".
-# CLASSIFIER_ENGINE=openai-decisions
-# Optional classification model; blank falls back to COMPLETIONS_MODEL_NAME,
-# then the engine's default.
-# CLASSIFIER_MODEL_NAME=
-# EMBEDDING_MODEL_NAME=amazon.titan-embed-text-v2:0
-# Completions model name, by engine. Leave unset to use the engine default
-# (one generation behind the newest cataloged model):
-#   openai:        default gpt-5.6-luna    | gpt-6-astra | gpt-6-sol | gpt-6-luna | gpt-5.6-sol | gpt-5.6-terra | gpt-5.5
-#   claude:        default claude-opus-5   | claude-opus-5-5 | claude-fable-5-1 | claude-sonnet-5 | claude-opus-4-8 | claude-haiku-4-5
-#   google-gemini: default gemini-3.7-flash | gemini-3.8-flash | gemini-3.6-flash | gemini-3.5-flash-lite | gemini-3.1-pro-preview
-#   bedrock:       default amazon.nova-lite-v1:0 | deepseek.v3.2 | qwen.qwen3-next-80b-a3b | zai.glm-5
-#     (AWS-hosted DeepSeek, Qwen, and GLM; enable them under Bedrock Model access)
-#   openai-compatible: no default; set COMPLETIONS_MODEL_NAME and
-#     OPENAI_COMPATIBLE_BASE_URL (plus OPENAI_COMPATIBLE_API_KEY if the server
-#     needs one; OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=json_schema|json_object;
-#     OPENAI_COMPATIBLE_CONTEXT_WINDOW for the context guard)
-#   nova:          default amazon.nova-lite-v1:0 | amazon.nova-micro-v1:0
-# COMPLETIONS_MODEL_NAME=gemini-3.7-flash
-# COMPLETIONS_MODEL_NAME=gemini-3.8-flash
-# COMPLETIONS_MODEL_NAME=claude-opus-5-5
-# COMPLETIONS_MODEL_NAME=gpt-6-sol
-# COMPLETIONS_MODEL_NAME=amazon.nova-lite-v1:0
 
-# Optional fallback chain: ordered engine:model pairs tried after the primary
-# fails with an unavailable, rate-limited, or quota-exhausted error. Each
-# fallback engine needs its own credentials and extra. The split is on the
-# first colon, so Bedrock ids such as bedrock:amazon.nova-lite-v1:0 work.
-# COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
-# Reasons that trigger a fallback (AiFallbackReason values). Default:
-# unavailable,rate_limited,quota_exhausted,auth_rejected. Add
-# model_unavailable to also fail over on an unknown model id, or timeout to
-# fail over when request_timeout_seconds passes with no answer.
-# COMPLETIONS_FALLBACK_ON=unavailable,rate_limited,quota_exhausted,auth_rejected
-# Provider-neutral thinking level applied to every completions call unless a
-# call overrides it: off, minimal, low, medium, high, max. Default medium.
-# Each engine maps it to its provider's own control (Anthropic effort, OpenAI
-# reasoning_effort, Gemini thinking_level or thinking_budget); a model that
-# cannot honor the level applies the nearest one it supports and records both.
-# COMPLETIONS_THINKING=medium
-# Optional complexity router: a JSON file path (or inline JSON) listing tiers of
-# engine:model chains. The configured completions LLM is the default route.
-# See README "Model routing".
-# COMPLETIONS_ROUTER_CONFIG=  (override of the router section in models.json; a path or inline JSON)
-# Classifier for the router as engine:model, or none. Default: the
-# classification factory's resolution (CLASSIFIER_ENGINE, then
-# openai-decisions when OPENAI_API_KEY is set).
-# COMPLETIONS_ROUTER_CLASSIFIER=openai-decisions:gpt-6-luna
-# Configured-model check, run when a chain or router is configured: prune
-# (default) drops missing models with a warning, strict raises, off skips.
-# AI_MODEL_CHECK=prune
-# Embedding dimensions (1536 for OpenAI | 1024 for Titan | 3072 default for Gemini)
-# Leave unset to use the provider default for the selected engine.
-# EMBEDDING_DIMENSIONS=1024
-# EMBEDDING_DIMENSIONS=3072
-# Vector metric (cosine for Pinecone | cosinesimil for OpenSearch | COSINE for Redis)
-# VECTOR_METRIC=cosinesimil
-VECTOR_METRIC=cosine
+########################################################################
+#   VOYAGE AI (embeddings engine "voyage")
+########################################################################
+VOYAGE_API_KEY=
 
+
+########################################################################
+#   AWS (Bedrock, Titan, Nova)
+########################################################################
 AWS_REGION=us-east-1
-
-# AWS credentials for Bedrock - these are ephermeral and must be set at runtime. 
+# AWS credentials for Bedrock are ephemeral and must be set at runtime.
 # Read more here: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 AWS_SESSION_TOKEN=
+# Required for Bedrock Nova Reel video unless passed on the request itself.
+# BEDROCK_VIDEO_OUTPUT_S3_URI=s3://your-bucket/ai-api-unified/video-output/
 
-# ----------------------------------------
-# AI Voice Settings
-# ----------------------------------------
-# ElevenLabs API key
+
+########################################################################
+#   VOICE PROVIDERS
+########################################################################
+# ElevenLabs
 ELEVEN_LABS_API_KEY=
-
-# Voice engine: "elevenlabs", "google", "openai", "azure"
-# AI_VOICE_ENGINE=google
-
-# Language code (e.g. en, de)
-# AI_VOICE_LANGUAGE=en
-
-########################################################################
-#   Google AI Voice Settings
-# OSS defaults to API-key auth for Google. Service-account / Vertex mode remains
-# available by setting GOOGLE_AUTH_METHOD=service_account and providing the
-# usual Google credentials below.
-# GOOGLE_APPLICATION_CREDENTIALS=credentials/<filename>.json
-# GOOGLE_PROJECT_ID=
-# GOOGLE_LOCATION=us-central1
-# Preferred Google TTS model
-# DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
-
-########################################################################
-#   Google Gemini AI Settings (Completions & Embeddings)
-# Uses GOOGLE_GEMINI_API_KEY by default.
-# COMPLETIONS_ENGINE=google-gemini
-# EMBEDDING_ENGINE=google-gemini
-# Default models:
-#   Completions: gemini-3.7-flash
-#   Embeddings: gemini-embedding-001
-
-########################################################################
-# OpenAI AI Voice Settings
-OPENAI_API_KEY=
-# AI_VOICE_ENGINE=openai
-
-########################################################################
-# Azure AI Voice Settings
-# AI_VOICE_ENGINE=azure
-MICROSOFT_COGNITIVE_SERVICES_API_KEY=your-microsoft-cognitive-services-api-key
-MICROSOFT_COGNITIVE_SERVICES_API_KEY_2=your-microsoft-cognitive-services-api-key-2
+# Azure
+MICROSOFT_COGNITIVE_SERVICES_API_KEY=
+MICROSOFT_COGNITIVE_SERVICES_API_KEY_2=
 MICROSOFT_COGNITIVE_SERVICES_REGION=eastus
 MICROSOFT_COGNITIVE_SERVICES_ENDPOINT=https://eastus.api.cognitive.microsoft.com/
 
-# Image engine: openai | nova-canvas | google-gemini
-# IMAGE_ENGINE=google-gemini
-# image model used for image generation requests: openai: gpt-image-2 ; amazon nova: amazon.nova-canvas-v1:0 ; google gemini: gemini-3.1-flash-image
-# IMAGE_MODEL_NAME=gemini-3.1-flash-image
 
-# Video engine: openai | google-gemini | nova-reel | nova | bedrock
-# The simplest OSS default path is Google Veo via API key auth.
-# VIDEO_ENGINE=google-gemini
-# Video model defaults by provider when left unset:
-#   openai -> sora-2 (retired 2026-09-24; the engine now raises on construction)
-#   google-gemini -> veo-3.1-lite-generate-preview
-#   nova-reel / bedrock -> amazon.nova-reel-v1:1
-# VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
-# Local directory used when the library materializes generated videos.
-# VIDEO_OUTPUT_DIR=./generated_videos
-# Optional blocking-flow tuning for video polling.
-# VIDEO_POLL_INTERVAL_SECONDS=10
-# VIDEO_TIMEOUT_SECONDS=900
-# Required for Bedrock Nova Reel unless passed on the request itself.
-# BEDROCK_VIDEO_OUTPUT_S3_URI=s3://your-bucket/ai-api-unified/video-output/
+########################################################################
+#   LIBRARY SETTINGS THAT STAY IN .env
+########################################################################
+# Observability and PII middleware profile (YAML); see
+# docs/observability_middleware_example.yaml.
+# AI_MIDDLEWARE_CONFIG_PATH=./middleware.yaml
+# Vector metric for the embeddings consumer (cosine for Pinecone |
+# cosinesimil for OpenSearch | COSINE for Redis).
+VECTOR_METRIC=cosine
