@@ -8,6 +8,7 @@ import inspect
 import logging
 import math
 import mimetypes
+import re
 import tempfile
 import time
 import urllib.parse
@@ -446,6 +447,8 @@ class AIProviderOrgInfoCapability(BaseModel):
 
 
 BASE_URL_OVERRIDE_LOCAL_HOSTS: tuple[str, ...] = ("localhost", "127.0.0.1", "::1")
+# Characters a provider job id may keep in a video artifact filename.
+RE_VIDEO_ARTIFACT_UNSAFE_CHARS: re.Pattern[str] = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def _redact_url_for_error(str_base_url: str, parsed: Any) -> str:
@@ -5180,6 +5183,31 @@ class AIBaseVideos(AIBase):
                 )
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+
+    def _video_artifact_path(
+        self, output_dir: Path, provider_job_id: str, str_suffix: str = ""
+    ) -> Path:
+        """
+        Build the local path for a downloaded video from the provider's job id.
+
+        The job id comes from the provider response, so it is untrusted: every
+        character outside letters, digits, dot, dash, and underscore becomes an
+        underscore, a dots-only name is refused, and the resolved path must stay
+        inside output_dir.
+        """
+
+        str_stem: str = RE_VIDEO_ARTIFACT_UNSAFE_CHARS.sub("_", provider_job_id)
+        if not str_stem.strip("."):
+            raise ValueError(
+                f"Refusing to write a video artifact for job id {provider_job_id!r}."
+            )
+        file_path: Path = output_dir / f"{str_stem}{str_suffix}.mp4"
+        if not file_path.resolve().is_relative_to(output_dir.resolve()):
+            raise ValueError(
+                f"Video artifact path for job id {provider_job_id!r} "
+                f"escapes the output directory {output_dir}."
+            )
+        return file_path
 
     def _apply_environment_video_property_defaults(
         self,

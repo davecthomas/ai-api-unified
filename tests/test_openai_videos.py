@@ -143,3 +143,64 @@ def test_openai_video_coerce_properties_applies_provider_defaults_for_base_input
     assert coerced_properties.duration_seconds == 8
     assert coerced_properties.resolution == "1280x720"
     assert coerced_properties.aspect_ratio == "16:9"
+
+
+@pytest.mark.parametrize(
+    "str_job_id",
+    ["../../escaped", "/etc/cron.d/job", "..", "sub/../../escaped"],
+)
+def test_openai_video_download_keeps_hostile_job_id_inside_output_dir(
+    tmp_path: Path, str_job_id: str
+) -> None:
+    """A job id from the provider response never writes outside the output dir."""
+
+    output_dir: Path = tmp_path / "videos"
+    provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+    provider._resolve_video_output_dir = lambda _properties: output_dir
+    provider.client.videos.retrieve.return_value = _fake_video(
+        id=str_job_id, status="completed", progress=100
+    )
+    provider.client.videos.download_content.return_value = SimpleNamespace(
+        read=lambda: b"mp4-bytes"
+    )
+
+    try:
+        result = provider.download_video_result(str_job_id)
+    except ValueError as exception:
+        assert "Refusing" in str(exception)
+    else:
+        file_path: Path = result.artifacts[0].file_path
+        assert file_path.parent == output_dir
+        assert file_path.read_bytes() == b"mp4-bytes"
+    for written in tmp_path.rglob("*"):
+        if written.is_file():
+            assert written.parent == output_dir
+
+
+@pytest.mark.parametrize(
+    "str_job_id, str_suffix, str_expected_name",
+    [
+        ("video_123", "", "video_123.mp4"),
+        ("models/veo/operations/abc", "_0", "models_veo_operations_abc_0.mp4"),
+        ("../../x", "", ".._.._x.mp4"),
+        ("/etc/passwd", "", "_etc_passwd.mp4"),
+    ],
+)
+def test_video_artifact_path_maps_job_id_to_a_file_inside_output_dir(
+    tmp_path: Path, str_job_id: str, str_suffix: str, str_expected_name: str
+) -> None:
+    provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+
+    file_path: Path = provider._video_artifact_path(tmp_path, str_job_id, str_suffix)
+
+    assert file_path == tmp_path / str_expected_name
+
+
+@pytest.mark.parametrize("str_job_id", ["", ".", "..", "..."])
+def test_video_artifact_path_refuses_dots_only_job_id(
+    tmp_path: Path, str_job_id: str
+) -> None:
+    provider: _InspectableOpenAIVideos = _InspectableOpenAIVideos()
+
+    with pytest.raises(ValueError, match="Refusing"):
+        provider._video_artifact_path(tmp_path, str_job_id)

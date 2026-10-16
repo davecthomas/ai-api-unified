@@ -481,7 +481,7 @@ class AINovaReelVideos(AIBedrockBase, AIBaseVideos):
                 video_bytes: bytes = response["Body"].read()
                 total_output_bytes = len(video_bytes)
                 sanitized_job_id: str = current_job.provider_job_id.rsplit("/", 1)[-1]
-                file_path = output_dir / f"{sanitized_job_id}.mp4"
+                file_path = self._video_artifact_path(output_dir, sanitized_job_id)
                 file_path.write_bytes(video_bytes)
             artifacts.append(
                 AIVideoArtifact(

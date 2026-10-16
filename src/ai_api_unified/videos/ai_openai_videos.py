@@ -400,7 +400,9 @@ class AIOpenAIVideos(AIOpenAIBase, AIBaseVideos):
                 )
                 video_bytes: bytes = content.read()
                 total_output_bytes = len(video_bytes)
-                file_path: Path = output_dir / f"{current_job.provider_job_id}.mp4"
+                file_path: Path = self._video_artifact_path(
+                    output_dir, current_job.provider_job_id
+                )
                 file_path.write_bytes(video_bytes)
                 artifacts.append(
                     AIVideoArtifact(
