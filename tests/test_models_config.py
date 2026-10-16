@@ -412,3 +412,60 @@ class TestFactoryPolicy:
             isinstance(client, AiRouterCompletions)
             and client.default_client.model_name == "claude-haiku-4-5"
         )
+
+
+class TestDeprecatedSelectionKeys:
+    """A selection key left in the environment is honored, and warned about once."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self) -> Iterator[None]:
+        from ai_api_unified.util.env_settings import (
+            reset_deprecated_selection_warnings,
+        )
+
+        reset_deprecated_selection_warnings()
+        yield
+        reset_deprecated_selection_warnings()
+
+    def test_env_key_overrides_the_file_with_one_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv(
+            "AI_MODELS_CONFIG", '{"completions": {"model": "from-file"}}'
+        )
+        monkeypatch.setenv("COMPLETIONS_MODEL_NAME", "from-env")
+        with caplog.at_level(
+            logging.WARNING, logger="ai_api_unified.util.env_settings"
+        ):
+            assert EnvSettings().get_setting("COMPLETIONS_MODEL_NAME") == "from-env"
+            assert EnvSettings().get_setting("COMPLETIONS_MODEL_NAME") == "from-env"
+        records = [r for r in caplog.records if hasattr(r, "ai_config_event")]
+        assert len(records) == 1
+        assert records[0].ai_config_event == "deprecated_selection_key"
+        assert records[0].setting == "COMPLETIONS_MODEL_NAME"
+        assert records[0].models_config_field == "completions.model"
+        assert "migrate2json.py" in records[0].getMessage()
+
+    def test_file_only_and_blank_env_draw_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv(
+            "AI_MODELS_CONFIG", '{"completions": {"model": "from-file"}}'
+        )
+        monkeypatch.setenv("COMPLETIONS_FALLBACKS", "")
+        with caplog.at_level(
+            logging.WARNING, logger="ai_api_unified.util.env_settings"
+        ):
+            assert EnvSettings().get_setting("COMPLETIONS_MODEL_NAME") == "from-file"
+            EnvSettings().get_setting("COMPLETIONS_FALLBACKS", "")
+        assert not [r for r in caplog.records if hasattr(r, "ai_config_event")]
+
+    def test_non_selection_keys_never_warn(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        with caplog.at_level(
+            logging.WARNING, logger="ai_api_unified.util.env_settings"
+        ):
+            EnvSettings().get_setting("ANTHROPIC_API_KEY")
+        assert not [r for r in caplog.records if hasattr(r, "ai_config_event")]

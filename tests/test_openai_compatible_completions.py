@@ -376,6 +376,10 @@ DICT_REVIEWED_OPENAI_METHODS: dict[str, str] = {
     "_asend_prompt_provider": "shared",
     "_asend_structured_output_provider": "shared",
     "_async_client_for_call": "shared",
+    # Thinking levels map to reasoning_effort, which OpenAI-compatible
+    # servers that run reasoning models accept; servers without a
+    # reasoning control never receive it (capabilities.thinking is None).
+    "_thinking_request_kwargs": "shared",
     "_build_capabilities": "overridden",
     "_build_chat_conversation_request_kwargs": "shared",
     "_build_chat_provider_tools": "shared",

@@ -60,6 +60,7 @@ from ..ai_base import (
     AITurnResult,
 )
 from ..ai_provider_exceptions import AiFallbackReason, AiProviderRequestError
+from ..thinking import parse_thinking_level
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -398,6 +399,28 @@ class AiFallbackCompletions(AIBaseCompletions):
         return client if client is not None else self.primary
 
     @property
+    def last_thinking(self) -> Any:
+        """The thinking resolution of the candidate that served the last call."""
+        # Normal return via the serving candidate.
+        return self.last_route_client.last_thinking
+
+    @property
+    def thinking_level(self) -> Any:
+        """The primary's level; the setter applies one level to every candidate."""
+        # Normal return via the primary, which every candidate mirrors.
+        return self.primary.thinking_level
+
+    @thinking_level.setter
+    def thinking_level(self, value: Any) -> None:
+        self._thinking_level = parse_thinking_level(value)
+        # Loop over built candidates so each applies the level; later builds
+        # pick it up in _client_at.
+        for _, client in self._built_clients():
+            client.thinking_level = self._thinking_level
+        # Normal return after propagating the level.
+        return None
+
+    @property
     def capabilities(self) -> AICompletionsCapabilitiesBase:
         """The primary's capabilities."""
         # Normal return with the primary descriptor.
@@ -493,6 +516,8 @@ class AiFallbackCompletions(AIBaseCompletions):
             self._clients[int_index] = self._UNBUILDABLE
             # Early return: this candidate is out of the chain.
             return None
+        if self._thinking_level is not None:
+            client.thinking_level = self._thinking_level
         self._clients[int_index] = client
         # Normal return with the newly built client.
         return client

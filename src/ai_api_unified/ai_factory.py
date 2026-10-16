@@ -13,6 +13,7 @@ import logging
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
+from .thinking import AIThinkingLevel, parse_thinking_level
 from .ai_base import (
     AIBaseClassifier,
     AIBaseCompletions,
@@ -36,6 +37,7 @@ from .routing.router_config import (
     prune_router_config,
 )
 from .ai_models_config import (
+    DICT_SETTING_FIELD_NAMES,
     MODEL_POLICY_EVENT_DENIED,
     AIModelPolicy,
     AIModelsConfig,
@@ -265,7 +267,8 @@ class AIFactory:
         str_engine_normalized: str = str_engine_value.strip().lower()
         if not str_engine_normalized:
             raise ValueError(
-                f"{str_engine_key} must be configured explicitly; there is no default provider."
+                f"{DICT_SETTING_FIELD_NAMES.get(str_engine_key, str_engine_key)} in "
+                "models.json must be configured explicitly; there is no default provider."
             )
         return str_engine_normalized
 
@@ -309,6 +312,7 @@ class AIFactory:
         fallbacks: Sequence[AIFallbackCandidate | tuple[str, str]] | None = None,
         fallback_on: Iterable[AiFallbackReason | str] | None = None,
         router: AIRouterConfig | None = None,
+        thinking: AIThinkingLevel | str | None = None,
     ) -> AIBaseCompletions:
         """
         Instantiates the configured completions client.
@@ -334,6 +338,11 @@ class AIFactory:
                 JSON). When present, the returned client classifies each
                 request and routes it to a tier of models, with this engine
                 and its chain as the default route.
+            thinking: Optional provider-neutral thinking level (an
+                AIThinkingLevel or its value: off, minimal, low, medium, high,
+                max) applied to every client this call builds, the primary,
+                its fallbacks, and the router's tiers; defaults to
+                `completions.thinking` in models.json, then medium.
 
         Returns:
             Concrete AIBaseCompletions implementation for the requested engine,
@@ -410,8 +419,22 @@ class AIFactory:
                     str_classifier_missing=str_classifier_missing,
                 )
             )
-        primary: AIBaseCompletions = AIFactory._build_completions_client(
-            str_engine, str_model_name, base_url
+        level_thinking: AIThinkingLevel | None = parse_thinking_level(thinking)
+
+        def _build_leveled(candidate: AIFallbackCandidate) -> AIBaseCompletions:
+            """Builds one candidate's client with the requested thinking level."""
+            client: AIBaseCompletions = AIFactory._build_completions_client(
+                candidate.engine, candidate.model, candidate.base_url
+            )
+            if level_thinking is not None:
+                client.thinking_level = level_thinking
+            # Normal return with the leveled client.
+            return client
+
+        primary: AIBaseCompletions = _build_leveled(
+            AIFallbackCandidate(
+                engine=str_engine, model=str_model_name, base_url=base_url
+            )
         )
         frozenset_reasons: frozenset[AiFallbackReason] = (
             AIFactory._resolve_fallback_reasons(
@@ -427,9 +450,7 @@ class AIFactory:
                 ),
                 fallback_candidates=list_fallbacks,
                 fallback_on=frozenset_reasons,
-                client_builder=lambda candidate: AIFactory._build_completions_client(
-                    candidate.engine, candidate.model, candidate.base_url
-                ),
+                client_builder=_build_leveled,
             )
         if router_config is None:
             # Normal return without a router: the plain engine or its chain.
@@ -447,9 +468,7 @@ class AIFactory:
             default_client=default_client,
             config=router_config,
             classifier=classifier,
-            client_builder=lambda candidate: AIFactory._build_completions_client(
-                candidate.engine, candidate.model, candidate.base_url
-            ),
+            client_builder=_build_leveled,
             fallback_on=router_config.fallback_on or frozenset_reasons,
             str_classifier_unavailable_reason=str_unavailable,
         )
@@ -1157,7 +1176,7 @@ class AIFactory:
             # Early return with the key-backed default.
             return DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY
         raise ValueError(
-            f"{CLASSIFIER_ENGINE_KEY} must be configured explicitly, or set "
+            "classifier.engine in models.json must be configured explicitly, or set "
             f"{OPENAI_API_KEY_SETTING} to use the default "
             f"{DEFAULT_CLASSIFIER_ENGINE_WITH_OPENAI_KEY} classifier."
         )

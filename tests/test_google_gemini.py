@@ -599,6 +599,8 @@ class TestGoogleGeminiModules:
                             top_p=0.9,
                             top_k=2,
                             max_output_tokens=1024,
+                            # The default medium thinking level on Gemini 2.5.
+                            thinking_config={"thinking_budget": 8192},
                         )
 
     def test_gemini_completions_structured_prompt(self):
@@ -651,6 +653,8 @@ class TestGoogleGeminiModules:
                             system_instruction=(
                                 "Respond only with JSON following the provided schema."
                             ),
+                            # The default medium thinking level on Gemini 2.5.
+                            thinking_config={"thinking_budget": 8192},
                             response_mime_type="application/json",
                             response_schema=ExampleStructuredPrompt,
                         )

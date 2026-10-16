@@ -1,4 +1,4 @@
-# ai-api-unified 3.4.0
+# ai-api-unified 3.5.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -38,11 +38,11 @@ The current package architecture is registry-backed and lazy-loaded:
 More than 100 models from 10 model makers (OpenAI, Anthropic, Google,
 Amazon, DeepSeek, Alibaba Qwen, Z.ai, Voyage AI, ElevenLabs, and Microsoft)
 behind one interface, plus any server that speaks the OpenAI API. Switching
-models is a configuration change: set the capability's engine (for example
-`COMPLETIONS_ENGINE`) and model (`COMPLETIONS_MODEL_NAME`).
+models is a configuration change: set the capability's engine and model in
+`models.json` (for example `completions.engine` and `completions.model`).
 
 <!-- supported-models:start -->
-| Capability | Provider | Engine (`*_ENGINE`) | Models |
+| Capability | Provider | Engine (`<section>.engine`) | Models |
 | --- | --- | --- | --- |
 | Completions | OpenAI | `openai`, `openai-responses` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (default), `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano` ⚠ until 2026-10-23, `o4-mini` ⚠ until 2026-10-23, `gpt-4o`, `gpt-4o-mini` |
 | Completions | Anthropic | `claude` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5` (default), `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
@@ -52,7 +52,7 @@ models is a configuration change: set the capability's engine (for example
 | Completions | Amazon Bedrock: DeepSeek | `bedrock` | `deepseek.v3.2`, `us.deepseek.r1-v1:0` |
 | Completions | Amazon Bedrock: Qwen (Alibaba) | `bedrock` | `qwen.qwen3-next-80b-a3b`, `qwen.qwen3-235b-a22b-2507-v1:0`, `qwen.qwen3-coder-next`, `qwen.qwen3-32b-v1:0` |
 | Completions | Amazon Bedrock: GLM (Z.ai) | `bedrock` | `zai.glm-5`, `zai.glm-4.7`, `zai.glm-4.7-flash` |
-| Completions | Any OpenAI-compatible server (vLLM, Ollama, LiteLLM, ...) | `openai-compatible` | any model the server hosts (`COMPLETIONS_MODEL_NAME`) |
+| Completions | Any OpenAI-compatible server (vLLM, Ollama, LiteLLM, ...) | `openai-compatible` | any model the server hosts (`completions.model`) |
 | Embeddings | OpenAI | `openai` | `text-embedding-3-small` (default), `text-embedding-3-large`, `text-embedding-ada-002` |
 | Embeddings | Google | `google-gemini` | `gemini-embedding-001` (default), `gemini-embedding-2` (multimodal) |
 | Embeddings | Voyage AI | `voyage` | `voyage-4-large`, `voyage-4`, `voyage-4-lite`, `voyage-code-4`, `voyage-3.5`, `voyage-3.5-lite`, `voyage-3-lite`, `voyage-3` (default), `voyage-3-large`, `voyage-code-3`, `voyage-finance-2`, `voyage-law-2` |
@@ -208,30 +208,34 @@ poetry install --all-extras --with dev
 | `similarity_score`               | NumPy-based similarity helpers                                         |
 | `dev`                            | Optional dev dependencies from `[project.optional-dependencies]`       |
 
-### Environment File
+### Environment File and models.json
 
-Copy [`env_template`](env_template) to `.env` and fill in only the providers you use.
-
-The OSS template defaults to Google API-key auth:
+Two files: `.env` holds credentials and endpoint overrides; `models.json`
+holds every model selection. Copy [`env_template`](env_template) to `.env`
+and fill in only the providers you use, and copy
+[`models_sample.json`](models_sample.json) to `models.json` and keep the
+sections you need. The sample defaults to Google with API-key auth:
 
 ```dotenv
-COMPLETIONS_ENGINE=google-gemini
-EMBEDDING_ENGINE=google-gemini
-IMAGE_ENGINE=google-gemini
-VIDEO_ENGINE=google-gemini
-AI_VOICE_ENGINE=google
-
 GOOGLE_GEMINI_API_KEY=...
 GOOGLE_AUTH_METHOD=api_key
-
-COMPLETIONS_MODEL_NAME=gemini-3.7-flash
-EMBEDDING_MODEL_NAME=gemini-embedding-001
-IMAGE_MODEL_NAME=gemini-3.1-flash-image
-VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
-DEFAULT_GEMINI_TTS_MODEL=gemini-2.5-pro-tts
 ```
 
-Leave `EMBEDDING_DIMENSIONS` unset unless you deliberately want a provider-specific override. The library preserves provider defaults.
+```json
+{
+  "completions": {"engine": "google-gemini", "model": "gemini-3.7-flash", "thinking": "medium"},
+  "embeddings":  {"engine": "google-gemini", "model": "gemini-embedding-001"},
+  "images":      {"engine": "google-gemini", "model": "gemini-3.1-flash-image"},
+  "videos":      {"engine": "google-gemini", "model": "veo-3.1-lite-generate-preview"},
+  "voice":       {"engine": "google", "tts_model": "gemini-2.5-pro-tts"}
+}
+```
+
+Leave `embeddings.dimensions` at `0` unless you deliberately want a
+provider-specific size. The library preserves provider defaults. A `.env`
+from before `models.json` still works: each selection key it carries
+overrides the file and logs a deprecation warning; `scripts/migrate2json.py`
+moves them (see Configuration).
 
 ### Smoke Test
 
@@ -255,13 +259,15 @@ print(response)
 
 ### Completions with automatic fallback
 
-Add one setting and the same client keeps serving when the primary model
+Add one list and the same client keeps serving when the primary model
 cannot. The chain below runs Claude first, then OpenAI, then Gemini:
 
-```bash
-COMPLETIONS_ENGINE=claude
-COMPLETIONS_MODEL_NAME=claude-opus-5
-COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
+```json
+"completions": {
+  "engine": "claude",
+  "model": "claude-opus-5",
+  "fallbacks": ["openai:gpt-5.6-luna", "google-gemini:gemini-3.7-flash"]
+}
 ```
 
 ```python
@@ -317,7 +323,7 @@ if client.capabilities.supports_token_counting:
 ### OpenAI Responses engine
 
 OpenAI exposes two completions engines. The default `openai` engine uses Chat
-Completions; the `openai-responses` engine (`COMPLETIONS_ENGINE=openai-responses`)
+Completions; the `openai-responses` engine (`completions.engine: "openai-responses"`)
 uses the Responses API, OpenAI's successor to Chat Completions. Both implement
 `send_prompt`, `strict_schema_prompt`, and
 `send_prompt_streaming`. The Responses engine is text-only for now; use the
@@ -332,10 +338,12 @@ surface as the `openai` engine: `send_prompt`, streaming,
 `send_conversation` with tools, `send_structured_output`,
 `strict_schema_prompt`, and the async variants.
 
+```json
+"completions": {"engine": "openai-compatible", "model": "Qwen/Qwen3-32B"}
+```
+
 ```dotenv
-COMPLETIONS_ENGINE=openai-compatible
 OPENAI_COMPATIBLE_BASE_URL=http://localhost:8000/v1   # required
-COMPLETIONS_MODEL_NAME=Qwen/Qwen3-32B                 # required
 OPENAI_COMPATIBLE_API_KEY=...                         # optional for local servers
 OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=json_schema       # or json_object
 OPENAI_COMPATIBLE_CONTEXT_WINDOW=131072               # optional context guard
@@ -372,9 +380,11 @@ engine additionally implements the async variants and batch completions. Use
 `claude` for the current model lineup on Anthropic's own endpoint; use
 `anthropic` when your Claude access is provisioned through AWS.
 
+```json
+"completions": {"engine": "claude", "model": "claude-opus-5"}
+```
+
 ```dotenv
-COMPLETIONS_ENGINE=claude
-COMPLETIONS_MODEL_NAME=claude-opus-5
 ANTHROPIC_API_KEY=...
 ```
 
@@ -430,6 +440,85 @@ has no per-call timeout). See the support matrix below.
 
 Unsupported combinations raise the typed `AiProviderCapabilityUnsupportedError`
 and each engine's `client.capabilities` flags report support at runtime.
+
+### Thinking levels
+
+How much a model thinks before answering is one provider-neutral setting,
+`AIThinkingLevel`, with six values: `off`, `minimal`, `low`, `medium`,
+`high`, `max`. Configuration and application code use the level; each
+engine applies it through its provider's own control, and no code or config
+names a provider field. The default is `medium`.
+
+```python
+from ai_api_unified import AIFactory, AIThinkingLevel
+
+client = AIFactory.get_ai_completions_client(thinking="high")   # or "thinking": "high" in models.json
+client.thinking_level = AIThinkingLevel.LOW                      # change the default for later calls
+
+text = client.send_prompt("...", other_params=params_with(thinking=AIThinkingLevel.MAX))
+turn = client.send_conversation(system, messages, provider_options={"thinking_level": "off"})
+result = client.send_structured_output(prompt, response_model=Summary,
+                                       provider_options={"thinking_level": "low"})
+
+turn.thinking.requested, turn.thinking.applied, turn.thinking.exact   # AIThinkingResolution
+client.last_thinking                                                   # for send_prompt and friends
+```
+
+Precedence: the call (`other_params.thinking` on the text methods; the
+reserved `thinking_level` key in `provider_options` on `send_conversation`
+and `send_structured_output`, stripped before the options reach the
+provider), then the client (`thinking_level`, set by the `thinking=`
+factory argument), then `completions.thinking` in `models.json`, then
+`medium`. The level has no `.env` key: it is a model selection, and those
+live in the file. The factory applies one level to the primary,
+its fallbacks, and every router tier, so a request that fails over keeps its
+level.
+
+`client.capabilities.thinking` lists the standard levels the model honors
+exactly (`None` when the model has no thinking control). A requested level
+outside that list resolves to the nearest one the model supports, and a tie
+goes to the lower level, since lower thinking is cheaper and the caller
+asked for no more. The library records both levels: on `result.thinking` and
+`client.last_thinking` (`requested`, `applied`, `exact`, and a `reason`
+such as `unsupported_level`, `no_thinking_control`, `forced_tool_choice`,
+`assistant_prefill`, or `max_tokens_too_small`), on every completions
+observability event (`thinking_requested`, `thinking_applied`,
+`thinking_exact`), and in an `ai_thinking_event` log line when they differ.
+
+How each engine applies a level:
+
+| Engine | Models | `off` | `minimal` | `low` / `medium` / `high` / `max` |
+|---|---|---|---|---|
+| `claude`, Bedrock Claude | Fable 5 / 5.1, Opus 5.5 (always on) | nearest: `low` | nearest: `low` | `output_config.effort` |
+| `claude`, Bedrock Claude | Opus 5, Haiku 5.5, Sonnet 5, Opus 4.6 to 4.8, Sonnet 4.6 | `thinking.type: disabled` | nearest: `off` | `thinking.type: adaptive` + `output_config.effort` |
+| `claude`, Bedrock Claude | Sonnet 5.5 | `thinking.type: between_tools` | nearest: `off` | `thinking.type: adaptive` + `output_config.effort` |
+| `claude`, Bedrock Claude | Haiku 4.5, Sonnet 4.5, Opus 4.5, Opus 4.1, Sonnet 4, Opus 4, 3.7 Sonnet | omit `thinking` | nearest: `off` | `thinking.budget_tokens` 1024 / 4096 / 16384 / 32768, capped at `max_tokens` less 1024 kept for the answer |
+| `claude`, Bedrock Claude | Claude 3 Opus and Haiku, 3.5 Sonnet and Haiku | no control | no control | no control |
+| `openai`, `openai-responses` | GPT-5.1 and later, GPT-6 | `reasoning_effort: none` (not on GPT-6 Astra) | nearest | `low` / `medium` / `high` / `xhigh` |
+| `openai`, `openai-responses` | GPT-5, GPT-5 mini, nano, pro, codex, and dated snapshots | nearest: `minimal` | `minimal` | `low` / `medium` / `high` / nearest: `high` |
+| `openai`, `openai-responses` | o-series | nearest: `low` | nearest: `low` | `low` / `medium` / `high` / nearest: `high` |
+| `openai`, `openai-compatible` | GPT-4.1, GPT-4o, uncataloged | no control | no control | no control |
+| `google-gemini` | Gemini 3 Flash and later | nearest: `minimal` | `thinking_level: MINIMAL` | `LOW` / `MEDIUM` / `HIGH` / nearest: `HIGH` |
+| `google-gemini` | Gemini 3 Pro | nearest: `low` | nearest: `low` | `LOW` / nearest / `HIGH` / nearest: `HIGH` |
+| `google-gemini` | Gemini 2.5 Flash, Flash Lite | `thinking_budget: 0` | nearest: `off` | `thinking_budget` 1024 / 8192 / 16384 / 24576 |
+| `google-gemini` | Gemini 2.5 Pro | nearest: `low` | nearest: `low` | `thinking_budget` 1024 / 8192 / 16384 / 32768 |
+| Bedrock | Nova, DeepSeek, Qwen, GLM | no control | no control | no control |
+
+On Bedrock the Claude fields travel under `additionalModelRequestFields`.
+The engines merge these fields before `provider_options`, so a caller's own
+`thinking`, `reasoning_effort`, or `thinking_config` still wins. Three
+request shapes turn thinking off on models that allow it, with the reason
+recorded: a forced `tool_choice` (Claude rejects the pair), an assistant
+prefill (Bedrock's `strict_schema_prompt` on pre-4.6 Claude), and a
+`max_tokens` with no room for the 1024-token minimum budget after 1024
+tokens are kept for the answer. Bedrock's `send_prompt` and streaming
+defaults of 256 tokens rise to 4096 on budget-era Claude models when the
+caller sets no cap, so the configured level is applied.
+
+The tables follow each provider's documentation as of October 2026 and the
+live test (`poetry run pytest -m nonmock tests/test_thinking_levels_nonmock.py -q`)
+exercises the configured models. When a model rejects a value the table
+lists, the provider returns its own 400; correct the table entry.
 
 ### Structured output extraction (send_structured_output)
 
@@ -616,7 +705,7 @@ Engine retry behavior:
   `AWS_MAX_ATTEMPTS` environment variable.
 
 Every engine accepts `retry_policy` at the constructor, through configuration
-(`COMPLETIONS_RETRY_POLICY=none`), or per call
+(`completions.retry_policy: "none"` in `models.json`), or per call
 (`provider_options={"retry_policy": "none"}`; on Bedrock the per-call
 override collapses that call's schedule). HTTP-level failures raise
 `AiProviderRequestError`, whose `status_code` attribute lets caller backoff
@@ -818,7 +907,7 @@ Anthropic serves none.
   whose capabilities declare `supports_async` (currently `voyage`); others
   raise `AiProviderCapabilityUnsupportedError`.
 - The `voyage` engine honors `retry_policy="none"` (constructor or
-  `COMPLETIONS_RETRY_POLICY=none`) and wraps provider failures in
+  `completions.retry_policy`) and wraps provider failures in
   `AiProviderRequestError` carrying `status_code`, matching the completions
   clients.
 
@@ -844,7 +933,7 @@ Every embeddings client exposes a `capabilities` descriptor stating which input
 types the configured model supports. Text-only models raise
 `AiProviderCapabilityUnsupportedError` from `generate_embeddings_multimodal`.
 Google `gemini-embedding-2` embeds interleaved text, images, video, audio, and
-PDFs into one vector space (set `EMBEDDING_MODEL_NAME=gemini-embedding-2`):
+PDFs into one vector space (set `embeddings.model` to `gemini-embedding-2`):
 
 ```python
 from ai_api_unified import (
@@ -853,7 +942,7 @@ from ai_api_unified import (
     SupportedDataType,
 )
 
-client = AIFactory.get_ai_embedding_client()  # EMBEDDING_MODEL_NAME=gemini-embedding-2
+client = AIFactory.get_ai_embedding_client()  # embeddings.model: gemini-embedding-2
 
 if SupportedDataType.IMAGE in client.capabilities.supported_data_types:
     with open("bicycle.png", "rb") as file_image:
@@ -931,9 +1020,11 @@ print(result.job.status, result.artifacts[0].file_path)
 
 Environment:
 
+```json
+"videos": {"engine": "google-gemini", "model": "veo-3.1-lite-generate-preview"}
+```
+
 ```dotenv
-VIDEO_ENGINE=google-gemini
-VIDEO_MODEL_NAME=veo-3.1-lite-generate-preview
 GOOGLE_GEMINI_API_KEY=...
 GOOGLE_AUTH_METHOD=api_key
 ```
@@ -967,9 +1058,11 @@ for reference only; use the `google-gemini` or `nova-reel` video engine.
 
 Environment:
 
+```json
+"videos": {"engine": "openai", "model": "sora-2"}
+```
+
 ```dotenv
-VIDEO_ENGINE=openai
-VIDEO_MODEL_NAME=sora-2
 OPENAI_API_KEY=...
 ```
 
@@ -1015,7 +1108,7 @@ with open(f"out{voice.default_audio_format.file_extension}", "wb") as output_fil
 `get_default_voice()` and `default_audio_format` supply the provider's own
 defaults. Use `stream_audio(text)` for the streaming variant.
 
-`AIFactory.get_ai_voice_client()` reads `AI_VOICE_ENGINE` and accepts an
+`AIFactory.get_ai_voice_client()` reads `voice.engine` from `models.json` and accepts an
 explicit `voice_engine` override, matching the other capability constructors.
 It delegates to `AIVoiceFactory.create()`, which remains supported and callable
 with no arguments.
@@ -1028,7 +1121,7 @@ originating caller id unless the application sets one through the
 observability context.
 
 The OpenAI voice client shares `AIOpenAIBase` with the other OpenAI-backed
-capabilities, so it honors `COMPLETIONS_RETRY_POLICY` and `OPENAI_BASE_URL_OVERRIDE`,
+capabilities, so it honors `completions.retry_policy` and `OPENAI_BASE_URL_OVERRIDE`,
 and accepts the same `retry_policy` and `base_url` constructor arguments:
 
 ```python
@@ -1043,8 +1136,8 @@ Only the `openai` voice engine accepts these; passing them to `google`,
 `azure`, or `elevenlabs` raises `AiProviderCapabilityUnsupportedError` rather
 than ignoring them.
 
-A blank retry-policy setting (`COMPLETIONS_RETRY_POLICY=`) is treated as
-unconfigured and falls back to `default` across every OpenAI-backed capability.
+A blank `completions.retry_policy` is treated as unconfigured and falls back
+to `default` across every OpenAI-backed capability.
 
 ## Classification
 
@@ -1059,7 +1152,7 @@ prompt and parsing an answer. The model router (a later section) is one consumer
 ```python
 from ai_api_unified import AIFactory, AIClassificationChoice
 
-client = AIFactory.get_ai_classifier_client()   # CLASSIFIER_ENGINE from env
+client = AIFactory.get_ai_classifier_client()   # classifier.engine from models.json
 result = client.classify_choice(
     "My invoice shows two charges for one order.",
     [
@@ -1129,8 +1222,8 @@ logger; it is never a silent zero.
 
 | Setting | Meaning |
 | ------- | ------- |
-| `CLASSIFIER_ENGINE` | Engine token. When unset, `openai-decisions` is used if `OPENAI_API_KEY` is set; otherwise the factory raises. |
-| `CLASSIFIER_MODEL_NAME` | Model override; blank falls back to `COMPLETIONS_MODEL_NAME` for structured-output engines, then the engine's default (`gpt-6-luna` for `openai-decisions`). |
+| `classifier.engine` (`models.json`) | Engine token. When unset, `openai-decisions` is used if `OPENAI_API_KEY` is set; otherwise the factory raises. |
+| `classifier.model` | Model override; blank falls back to `completions.model` for structured-output engines, then the engine's default (`gpt-6-luna` for `openai-decisions`). |
 | `AIFactory.get_ai_classifier_client(classifier_engine=, model_name=, base_url=)` | Arguments override the settings. |
 
 Exports: `AIBaseClassifier`, `AIClassifierCapabilitiesBase`,
@@ -1159,19 +1252,20 @@ so it acts only on failures another model could serve.
 
 ### Setting up a chain
 
-From configuration, which is the usual way:
+From `models.json`, which is the usual way:
 
-```bash
-# The primary stays where it always was.
-COMPLETIONS_ENGINE=claude
-COMPLETIONS_MODEL_NAME=claude-opus-5
-
-# Ordered engine:model pairs to try after the primary fails.
-COMPLETIONS_FALLBACKS=openai:gpt-5.6-luna,google-gemini:gemini-3.7-flash
-
-# Optional. Which failures trigger a move; this is the default.
-COMPLETIONS_FALLBACK_ON=unavailable,rate_limited,quota_exhausted,auth_rejected
+```json
+"completions": {
+  "engine": "claude",
+  "model": "claude-opus-5",
+  "fallbacks": ["openai:gpt-5.6-luna", "google-gemini:gemini-3.7-flash"],
+  "fallback_on": "unavailable,rate_limited,quota_exhausted,auth_rejected"
+}
 ```
+
+`fallbacks` lists the `engine:model` pairs to try, in order, after the
+primary fails; `fallback_on` names the failures that trigger a move (the
+value above is the default).
 
 Or in code, which overrides the settings:
 
@@ -1191,7 +1285,7 @@ client = AIFactory.get_ai_completions_client(
 
 Rules for the chain:
 
-- The split in `COMPLETIONS_FALLBACKS` is on the first colon only, so Bedrock
+- The split in each `fallbacks` entry is on the first colon only, so Bedrock
   ids keep theirs: `bedrock:amazon.nova-lite-v1:0`. A pair with no model
   (`google-gemini`) uses that engine's default model.
 - Each fallback engine needs its own credentials and optional extra, exactly
@@ -1236,7 +1330,7 @@ Rules for the chain:
 
 `MODEL_UNAVAILABLE` is off by default because an unknown model id usually
 means a configuration typo, and a working fallback would hide it. Turn it on
-with `fallback_on` or `COMPLETIONS_FALLBACK_ON` when you want an unknown or
+with `fallback_on` when you want an unknown or
 retired model to fail over.
 
 `TIMEOUT` is off by default because the deadline is yours, and a failover
@@ -1374,8 +1468,8 @@ across the chain.
 
 | Setting | Meaning |
 | ------- | ------- |
-| `COMPLETIONS_FALLBACKS` | Ordered `engine:model` pairs tried after the primary fails. Blank or unset means no chain. |
-| `COMPLETIONS_FALLBACK_ON` | Comma-separated `AiFallbackReason` values that trigger a move. Default `unavailable,rate_limited,quota_exhausted,auth_rejected`. |
+| `completions.fallbacks` (`models.json`) | Ordered `engine:model` pairs tried after the primary fails. Empty or absent means no chain. |
+| `completions.fallback_on` | `AiFallbackReason` values (a list, or comma-separated) that trigger a move. Default `unavailable,rate_limited,quota_exhausted,auth_rejected`. |
 | `fallbacks=` (factory argument) | Same as the setting, as `(engine, model)` tuples or `AIFallbackCandidate` objects; overrides the setting. `[]` turns the chain off. |
 | `fallback_on=` (factory argument) | Same as the setting, as reasons or their values; overrides the setting. |
 
@@ -1433,9 +1527,8 @@ can read.
 }
 ```
 
-Point `COMPLETIONS_ROUTER_CONFIG` at the file (or set it to the JSON
-itself), keep `COMPLETIONS_ENGINE` and `COMPLETIONS_MODEL_NAME` as they
-are, and call the factory as usual:
+Put it in the `router` section of `models.json`, keep `completions.engine`
+and `completions.model` as they are, and call the factory as usual:
 
 ```python
 client = AIFactory.get_ai_completions_client()      # an AiRouterCompletions
@@ -1444,17 +1537,16 @@ print(client.last_tier, client.last_decision)
 ```
 
 In code, pass `router=AIRouterConfig(...)` instead. The configured
-completions LLM, with its `COMPLETIONS_FALLBACKS` chain, is the **default
+completions LLM, with its `completions.fallbacks` chain, is the **default
 route**: where calls go when no classifier is available, when the
 classifier fails, or when `default_tier` is unset.
 
 ### The classifier
 
 The router uses a classification engine (see Classification). Resolution
-order: `COMPLETIONS_ROUTER_CLASSIFIER` (`engine:model`), then the config's
-`classifier`, then the classification factory's own resolution
-(`CLASSIFIER_ENGINE`, then `openai-decisions` when `OPENAI_API_KEY` is
-set). Set either to `none` to route without a classifier; if the
+order: the router's own `classifier` entry, then the top-level
+`classifier` section of `models.json`, then `openai-decisions` when
+`OPENAI_API_KEY` is set. Set either to `none` to route without a classifier; if the
 classifier cannot be built, the router logs `classifier_unavailable` once
 and degrades to the default route, and never raises at startup.
 
@@ -1518,8 +1610,8 @@ cost by tier needs no extra work. The classifier call itself carries
 
 | Setting | Meaning |
 | ------- | ------- |
-| `COMPLETIONS_ROUTER_CONFIG` | Path to a JSON file, or inline JSON, with `tiers`, optional `classifier`, `default_tier`, `on_exhausted`, `fallback_on`. |
-| `COMPLETIONS_ROUTER_CLASSIFIER` | `engine:model` for the router's classifier, or `none`. Overrides the config's `classifier`. |
+| `router` (`models.json`) | `tiers`, optional `classifier`, `default_tier`, `on_exhausted`, `fallback_on`. |
+| `classifier` (`models.json`) | The classifier the router uses when its own `classifier` entry is absent; `{"engine": "none"}` routes without one. |
 | `AIFactory.get_ai_completions_client(router=AIRouterConfig(...))` | Code-first configuration; overrides the setting. |
 
 Exports: `AiRouterCompletions`, `AIRouterConfig`, `AIRouterTier`,
@@ -1575,7 +1667,7 @@ the results of the most recent check.
 
 | Setting | Meaning |
 | ------- | ------- |
-| `AI_MODEL_CHECK` | `prune` (default): drop missing models with a warning. `strict`: raise on any missing model. `off`: skip the check. |
+| `model_check.mode` (`models.json`) | `prune` (default): drop missing models with a warning. `strict`: raise on any missing model. `off`: skip the check. `model_check.timeout_seconds` bounds each probe (default 10). |
 
 A client with only a primary and no chain or router runs no check: the
 engine fails on its own at build.
@@ -1614,7 +1706,7 @@ the value may also be inline JSON).
 {
   "allow": ["claude:*", "google-gemini:*", "openai-decisions:*"],
   "deny":  ["openai:gpt-4*", "bedrock"],
-  "completions": {"engine": "google-gemini", "model": "gemini-2.5-flash",
+  "completions": {"engine": "google-gemini", "model": "gemini-2.5-flash", "thinking": "medium",
                   "fallbacks": ["claude:claude-sonnet-5"],
                   "fallback_on": "unavailable,rate_limited,quota_exhausted,auth_rejected"},
   "classifier":  {"engine": "openai-decisions", "model": "gpt-6-luna"},
@@ -1636,19 +1728,17 @@ poetry run python scripts/migrate2json.py            # writes ./models.json
 poetry run python scripts/migrate2json.py --comment-env   # and comments the moved keys out of .env
 ```
 
-It places each selection key in its section, embeds the router file named
-by `COMPLETIONS_ROUTER_CONFIG`, fills structural defaults from
-`models_sample.json`, leaves the allow and deny lists empty, and never
-touches secrets.
+It places each selection in its section, embeds a router file the old
+`.env` pointed at, fills structural defaults from `models_sample.json`,
+leaves the allow and deny lists empty, and never touches secrets.
 
-Each section stands in for the `.env` keys of the same capability
-(`completions.model` for `COMPLETIONS_MODEL_NAME`, `embeddings.engine` for
-`EMBEDDING_ENGINE`, `router` for `COMPLETIONS_ROUTER_CONFIG`, and so on),
-so nothing else in the library changes. Precedence, highest first: an
-explicit factory argument, a process environment variable, a `.env` value,
-the file, the library default. Every key in the tables below still works
-and overrides the file when set, which lets a deployment pin one value
-without editing the file. Secrets (API keys, AWS credentials), `AWS_REGION`,
+The old selection keys are deprecated. One left in `.env` or the process
+environment is still accepted and overrides the file, so a deployment does
+not break, and the library logs one warning per key naming the
+`models.json` field and the migrator command
+(`ai_config_event=deprecated_selection_key`). Precedence, highest first: an
+explicit factory argument, a deprecated environment key, the file, the
+library default. Secrets (API keys, AWS credentials), `AWS_REGION`,
 base-URL overrides, and `AI_MIDDLEWARE_CONFIG_PATH` stay in `.env`.
 
 ### Allow and deny lists
@@ -1669,43 +1759,43 @@ classifier, and the embeddings, image, and video selections.
   model, raises `ValueError` naming the pattern. Runtime never calls a
   denied model.
 
-### Required Engine Selectors
+### Engine selectors
 
-There is no implicit default provider. Set the selector for each capability
-you use, in `models.json` or as a variable:
+There is no implicit default provider. Set the engine for each capability
+you use in `models.json`:
 
-| Environment variable | Valid values                                                                                                                  |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `COMPLETIONS_ENGINE` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
-| `EMBEDDING_ENGINE`   | `openai`, `titan`, `google-gemini`                                                                                            |
-| `CLASSIFIER_ENGINE`  | `openai-decisions`, `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, `anthropic` (see Classification) |
-| `IMAGE_ENGINE`       | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova`                                                                   |
-| `VIDEO_ENGINE`       | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel`                                                                     |
-| `AI_VOICE_ENGINE`    | `openai`, `google`, `azure`, `elevenlabs`                                                                                     |
+| `models.json` field | Valid values |
+| ------------------- | ------------ |
+| `completions.engine` | `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, Bedrock-routed aliases such as `nova`, `anthropic`, `llama`, `mistral`, `cohere`, `ai21`, `rerank` |
+| `embeddings.engine`  | `openai`, `titan`, `google-gemini`, `voyage` |
+| `classifier.engine`  | `openai-decisions`, `openai`, `openai-responses`, `openai-compatible`, `claude`, `google-gemini`, `bedrock`, `anthropic` (see Classification) |
+| `images.engine`      | `openai`, `google-gemini`, `nova-canvas`, `bedrock`, `nova` |
+| `videos.engine`      | `openai`, `google-gemini`, `bedrock`, `nova`, `nova-reel` |
+| `voice.engine`       | `openai`, `google`, `azure`, `elevenlabs` |
 
-### Common Model Settings
+### Model selections
+
+Every section of `models.json` is documented in
+[`models_sample.json`](models_sample.json). The fields, by section:
+
+| Section | Fields |
+| ------- | ------ |
+| `completions` | `engine`, `model`, `fallbacks` (see Model fallback), `fallback_on`, `retry_policy`, `thinking` (see Thinking levels) |
+| `classifier` | `engine`, `model`, `base_url`, `timeout_seconds`, `instructions` |
+| `router` | `tiers`, `classifier`, `default_tier`, `on_exhausted`, `fallback_on` (see Model routing) |
+| `model_check` | `mode` (`prune`, `strict`, `off`), `timeout_seconds` (see Configured-model check) |
+| `embeddings` | `engine`, `model` (`gemini-embedding-2` enables multimodal embeddings), `dimensions` (`0` keeps the provider default) |
+| `images` | `engine`, `model` |
+| `videos` | `engine`, `model`, `output_dir`, `poll_interval_seconds`, `timeout_seconds` |
+| `voice` | `engine`, `tts_model`, `language` |
+| `geo_residency` | `US`, `USA`, or `United States` normalize to US routing where supported |
+
+### Settings that stay in `.env`
 
 | Environment variable        | Notes                                                                                       |
 | --------------------------- | ------------------------------------------------------------------------------------------- |
-| `COMPLETIONS_MODEL_NAME`    | Optional completions model override                                                         |
-| `COMPLETIONS_FALLBACKS`     | Optional ordered `engine:model` pairs tried after the primary fails (see Model fallback)     |
-| `COMPLETIONS_FALLBACK_ON`   | Optional comma-separated `AiFallbackReason` values that trigger a fallback; default `unavailable,rate_limited,quota_exhausted,auth_rejected` |
 | `AI_MODELS_CONFIG` | Path to `models.json`/`.yaml`, or inline JSON; unset uses `./models.json` when present; blank turns the file off |
-| `COMPLETIONS_ROUTER_CONFIG` | Override of the file's `router` section: a JSON file path or inline JSON mapping tiers to `engine:model` chains (see Model routing) |
-| `COMPLETIONS_ROUTER_CLASSIFIER` | Optional `engine:model` for the router's classifier, or `none`; default is the classification factory's resolution |
-| `AI_MODEL_CHECK` | Optional: `prune` (default), `strict`, or `off` for the configured-model check (see Configured-model check) |
-| `AI_MODEL_CHECK_TIMEOUT_SECONDS` | Optional per-probe timeout for the configured-model check (default 10) |
-| `EMBEDDING_MODEL_NAME`      | Optional embeddings model override. `gemini-embedding-2` enables multimodal embeddings.     |
-| `CLASSIFIER_MODEL_NAME`     | Optional classification model override; blank falls back to `COMPLETIONS_MODEL_NAME`, then the engine default |
-| `IMAGE_MODEL_NAME`          | Optional image model override                                                               |
-| `VIDEO_MODEL_NAME`          | Optional video model override                                                               |
-| `VIDEO_OUTPUT_DIR`          | Optional local output directory for materialized video artifacts                            |
-| `VIDEO_POLL_INTERVAL_SECONDS` | Optional default poll interval for video job waits                                        |
-| `VIDEO_TIMEOUT_SECONDS`     | Optional default timeout for blocking video generation                                      |
 | `BEDROCK_VIDEO_OUTPUT_S3_URI` | Required for Nova Reel unless provided per request                                        |
-| `DEFAULT_GEMINI_TTS_MODEL`  | Optional Google voice model override                                                        |
-| `EMBEDDING_DIMENSIONS`      | Optional embeddings dimension override. Leave unset for provider defaults.                  |
-| `AI_API_GEO_RESIDENCY`      | Optional geo hint. `US`, `USA`, or `United States` normalize to US routing where supported. |
 | `AI_MIDDLEWARE_CONFIG_PATH` | Optional YAML config path for observability and PII middleware                              |
 | `ANTHROPIC_BASE_URL_OVERRIDE` | Optional API base-URL override for the `claude` engine (https required) |
 | `OPENAI_BASE_URL_OVERRIDE`  | Optional API base-URL override for the OpenAI engines (https required) |
@@ -1794,15 +1884,8 @@ Required:
 
 - `OPENAI_API_KEY`
 
-Common optional settings:
-
-- `OPENAI_BASE_URL`
-- `COMPLETIONS_MODEL_NAME`
-- `EMBEDDING_MODEL_NAME`
-- `IMAGE_MODEL_NAME`
-- `VIDEO_MODEL_NAME`
-- `EMBEDDING_DIMENSIONS`
-- `AI_API_GEO_RESIDENCY`
+Optional: `OPENAI_BASE_URL_OVERRIDE`. Models and dimensions are selected in
+`models.json`.
 
 #### Anthropic (native Claude API)
 
@@ -1810,9 +1893,7 @@ Required for the `claude` completions engine:
 
 - `ANTHROPIC_API_KEY`
 
-Common optional settings:
-
-- `COMPLETIONS_MODEL_NAME` (defaults to `claude-opus-5`)
+The model is `completions.model` in `models.json` (default `claude-opus-5`).
 
 Claude via Amazon Bedrock (the `anthropic` engine) does not use
 `ANTHROPIC_API_KEY`; it authenticates with AWS credentials like the other
@@ -1830,15 +1911,8 @@ Required:
 - `AWS_REGION`
 - standard AWS credentials in environment or runtime IAM context
 
-Common optional settings:
-
-- `COMPLETIONS_MODEL_NAME`
-- `EMBEDDING_MODEL_NAME`
-- `IMAGE_MODEL_NAME`
-- `VIDEO_MODEL_NAME`
-- `BEDROCK_VIDEO_OUTPUT_S3_URI`
-- `EMBEDDING_DIMENSIONS`
-- `AI_API_GEO_RESIDENCY`
+Optional: `BEDROCK_VIDEO_OUTPUT_S3_URI` (Nova Reel). Models and dimensions
+are selected in `models.json`.
 
 If your AWS profile uses `aws login` (a `login_session` profile), install
 `botocore[crt]` as well; botocore needs it to read those credentials.
@@ -1848,9 +1922,11 @@ If your AWS profile uses `aws login` (a `login_session` profile), install
 AWS hosts these models itself, so requests go to AWS under your AWS account
 and never reach DeepSeek, Alibaba, or Z.ai.
 
+```json
+"completions": {"engine": "bedrock", "model": "deepseek.v3.2"}
+```
+
 ```dotenv
-COMPLETIONS_ENGINE=bedrock
-COMPLETIONS_MODEL_NAME=deepseek.v3.2
 AWS_REGION=us-east-1
 AWS_PROFILE=<your profile>
 ```
@@ -1932,7 +2008,7 @@ Required:
 Optional:
 
 - `MICROSOFT_COGNITIVE_SERVICES_ENDPOINT`
-- `AI_VOICE_LANGUAGE`
+- `voice.language` in `models.json`
 
 #### ElevenLabs
 
@@ -2353,12 +2429,12 @@ git push origin v<version>
 
 ## Troubleshooting
 
-- `COMPLETIONS_ENGINE must be configured explicitly` or similar: set the required engine selector for that capability.
+- An engine `must be configured explicitly` error: set that capability's `engine` in `models.json`.
 - `AiProviderDependencyUnavailableError`: install the extra for the selected provider.
 - Google auth errors: the OSS default is `GOOGLE_AUTH_METHOD=api_key`. If you switch to `service_account`, point `GOOGLE_APPLICATION_CREDENTIALS` at a valid local JSON credential file. Set `GOOGLE_PROJECT_ID` and `GOOGLE_LOCATION` when required.
-- Unexpected embeddings dimensions: leave `EMBEDDING_DIMENSIONS` unset unless you intentionally want a non-default size.
+- Unexpected embeddings dimensions: leave `embeddings.dimensions` at `0` unless you intentionally want a non-default size.
 - Google image generation or TTS failures in live tests often come from account or service state: a disabled cloud API, or missing paid-plan access. Check those before suspecting a library bug.
-- `AI_API_GEO_RESIDENCY=US` is a best-effort routing hint. Only providers that expose regional routing controls can honor it directly.
+- `geo_residency: "US"` is a best-effort routing hint. Only providers that expose regional routing controls can honor it directly.
 
 ## License
 

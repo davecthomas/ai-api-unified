@@ -78,6 +78,7 @@ TUPLE_SAMPLE_DEFAULTS: tuple[tuple[str, str], ...] = (
     ("model_check", "mode"),
     ("model_check", "timeout_seconds"),
     ("completions", "fallback_on"),
+    ("completions", "thinking"),
 )
 TUPLE_SECTION_ORDER: tuple[str, ...] = (
     "allow",

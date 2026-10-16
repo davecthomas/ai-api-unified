@@ -68,7 +68,7 @@ class AIVoiceFactory:
             )
         if not str_engine:
             raise ValueError(
-                "AI_VOICE_ENGINE must be configured explicitly; there is no default provider."
+                "voice.engine in models.json must be configured explicitly; there is no default provider."
             )
 
         # Scope this catch to the registry lookup alone. Provider construction

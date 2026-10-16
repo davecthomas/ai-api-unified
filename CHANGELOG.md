@@ -4,6 +4,57 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.5.0
+
+### Added
+
+- Thinking levels. Configuration and code state how much a model should
+  think as one provider-neutral level, `off`, `minimal`, `low`, `medium`,
+  `high`, or `max` (`AIThinkingLevel`), and each engine applies it through
+  its provider's own control: Anthropic adaptive thinking and
+  `output_config.effort` (or `budget_tokens` on pre-4.6 models), OpenAI
+  `reasoning_effort` (Chat) and `reasoning.effort` (Responses), Gemini
+  `thinking_level` (3.x) or `thinking_budget` (2.5), and the same Claude
+  fields under Bedrock's `additionalModelRequestFields`. Set it with
+  `completions.thinking` in `models.json`, the `thinking=` factory
+  argument, `client.thinking_level`, per call with
+  `other_params.thinking` (text methods) or
+  `provider_options={"thinking_level": ...}` (conversation and structured
+  methods). `capabilities.thinking` lists the standard levels a model honors
+  exactly; a model that cannot honor the requested level applies the nearest
+  one it supports (ties go lower) and records both on `result.thinking` /
+  `client.last_thinking` (`AIThinkingResolution`), on the observability
+  events (`thinking_requested`, `thinking_applied`, `thinking_exact`), and
+  in an `ai_thinking_event` log line. A forced `tool_choice`, an assistant
+  prefill, or a `max_tokens` too small for a thinking budget turns thinking
+  off on models that allow it, with the reason recorded.
+
+### Deprecated
+
+- The `.env` model-selection keys (`COMPLETIONS_ENGINE`,
+  `COMPLETIONS_MODEL_NAME`, `COMPLETIONS_FALLBACKS`, `EMBEDDING_ENGINE`,
+  `IMAGE_MODEL_NAME`, `AI_VOICE_ENGINE`, and the rest of the keys
+  `models.json` replaced in 3.2.0). A key still set in the process
+  environment or `.env` is accepted and overrides the file, and the library
+  logs one warning per key naming the `models.json` field and the migrator
+  (`poetry run python scripts/migrate2json.py --comment-env`;
+  `ai_config_event=deprecated_selection_key`). `env_template` and the
+  README no longer list them; `models_sample.json` documents every
+  selection. The thinking level has no `.env` key at all.
+
+### Changed
+
+- **The default thinking level is `medium` on every model with a thinking
+  control.** Models whose thinking was off unless a caller passed a
+  provider-specific option (Claude Opus 4.7/4.8 and Sonnet 4.6 with
+  adaptive thinking, Claude 4.5 and older with a 4096-token budget, Gemini
+  2.5 with an 8192-token budget, OpenAI reasoning models at
+  `reasoning_effort: medium`) now think at medium by default, which raises
+  their output tokens, latency, and cost. Set `completions.thinking` to
+  `"off"` in `models.json` to keep the previous behavior where the model
+  allows it. A caller's own provider option (`thinking`,
+  `reasoning_effort`, `thinking_config`) still wins over the level.
+
 ## 3.4.0
 
 ### Added

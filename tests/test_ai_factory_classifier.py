@@ -74,7 +74,7 @@ class TestRegistry:
 
 class TestResolution:
     def test_unset_engine_without_openai_key_fails_loudly(self) -> None:
-        with _settings({}), pytest.raises(ValueError, match="CLASSIFIER_ENGINE"):
+        with _settings({}), pytest.raises(ValueError, match="classifier.engine"):
             AIFactory.get_ai_classifier_client()
 
     def test_unset_engine_with_openai_key_uses_decisions(self) -> None:

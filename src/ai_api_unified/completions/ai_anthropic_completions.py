@@ -52,6 +52,13 @@ from ..ai_base import (
     RETRY_POLICY_NONE,
     SupportedDataType,
 )
+from ..thinking import (
+    THINKING_REASON_FORCED_TOOL_CHOICE,
+    THINKING_REASON_NO_CONTROL,
+    AIThinkingLevel,
+    claude_thinking_capabilities,
+    claude_thinking_request_fields,
+)
 from ..ai_provider_exceptions import (
     AiFallbackReason,
     AiProviderRequestError,
@@ -128,6 +135,7 @@ class AICompletionsCapabilitiesAnthropic(AICompletionsCapabilitiesBase):
             supports_async=True,
             supports_prompt_cache_hint=True,
             pricing=get_model_pricing(PROVIDER_ANTHROPIC, normalized_name),
+            thinking=claude_thinking_capabilities(normalized_name),
         )
 
 
@@ -148,6 +156,59 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     SEND_PROMPT_MAX_TOKENS: ClassVar[int] = 16_000
     # Streaming has no timeout concern; give the model room.
     STREAMING_MAX_TOKENS: ClassVar[int] = 64_000
+
+    def _thinking_request_kwargs(
+        self,
+        other_params: AICompletionsPromptParamsBase | None = None,
+        *,
+        max_tokens: int,
+        tool_choice: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        The Messages API fields (`thinking`, `output_config.effort`) that
+        apply this call's thinking level on the configured model.
+
+        A forced tool_choice turns thinking off on models that allow it,
+        since the API rejects the pair; the override is recorded. Merged
+        before provider_options, so a caller's native `thinking` wins.
+
+        Args:
+            other_params: The call's prompt parameters, if any.
+            max_tokens: The request's max_tokens, bounding a budget.
+            tool_choice: A forced tool name, if any.
+
+        Returns:
+            Fields to merge into the request; empty when nothing applies.
+        """
+        resolution = self._thinking_for_call(other_params)
+        level: AIThinkingLevel | None = resolution.applied
+        if level is None:
+            # Early return: the model exposes no thinking control.
+            return {}
+        thinking_caps = getattr(self.capabilities, "thinking", None)
+        if (
+            tool_choice is not None
+            and level is not AIThinkingLevel.OFF
+            and thinking_caps is not None
+            and not thinking_caps.always_on
+        ):
+            level = AIThinkingLevel.OFF
+            self._thinking_applied_override(level, THINKING_REASON_FORCED_TOOL_CHOICE)
+        dict_fields, str_reason = claude_thinking_request_fields(
+            self.completions_model, level, max_tokens=max_tokens
+        )
+        if str_reason is not None:
+            self._thinking_applied_override(
+                (
+                    None
+                    if str_reason == THINKING_REASON_NO_CONTROL
+                    else AIThinkingLevel.OFF
+                ),
+                str_reason,
+            )
+        # Normal return with the provider fields for the level.
+        return dict_fields
+
     # Anthropic rejects images above 5MB per image, below the library-wide
     # 20MB attachment cap, so this engine enforces the tighter limit locally.
     MAX_IMAGE_BYTES_ANTHROPIC: ClassVar[int] = 5_000_000
@@ -986,6 +1047,9 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                         self._resolve_prompt_cache_hint(other_params),
                     ),
                     messages=[{"role": "user", "content": user_content}],
+                    **self._thinking_request_kwargs(
+                        other_params, max_tokens=int_max_tokens
+                    ),
                 )
             except Exception as exception:
                 self._raise_request_error(exception)
@@ -1097,6 +1161,10 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 "schema": self._build_output_config_schema(response_model),
             }
         }
+        dict_thinking_kwargs: dict[str, Any] = self._thinking_request_kwargs(
+            other_params, max_tokens=max_response_tokens
+        )
+        dict_output_config.update(dict_thinking_kwargs.pop("output_config", {}))
 
         def _generate_structured() -> (
             AiApiObservedCompletionsResultModel[AIStructuredPrompt]
@@ -1110,6 +1178,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 ),
                 messages=[{"role": "user", "content": user_content}],
                 output_config=dict_output_config,
+                **dict_thinking_kwargs,
             )
             str_finish_reason: str = str(getattr(response, "stop_reason", "") or "")
             if str_finish_reason == self.STOP_REASON_REFUSAL:
@@ -1222,6 +1291,12 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                     "the prompt instead."
                 )
             dict_request_kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
+        dict_request_kwargs.update(
+            self._thinking_request_kwargs(
+                max_tokens=int(dict_request_kwargs["max_tokens"]),
+                tool_choice=tool_choice,
+            )
+        )
         # provider_options merge last so callers can extend the raw request;
         # unknown keys are the provider's to accept or reject.
         dict_request_kwargs.update(dict_merge_options)
@@ -1506,6 +1581,13 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
             ),
             "output_config": {"format": {"type": "json_schema", "schema": dict_schema}},
         }
+        dict_thinking_kwargs: dict[str, Any] = self._thinking_request_kwargs(
+            max_tokens=max_response_tokens
+        )
+        dict_request_kwargs["output_config"].update(
+            dict_thinking_kwargs.pop("output_config", {})
+        )
+        dict_request_kwargs.update(dict_thinking_kwargs)
         dict_request_kwargs.update(dict_merge_options)
         # Normal return with the Messages-shaped structured request.
         return dict_request_kwargs
@@ -1951,6 +2033,9 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                         self._resolve_prompt_cache_hint(other_params),
                     ),
                     messages=[{"role": "user", "content": user_content}],
+                    **self._thinking_request_kwargs(
+                        other_params, max_tokens=int_max_tokens
+                    ),
                 )
             except Exception as exception:
                 self._raise_request_error(exception)
@@ -2053,6 +2138,9 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 ),
                 messages=[{"role": "user", "content": user_content}],
                 stream=True,
+                **self._thinking_request_kwargs(
+                    other_params, max_tokens=self.STREAMING_MAX_TOKENS
+                ),
             )
             # Loop through Messages stream events so callers see text as it arrives.
             for event in stream:

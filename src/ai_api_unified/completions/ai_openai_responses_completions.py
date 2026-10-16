@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Type
 
 from pydantic import ValidationError
 
+from ..thinking import DICT_OPENAI_EFFORT, AIThinkingLevel
 from ..ai_base import (
     AIBaseCompletions,
     AiApiObservedCompletionsResultModel,
@@ -149,6 +150,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                     **self._build_prompt_cache_kwargs(
                         self._resolve_prompt_cache_hint(other_params)
                     ),
+                    **self._thinking_request_kwargs(other_params),
                 )
             except Exception as exception:
                 self._raise_request_error(exception)
@@ -249,6 +251,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 **self._build_prompt_cache_kwargs(
                     self._resolve_prompt_cache_hint(other_params)
                 ),
+                **self._thinking_request_kwargs(other_params),
             )
             raw_output_text: str = response.output_text or ""
             if not raw_output_text:
@@ -345,6 +348,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 **self._build_prompt_cache_kwargs(
                     self._resolve_prompt_cache_hint(other_params)
                 ),
+                **self._thinking_request_kwargs(other_params),
             )
             # Loop through Responses stream events so callers see text as it arrives.
             for event in stream:
@@ -571,6 +575,21 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
             dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
         )
 
+    def _thinking_request_kwargs(
+        self, other_params: AICompletionsPromptParamsBase | None = None
+    ) -> dict[str, Any]:
+        """
+        The Responses API `reasoning: {effort}` field that applies this
+        call's thinking level, or nothing on a model without a reasoning
+        control. Merged before provider_options, so a caller's own value wins.
+        """
+        level: AIThinkingLevel | None = self._thinking_for_call(other_params).applied
+        if level is None:
+            # Early return: no reasoning control on this model.
+            return {}
+        # Normal return with the nested effort value.
+        return {"reasoning": {"effort": DICT_OPENAI_EFFORT[level]}}
+
     def _build_responses_conversation_request_kwargs(
         self,
         *,
@@ -600,6 +619,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
                 "type": "function",
                 "name": tool_choice,
             }
+        dict_request_kwargs.update(self._thinking_request_kwargs())
         # provider_options merge last so callers can extend the raw request.
         dict_request_kwargs.update(dict_merge_options)
         # Normal return with the Responses-shaped conversation request.
@@ -840,6 +860,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
             },
         }
         dict_request_kwargs.update(self._build_prompt_cache_kwargs(prompt_cache))
+        dict_request_kwargs.update(self._thinking_request_kwargs())
         dict_request_kwargs.update(dict_merge_options)
         # Normal return with the Responses-shaped structured request.
         return dict_request_kwargs
@@ -1047,6 +1068,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
         }
         if max_response_tokens is not None:
             dict_request_kwargs["max_output_tokens"] = max_response_tokens
+        dict_request_kwargs.update(self._thinking_request_kwargs(other_params))
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_completions_observability_input_metadata(
                 prompt=str_redacted_prompt,

@@ -57,6 +57,7 @@ from ..middleware.observability_runtime import (
     set_observability_context,
 )
 from ..middleware.request_cost import RequestCostScope, current_request_cost_scope
+from ..thinking import parse_thinking_level
 from ..routing.router_config import (
     AIRouterConfig,
     AIRouterTier,
@@ -252,6 +253,30 @@ class AiRouterCompletions(AIBaseCompletions):
     # ── Pass-through to the default client ──────────────────────────────────
 
     @property
+    def last_thinking(self) -> Any:
+        """The thinking resolution of the client that served the last call."""
+        # Normal return via the serving client.
+        return self._last_route_client.last_thinking
+
+    @property
+    def thinking_level(self) -> Any:
+        """The default route's level; the setter applies one level to every tier."""
+        # Normal return via the default client, which every tier mirrors.
+        return self._default_client.thinking_level
+
+    @thinking_level.setter
+    def thinking_level(self, value: Any) -> None:
+        self._thinking_level = parse_thinking_level(value)
+        self._default_client.thinking_level = self._thinking_level
+        # Loop over built tiers so each chain applies the level; later builds
+        # pick it up in _tier_client.
+        for chain in self._tier_clients.values():
+            if chain is not None:
+                chain.thinking_level = self._thinking_level
+        # Normal return after propagating the level.
+        return None
+
+    @property
     def capabilities(self) -> AICompletionsCapabilitiesBase:
         # Normal return with the default client's capabilities.
         return self._default_client.capabilities
@@ -391,6 +416,8 @@ class AiRouterCompletions(AIBaseCompletions):
             client_builder=self._client_builder,
             fallback_on=tier.fallback_on or self._fallback_on,
         )
+        if self._thinking_level is not None:
+            client.thinking_level = self._thinking_level
         self._tier_clients[int_index] = client
         # Normal return with the new chain.
         return client

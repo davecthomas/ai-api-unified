@@ -9,6 +9,15 @@ from typing import Any, ClassVar, Type
 from pydantic import ValidationError
 
 from ..ai_completions_exceptions import StructuredResponseTokenLimitError
+from ..thinking import (
+    CLAUDE_CLASS_BUDGET,
+    THINKING_REASON_FORCED_TOOL_CHOICE,
+    THINKING_REASON_NO_CONTROL,
+    AIThinkingLevel,
+    claude_thinking_capabilities,
+    claude_thinking_class,
+    claude_thinking_request_fields,
+)
 from ..ai_base import (
     AIBaseCompletions,
     AiApiObservedCompletionsResultModel,
@@ -210,6 +219,14 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
                 for marker in cls.TUPLE_PROMPT_CACHE_1H_TTL_MODEL_MARKERS
             ),
             pricing=get_model_pricing(PROVIDER_BEDROCK, model_name),
+            # Thinking levels map to Claude's own controls through
+            # additionalModelRequestFields; the other families on Converse
+            # expose no comparable control here.
+            thinking=(
+                claude_thinking_capabilities(normalized_name)
+                if "claude" in normalized_name
+                else None
+            ),
         )
 
 
@@ -419,6 +436,101 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         # Normal return with the validated response model.
         return response_model.model_validate(structured_result.data)
 
+    # maxTokens for a text call with no caller cap on a budget-era Claude
+    # model: room for the smallest budget (1024) plus the answer reserve.
+    BUDGET_DEFAULT_MAX_TOKENS: ClassVar[int] = 4096
+
+    def _thinking_converse_kwargs(
+        self,
+        other_params: AICompletionsPromptParamsBase | None = None,
+        *,
+        max_tokens: int,
+        tool_choice: str | None = None,
+        inference_config: dict[str, Any] | None = None,
+        str_force_off_reason: str | None = None,
+        bool_default_max_tokens: bool = False,
+    ) -> dict[str, Any]:
+        """
+        The Converse `additionalModelRequestFields` that apply this call's
+        thinking level on a Claude model, or nothing elsewhere.
+
+        A forced tool_choice, or an assistant prefill, turns thinking off on
+        models that allow it, since the API rejects either pair. With a
+        thinking budget on, the sampling parameters are removed from
+        `inference_config` in place, since those models reject a non-default
+        temperature or topP alongside thinking.
+
+        Args:
+            other_params: The call's prompt parameters, if any.
+            max_tokens: The request's maxTokens, bounding a budget.
+            tool_choice: A forced tool name, if any.
+            inference_config: The request's inferenceConfig, edited in place.
+            str_force_off_reason: When set, the request shape (an assistant
+                prefill) is incompatible with thinking; off is applied and
+                recorded with this reason.
+            bool_default_max_tokens: True when the caller gave no
+                max_response_tokens and `max_tokens` is the engine's small
+                default. A budget-era model then gets
+                BUDGET_DEFAULT_MAX_TOKENS (raised in `inference_config` in
+                place) so the configured level is applied rather than
+                silently dropped as too small.
+
+        Returns:
+            `{"additionalModelRequestFields": {...}}`, or an empty dict.
+        """
+        resolution = self._thinking_for_call(other_params)
+        level: AIThinkingLevel | None = resolution.applied
+        if level is None:
+            # Early return: no thinking control on this model.
+            return {}
+        thinking_caps = getattr(self.capabilities, "thinking", None)
+        bool_can_turn_off: bool = (
+            thinking_caps is not None and not thinking_caps.always_on
+        )
+        if level is not AIThinkingLevel.OFF and bool_can_turn_off:
+            if tool_choice is not None:
+                level = AIThinkingLevel.OFF
+                self._thinking_applied_override(
+                    level, THINKING_REASON_FORCED_TOOL_CHOICE
+                )
+            elif str_force_off_reason is not None:
+                level = AIThinkingLevel.OFF
+                self._thinking_applied_override(level, str_force_off_reason)
+        if (
+            bool_default_max_tokens
+            and inference_config is not None
+            and level is not AIThinkingLevel.OFF
+            and claude_thinking_class(self.model) == CLAUDE_CLASS_BUDGET
+            and max_tokens < self.BUDGET_DEFAULT_MAX_TOKENS
+        ):
+            max_tokens = self.BUDGET_DEFAULT_MAX_TOKENS
+            inference_config["maxTokens"] = max_tokens
+        dict_fields, str_reason = claude_thinking_request_fields(
+            self.model, level, max_tokens=max_tokens
+        )
+        if str_reason is not None:
+            self._thinking_applied_override(
+                (
+                    None
+                    if str_reason == THINKING_REASON_NO_CONTROL
+                    else AIThinkingLevel.OFF
+                ),
+                str_reason,
+            )
+        if not dict_fields:
+            # Early return: off by omission.
+            return {}
+        if (
+            inference_config is not None
+            and dict_fields.get("thinking", {}).get("type") == "enabled"
+        ):
+            # A budget-era model rejects a non-default temperature or topP
+            # with thinking enabled; adaptive-era models accept sampling.
+            inference_config.pop("temperature", None)
+            inference_config.pop("topP", None)
+        # Normal return with the Claude fields under Converse's escape hatch.
+        return {"additionalModelRequestFields": dict_fields}
+
     def strict_schema_prompt(
         self,
         prompt: str,
@@ -508,6 +620,13 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 max_response_tokens=max_response_tokens,
             )
         )
+        dict_thinking_kwargs: dict[str, Any] = self._thinking_converse_kwargs(
+            other_params,
+            max_tokens=max_response_tokens,
+            inference_config=inference_config,
+            # Claude rejects thinking alongside an assistant prefill.
+            str_force_off_reason="assistant_prefill" if bool_prefill else None,
+        )
 
         def _execute_structured_prompt() -> (
             AiApiObservedCompletionsResultModel[AIStructuredPrompt]
@@ -525,6 +644,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                             self._resolve_prompt_cache_hint(other_params),
                         ),
                         inferenceConfig=inference_config,
+                        **dict_thinking_kwargs,
                     )
                     str_stop_reason: str = (
                         str(resp.get("stopReason", "")).strip().lower()
@@ -721,6 +841,12 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 max_response_tokens=max_response_tokens,
             )
         )
+        dict_thinking_kwargs: dict[str, Any] = self._thinking_converse_kwargs(
+            other_params,
+            max_tokens=int(inference_config["maxTokens"]),
+            inference_config=inference_config,
+            bool_default_max_tokens=max_response_tokens is None,
+        )
 
         def _execute_text_prompt() -> AiApiObservedCompletionsResultModel[str]:
             # Loop through Bedrock text retries while preserving existing backoff behavior.
@@ -734,6 +860,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                             self._resolve_prompt_cache_hint(other_params),
                         ),
                         inferenceConfig=inference_config,
+                        **dict_thinking_kwargs,
                     )
                     content = (
                         response.get("output", {}).get("message", {}).get("content", [])
@@ -836,6 +963,12 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 response_mode=self.RESPONSE_MODE_TEXT,
             )
         )
+        dict_thinking_kwargs: dict[str, Any] = self._thinking_converse_kwargs(
+            other_params,
+            max_tokens=256,
+            inference_config=inference_config,
+            bool_default_max_tokens=True,
+        )
         dict_input_metadata["response_streaming"] = True
 
         dict_stream_state: dict[str, Any] = {
@@ -855,6 +988,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                     self._resolve_prompt_cache_hint(other_params),
                 ),
                 inferenceConfig=inference_config,
+                **dict_thinking_kwargs,
             )
             # Loop through ConverseStream events so callers see text as it arrives.
             for event in response.get("stream", []):
@@ -1650,6 +1784,13 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             dict_request_kwargs["toolConfig"] = self._build_converse_tool_config(
                 tools, tool_choice
             )
+        dict_request_kwargs.update(
+            self._thinking_converse_kwargs(
+                max_tokens=int(dict_request_kwargs["inferenceConfig"]["maxTokens"]),
+                tool_choice=tool_choice,
+                inference_config=dict_request_kwargs["inferenceConfig"],
+            )
+        )
         dict_request_kwargs.update(dict_merge_options)
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = (
             self._build_conversation_observability_metadata(
@@ -2013,6 +2154,12 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
                 }
             },
         }
+        dict_request_kwargs.update(
+            self._thinking_converse_kwargs(
+                max_tokens=max_response_tokens,
+                inference_config=dict_request_kwargs["inferenceConfig"],
+            )
+        )
         dict_request_kwargs.update(dict_merge_options)
         dict_input_metadata: dict[str, ObservabilityMetadataValue] = {
             "response_mode": self.RESPONSE_MODE_STRUCTURED,
