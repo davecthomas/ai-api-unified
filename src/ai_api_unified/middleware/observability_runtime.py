@@ -209,6 +209,9 @@ class AiApiCallResultSummaryModel:
     # middleware or test doubles keeps its original argument mapping.
     provider_cache_write_5m_tokens: int | None = None
     provider_cache_write_1h_tokens: int | None = None
+    # Thinking tokens, a subset of provider_completion_tokens, when the
+    # provider reports them separately (Gemini, OpenAI).
+    provider_reasoning_tokens: int | None = None
 
     def __post_init__(self) -> None:
         """
@@ -308,6 +311,29 @@ def set_observability_context(
     )
     # Normal return with the token required to restore prior request-scoped context.
     return context_token
+
+
+def push_observability_tags(
+    dict_tags: Mapping[str, str],
+) -> Token[ObservabilityContextModel]:
+    """
+    Adds tags to the current observability context, keeping its ids and
+    other tags, and returns the token that restores the previous context.
+
+    Args:
+        dict_tags: Tags to add; a key already present is replaced.
+
+    Returns:
+        ContextVar token for `reset_observability_context`.
+    """
+    current: ObservabilityContextModel = OBSERVABILITY_CONTEXT.get()
+    # Normal return with the token for the merged context.
+    return set_observability_context(
+        caller_id=current.caller_id,
+        session_id=current.session_id,
+        workflow_id=current.workflow_id,
+        tags={**dict(current.tags), **dict(dict_tags)},
+    )
 
 
 def get_observability_context() -> ObservabilityContextModel:

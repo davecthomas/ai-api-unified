@@ -1566,9 +1566,10 @@ class AiRouterCompletions(AIBaseCompletions):
             )
 
         # Normal return with the request-scoped result.
-        return self._with_request_cost_scope(
-            "send_structured_output", _routed, request_id=str_route_id
-        )
+        with self._purpose_scope(provider_options):
+            return self._with_request_cost_scope(
+                "send_structured_output", _routed, request_id=str_route_id
+            )
 
     async def asend_structured_output(
         self,
@@ -1617,9 +1618,10 @@ class AiRouterCompletions(AIBaseCompletions):
             )
 
         # Normal return with the request-scoped result.
-        return await self._awith_request_cost_scope(
-            "asend_structured_output", _routed, request_id=str_route_id
-        )
+        with self._purpose_scope(provider_options):
+            return await self._awith_request_cost_scope(
+                "asend_structured_output", _routed, request_id=str_route_id
+            )
 
     def send_conversation(
         self,
@@ -1666,9 +1668,10 @@ class AiRouterCompletions(AIBaseCompletions):
             )
 
         # Normal return with the request-scoped turn.
-        return self._with_request_cost_scope(
-            "send_conversation", _routed, request_id=str_route_id
-        )
+        with self._purpose_scope(provider_options):
+            return self._with_request_cost_scope(
+                "send_conversation", _routed, request_id=str_route_id
+            )
 
     async def asend_conversation(
         self,
@@ -1715,9 +1718,10 @@ class AiRouterCompletions(AIBaseCompletions):
             )
 
         # Normal return with the request-scoped turn.
-        return await self._awith_request_cost_scope(
-            "asend_conversation", _routed, request_id=str_route_id
-        )
+        with self._purpose_scope(provider_options):
+            return await self._awith_request_cost_scope(
+                "asend_conversation", _routed, request_id=str_route_id
+            )
 
     # ── History helpers ─────────────────────────────────────────────────────
 

@@ -4,6 +4,43 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.14.0
+
+### Fixed
+
+- Gemini cost was under-reported whenever the model thought. Gemini reports
+  thinking tokens (`thoughts_token_count`) apart from the answer
+  (`candidates_token_count`) and bills both at the output rate, but the
+  engine counted the answer only. With thinking on by default since 3.5.0,
+  a gemini-2.5-flash call at `low` recorded 3 output tokens and $0.000012
+  instead of 418 and $0.00105. Output tokens are now the sum, on every
+  Gemini completions path (prompt, async, streaming, structured output,
+  conversations). Per-call cost events and request reports from 3.5.0
+  through 3.13.0 understate Gemini spend.
+
+### Added
+
+- Thinking tokens are reported separately where the provider breaks them
+  out (Gemini today): `provider_reasoning_tokens` on per-call events,
+  `reasoning_tokens` on `AITokenUsage` and on request line items. They are a
+  subset of output tokens and change no cost.
+- Request line items carry the rates' provenance, `pricing_source` and
+  `pricing_effective_date`, as the per-call cost events already did; both
+  appear in the `ai_api_request_cost` event's `calls` list.
+- Cost attribution by service, tenant, and purpose:
+  - `service` at the top of models.json, stamped on every client the
+    factory builds;
+  - `tenant` as a standard tag the application sets on its observability
+    context;
+  - `purpose` as a per-call hint, `provider_options["purpose"]`, removed
+    before the request reaches the provider (router and fallback chains
+    pass it through);
+  - `AIRequestCostReport.service`, `.tenant`, and `.purpose`, the same
+    fields on the `ai_api_request_cost` event, and `tag_service`,
+    `tag_tenant`, `tag_purpose` on every per-call event.
+- `push_observability_tags()` adds tags to the current observability
+  context and returns the token that restores it.
+
 ## 3.13.0
 
 ### Added

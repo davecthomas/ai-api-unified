@@ -573,6 +573,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
             finish_reason=str(getattr(response, "status", "") or "") or None,
             provider_prompt_tokens=turn_result.usage.input_tokens,
             provider_completion_tokens=turn_result.usage.output_tokens,
+            provider_reasoning_tokens=turn_result.usage.reasoning_tokens,
             provider_cached_input_tokens=turn_result.usage.cached_input_tokens,
             provider_total_tokens=turn_result.usage.total_tokens,
             dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
@@ -900,6 +901,7 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
             finish_reason=str(getattr(response, "status", "") or "") or None,
             provider_prompt_tokens=structured_result.usage.input_tokens,
             provider_completion_tokens=structured_result.usage.output_tokens,
+            provider_reasoning_tokens=structured_result.usage.reasoning_tokens,
             provider_cached_input_tokens=structured_result.usage.cached_input_tokens,
             provider_total_tokens=structured_result.usage.total_tokens,
         )

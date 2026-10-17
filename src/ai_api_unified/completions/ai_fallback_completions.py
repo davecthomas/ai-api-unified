@@ -1460,24 +1460,25 @@ class AiFallbackCompletions(AIBaseCompletions):
             messages, provider_options
         )
         # Normal return with the serving candidate's structured result.
-        return self._run(
-            "send_structured_output",
-            lambda client: client.send_structured_output(
-                prompt,
-                response_model=response_model,
-                response_schema=response_schema,
-                system_prompt=system_prompt,
-                messages=messages,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=dict_options,
-                prompt_cache=prompt_cache,
-            ),
-            tuple_capabilities=("supports_structured_output",),
-            bool_allow_fallback=bool_allowed,
-            int_start=int_start,
-            str_family=str_family,
-        )
+        with self._purpose_scope(provider_options):
+            return self._run(
+                "send_structured_output",
+                lambda client: client.send_structured_output(
+                    prompt,
+                    response_model=response_model,
+                    response_schema=response_schema,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=dict_options,
+                    prompt_cache=prompt_cache,
+                ),
+                tuple_capabilities=("supports_structured_output",),
+                bool_allow_fallback=bool_allowed,
+                int_start=int_start,
+                str_family=str_family,
+            )
 
     async def asend_structured_output(
         self,
@@ -1497,24 +1498,25 @@ class AiFallbackCompletions(AIBaseCompletions):
             messages, provider_options
         )
         # Normal return with the serving candidate's structured result.
-        return await self._arun(
-            "asend_structured_output",
-            lambda client: client.asend_structured_output(
-                prompt,
-                response_model=response_model,
-                response_schema=response_schema,
-                system_prompt=system_prompt,
-                messages=messages,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=dict_options,
-                prompt_cache=prompt_cache,
-            ),
-            tuple_capabilities=("supports_async", "supports_structured_output"),
-            bool_allow_fallback=bool_allowed,
-            int_start=int_start,
-            str_family=str_family,
-        )
+        with self._purpose_scope(provider_options):
+            return await self._arun(
+                "asend_structured_output",
+                lambda client: client.asend_structured_output(
+                    prompt,
+                    response_model=response_model,
+                    response_schema=response_schema,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=dict_options,
+                    prompt_cache=prompt_cache,
+                ),
+                tuple_capabilities=("supports_async", "supports_structured_output"),
+                bool_allow_fallback=bool_allowed,
+                int_start=int_start,
+                str_family=str_family,
+            )
 
     # ── Conversations ───────────────────────────────────────────────────────
 
@@ -1540,23 +1542,24 @@ class AiFallbackCompletions(AIBaseCompletions):
             messages, provider_options
         )
         # Normal return with the serving candidate's turn.
-        return self._run(
-            "send_conversation",
-            lambda client: client.send_conversation(
-                system_prompt,
-                messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=dict_options,
-                prompt_cache=prompt_cache,
-            ),
-            tuple_capabilities=("supports_tool_use",),
-            bool_allow_fallback=bool_allowed,
-            int_start=int_start,
-            str_family=str_family,
-        )
+        with self._purpose_scope(provider_options):
+            return self._run(
+                "send_conversation",
+                lambda client: client.send_conversation(
+                    system_prompt,
+                    messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=dict_options,
+                    prompt_cache=prompt_cache,
+                ),
+                tuple_capabilities=("supports_tool_use",),
+                bool_allow_fallback=bool_allowed,
+                int_start=int_start,
+                str_family=str_family,
+            )
 
     async def asend_conversation(
         self,
@@ -1575,23 +1578,24 @@ class AiFallbackCompletions(AIBaseCompletions):
             messages, provider_options
         )
         # Normal return with the serving candidate's turn.
-        return await self._arun(
-            "asend_conversation",
-            lambda client: client.asend_conversation(
-                system_prompt,
-                messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                max_response_tokens=max_response_tokens,
-                request_timeout_seconds=request_timeout_seconds,
-                provider_options=dict_options,
-                prompt_cache=prompt_cache,
-            ),
-            tuple_capabilities=("supports_async", "supports_tool_use"),
-            bool_allow_fallback=bool_allowed,
-            int_start=int_start,
-            str_family=str_family,
-        )
+        with self._purpose_scope(provider_options):
+            return await self._arun(
+                "asend_conversation",
+                lambda client: client.asend_conversation(
+                    system_prompt,
+                    messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    max_response_tokens=max_response_tokens,
+                    request_timeout_seconds=request_timeout_seconds,
+                    provider_options=dict_options,
+                    prompt_cache=prompt_cache,
+                ),
+                tuple_capabilities=("supports_async", "supports_tool_use"),
+                bool_allow_fallback=bool_allowed,
+                int_start=int_start,
+                str_family=str_family,
+            )
 
     def _client_for_history(self, messages: list[dict[str, Any]]) -> AIBaseCompletions:
         """

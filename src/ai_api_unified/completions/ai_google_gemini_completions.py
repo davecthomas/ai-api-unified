@@ -470,6 +470,9 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                         provider_cached_input_tokens=self._extract_gemini_cached_tokens(
                             response
                         ),
+                        provider_reasoning_tokens=self._extract_gemini_thought_tokens(
+                            response
+                        ),
                         provider_total_tokens=self._extract_gemini_total_tokens(
                             response
                         ),
@@ -485,6 +488,9 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                         response
                     ),
                     provider_cached_input_tokens=self._extract_gemini_cached_tokens(
+                        response
+                    ),
+                    provider_reasoning_tokens=self._extract_gemini_thought_tokens(
                         response
                     ),
                     provider_total_tokens=self._extract_gemini_total_tokens(response),
@@ -605,6 +611,11 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                     ),
                     provider_cached_input_tokens=(
                         self._extract_gemini_cached_tokens(last_chunk)
+                        if last_chunk is not None
+                        else None
+                    ),
+                    provider_reasoning_tokens=(
+                        self._extract_gemini_thought_tokens(last_chunk)
                         if last_chunk is not None
                         else None
                     ),
@@ -731,6 +742,9 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                             response
                         ),
                         provider_cached_input_tokens=self._extract_gemini_cached_tokens(
+                            response
+                        ),
+                        provider_reasoning_tokens=self._extract_gemini_thought_tokens(
                             response
                         ),
                         provider_total_tokens=self._extract_gemini_total_tokens(
@@ -994,23 +1008,48 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         response: GenerateContentResponse,
     ) -> int | None:
         """
-        Returns provider-reported completion token counts from one Gemini response.
+        Returns the billed output token count from one Gemini response: the
+        answer (`candidates_token_count`) plus thinking
+        (`thoughts_token_count`). Gemini reports the two separately and bills
+        both at the output rate, so the answer count alone under-prices any
+        call that thinks.
 
         Args:
             response: Gemini SDK response object returned by `generate_content`.
 
         Returns:
-            Provider-reported completion token count when available, otherwise None.
+            Billed output token count when available, otherwise None.
         """
         try:
             if response.usage_metadata is None:
                 # Early return because the Gemini response did not include usage metadata.
                 return None
-            # Normal return with Gemini completion token usage.
-            return response.usage_metadata.candidates_token_count
+            raw_candidates: Any = response.usage_metadata.candidates_token_count
+            raw_thoughts: Any = getattr(
+                response.usage_metadata, "thoughts_token_count", None
+            )
+            int_candidates: int | None = (
+                raw_candidates if isinstance(raw_candidates, int) else None
+            )
+            int_thoughts: int | None = (
+                raw_thoughts if isinstance(raw_thoughts, int) else None
+            )
+            if int_candidates is None and int_thoughts is None:
+                # Early return: no output count reported.
+                return None
+            # Normal return with answer plus thinking tokens.
+            return (int_candidates or 0) + (int_thoughts or 0)
         except AttributeError:
             # Early return because the SDK response did not expose usage metadata as expected.
             return None
+
+    @staticmethod
+    def _extract_gemini_thought_tokens(response: Any) -> int | None:
+        """Thinking tokens from one Gemini response, a subset of the output count."""
+        usage: Any = getattr(response, "usage_metadata", None)
+        raw: Any = getattr(usage, "thoughts_token_count", None)
+        # Normal return with the count, or None when not reported.
+        return raw if isinstance(raw, int) else None
 
     @staticmethod
     def _extract_gemini_total_tokens(response: GenerateContentResponse) -> int | None:
@@ -1210,6 +1249,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             output_tokens=self._extract_gemini_completion_tokens(response),
             cached_input_tokens=self._extract_gemini_cached_tokens(response),
             total_tokens=self._extract_gemini_total_tokens(response),
+            reasoning_tokens=self._extract_gemini_thought_tokens(response),
         )
 
     @staticmethod
@@ -1444,6 +1484,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             finish_reason=self._extract_gemini_finish_reason(response),
             provider_prompt_tokens=turn_result.usage.input_tokens,
             provider_completion_tokens=turn_result.usage.output_tokens,
+            provider_reasoning_tokens=turn_result.usage.reasoning_tokens,
             provider_cached_input_tokens=turn_result.usage.cached_input_tokens,
             provider_total_tokens=turn_result.usage.total_tokens,
             dict_metadata={"tool_call_count": len(turn_result.tool_calls)},
@@ -1734,6 +1775,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
             finish_reason=self._extract_gemini_finish_reason(response),
             provider_prompt_tokens=structured_result.usage.input_tokens,
             provider_completion_tokens=structured_result.usage.output_tokens,
+            provider_reasoning_tokens=structured_result.usage.reasoning_tokens,
             provider_cached_input_tokens=structured_result.usage.cached_input_tokens,
             provider_total_tokens=structured_result.usage.total_tokens,
         )
@@ -1958,6 +2000,7 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                 provider_cached_input_tokens=self._extract_gemini_cached_tokens(
                     response
                 ),
+                provider_reasoning_tokens=self._extract_gemini_thought_tokens(response),
                 provider_total_tokens=self._extract_gemini_total_tokens(response),
             )
 
