@@ -62,6 +62,7 @@ from ..ai_base import (
     AIPromptCacheHint,
     AIProviderOrgInfoBase,
     AIProviderOrgInfoCapability,
+    AIRoutePreview,
     AIStructuredOutputResult,
     AIStructuredPrompt,
     AITool,
@@ -1404,6 +1405,40 @@ class AiFallbackCompletions(AIBaseCompletions):
             return
         # Normal exit: every later candidate was skipped after a failure.
         raise self._exhausted(last_error, 0, "send_prompt_streaming")
+
+    def preview_route(
+        self,
+        prompt: str | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        provider_options: dict[str, Any] | None = None,
+        bool_count_tokens: bool = False,
+    ) -> AIRoutePreview:
+        """
+        Previews the candidate this chain would try first: the primary, or
+        the first candidate that is not resting after a recent failure.
+        """
+        client: AIBaseCompletions = self.primary
+        # Loop over the rest-aware order for the first buildable candidate.
+        for int_index in self._order_by_rest(list(range(len(self._candidates)))):
+            candidate_client: AIBaseCompletions | None = self._client_at(int_index)
+            if candidate_client is not None:
+                client = candidate_client
+                break
+        preview: AIRoutePreview = self._preview_for_client(
+            client,
+            prompt=prompt,
+            messages=messages,
+            system_prompt=system_prompt,
+            max_response_tokens=max_response_tokens,
+            bool_count_tokens=bool_count_tokens,
+        )
+        # Normal return with the chain's configuration identity.
+        return preview.model_copy(
+            update={"config_id": self.config_id or preview.config_id}
+        )
 
     def count_tokens(
         self,
