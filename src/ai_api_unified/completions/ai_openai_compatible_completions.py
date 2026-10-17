@@ -47,6 +47,12 @@ from ..ai_base import (
 )
 from ..ai_provider_exceptions import AiProviderConfigurationError
 from ..pricing.pricing_registry import get_model_pricing
+from ..thinking import (
+    FROZENSET_COMPATIBLE_THINKING_CONTROLS,
+    AIThinkingLevel,
+    compatible_thinking_capabilities,
+    compatible_thinking_request_fields,
+)
 from .ai_openai_completions import AiOpenAICompletions
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -101,6 +107,17 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
     )
     # Environment override for the context window of an uncataloged model.
     CONTEXT_WINDOW_SETTING: ClassVar[str | None] = "OPENAI_COMPATIBLE_CONTEXT_WINDOW"
+    # The server's thinking control (none, reasoning_effort, enable_thinking),
+    # read from providers.openai_compatible.thinking_control; a vendor that
+    # knows its server's control sets THINKING_CONTROL instead.
+    THINKING_CONTROL_SETTING: ClassVar[str | None] = (
+        "OPENAI_COMPATIBLE_THINKING_CONTROL"
+    )
+    THINKING_CONTROL: ClassVar[str | None] = None
+    TUPLE_NATIVE_THINKING_OPTION_PATHS: ClassVar[tuple[tuple[str, ...], ...]] = (
+        ("reasoning_effort",),
+        ("extra_body", "chat_template_kwargs", "enable_thinking"),
+    )
     # Cataloged models, in display order, and their input context windows.
     LIST_CATALOGED_MODELS: ClassVar[list[str]] = []
     DICT_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {}
@@ -265,7 +282,54 @@ class AiOpenAICompatibleCompletions(AiOpenAICompletions):
             pricing=get_model_pricing(
                 self.PROVIDER_REGISTRY_LABEL, self.completions_model
             ),
+            thinking=compatible_thinking_capabilities(self._thinking_control()),
         )
+
+    def _thinking_control(self) -> str | None:
+        """
+        The declared thinking control: the vendor's, else the setting. Read
+        once per client, so the request fields always match the capabilities
+        built from it.
+        """
+        if "_str_thinking_control" not in self.__dict__:
+            self._str_thinking_control: str | None = self._read_thinking_control()
+        # Normal return with the cached control.
+        return self._str_thinking_control
+
+    def _read_thinking_control(self) -> str | None:
+        """The vendor's fixed control, else the setting's value."""
+        if self.THINKING_CONTROL is not None:
+            # Early return with the vendor's fixed control.
+            return self.THINKING_CONTROL
+        if self.THINKING_CONTROL_SETTING is None:
+            # Early return: the vendor declares none.
+            return None
+        str_value: str = (
+            str(self.env.get_setting(self.THINKING_CONTROL_SETTING, "") or "")
+            .strip()
+            .lower()
+        )
+        if str_value and str_value not in FROZENSET_COMPATIBLE_THINKING_CONTROLS:
+            raise AiProviderConfigurationError(
+                f"providers.openai_compatible.thinking_control must be one of "
+                f"{sorted(FROZENSET_COMPATIBLE_THINKING_CONTROLS)}; got {str_value!r}."
+            )
+        # Normal return with the control, or None when unset.
+        return str_value or None
+
+    def _thinking_request_kwargs(
+        self, other_params: AICompletionsPromptParamsBase | None = None
+    ) -> dict[str, Any]:
+        """
+        The fields that apply this call's thinking level under the server's
+        declared control, or nothing when it declares none.
+        """
+        level: AIThinkingLevel | None = self._thinking_for_call(other_params).applied
+        if level is None:
+            # Early return: no declared control, or a caller's native field.
+            return {}
+        # Normal return with the declared control's fields.
+        return compatible_thinking_request_fields(self._thinking_control(), level)
 
     @property
     def list_model_names(self) -> list[str]:

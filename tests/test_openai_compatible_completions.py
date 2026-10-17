@@ -379,7 +379,7 @@ DICT_REVIEWED_OPENAI_METHODS: dict[str, str] = {
     # Thinking levels map to reasoning_effort, which OpenAI-compatible
     # servers that run reasoning models accept; servers without a
     # reasoning control never receive it (capabilities.thinking is None).
-    "_thinking_request_kwargs": "shared",
+    "_thinking_request_kwargs": "overridden",
     "_build_capabilities": "overridden",
     "_build_chat_conversation_request_kwargs": "shared",
     "_build_chat_provider_tools": "shared",

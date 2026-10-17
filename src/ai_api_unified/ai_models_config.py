@@ -274,6 +274,11 @@ class AIOpenAICompatibleProviderSettings(BaseModel):
     structured_output: Literal["json_schema", "json_object"] | None = None
     # Input token limit for the context guard; unset disables the guard.
     context_window: int | None = Field(default=None, gt=0)
+    # The server's thinking control: reasoning_effort (low|medium|high),
+    # enable_thinking (vLLM/SGLang chat_template_kwargs on/off), or none.
+    thinking_control: Literal["none", "reasoning_effort", "enable_thinking"] | None = (
+        None
+    )
 
 
 class AIAzureSpeechProviderSettings(BaseModel):
@@ -558,6 +563,10 @@ DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
     ),
     "OPENAI_COMPATIBLE_CONTEXT_WINDOW": (
         lambda c: c.providers.openai_compatible.context_window
+    ),
+    # No .env key ever held this; it is served from the file only.
+    "OPENAI_COMPATIBLE_THINKING_CONTROL": (
+        lambda c: c.providers.openai_compatible.thinking_control
     ),
     "MICROSOFT_COGNITIVE_SERVICES_REGION": lambda c: c.providers.azure_speech.region,
     "BEDROCK_VIDEO_OUTPUT_S3_URI": lambda c: c.videos.bedrock_output_s3_uri,

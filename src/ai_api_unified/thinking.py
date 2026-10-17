@@ -351,6 +351,99 @@ def claude_thinking_class(model_name: str) -> str:
     return CLAUDE_CLASS_ADAPTIVE
 
 
+# Amazon Nova 2 reasoning on Bedrock: additionalModelRequestFields
+# {"reasoningConfig": {"type": "enabled"|"disabled", "maxReasoningEffort":
+# "low"|"medium"|"high"}}. High effort rejects temperature, topP, and topK.
+TUPLE_NOVA_REASONING_MARKERS: tuple[str, ...] = ("nova-2-lite", "nova-2-pro")
+DICT_NOVA_REASONING_EFFORT: dict[AIThinkingLevel, str] = {
+    AIThinkingLevel.LOW: "low",
+    AIThinkingLevel.MEDIUM: "medium",
+    AIThinkingLevel.HIGH: "high",
+}
+
+
+def nova_thinking_capabilities(model_name: str) -> AIThinkingCapabilities | None:
+    """The standard levels an Amazon Nova model honors, or None without a control."""
+    str_lower: str = model_name.strip().lower()
+    if not any(marker in str_lower for marker in TUPLE_NOVA_REASONING_MARKERS):
+        # Early return: Nova 1 and the speech models have no reasoning control.
+        return None
+    # Normal return: off, then the three effort values.
+    return AIThinkingCapabilities(
+        levels=[AIThinkingLevel.OFF, *DICT_NOVA_REASONING_EFFORT],
+        notes="reasoningConfig type disabled | enabled + maxReasoningEffort low|medium|high",
+    )
+
+
+def nova_thinking_request_fields(level: AIThinkingLevel) -> dict[str, Any]:
+    """The additionalModelRequestFields entry for one applied Nova level."""
+    if level is AIThinkingLevel.OFF:
+        # Early return: reasoning off.
+        return {"reasoningConfig": {"type": "disabled"}}
+    # Normal return with the effort the level maps to.
+    return {
+        "reasoningConfig": {
+            "type": "enabled",
+            "maxReasoningEffort": DICT_NOVA_REASONING_EFFORT[level],
+        }
+    }
+
+
+# The thinking controls an OpenAI-compatible server may accept, declared in
+# configuration (providers.openai_compatible.thinking_control) because the
+# library cannot discover them.
+COMPATIBLE_THINKING_NONE: str = "none"
+COMPATIBLE_THINKING_REASONING_EFFORT: str = "reasoning_effort"
+COMPATIBLE_THINKING_ENABLE_THINKING: str = "enable_thinking"
+FROZENSET_COMPATIBLE_THINKING_CONTROLS: frozenset[str] = frozenset(
+    {
+        COMPATIBLE_THINKING_NONE,
+        COMPATIBLE_THINKING_REASONING_EFFORT,
+        COMPATIBLE_THINKING_ENABLE_THINKING,
+    }
+)
+
+
+def compatible_thinking_capabilities(
+    str_control: str | None,
+) -> AIThinkingCapabilities | None:
+    """The levels an OpenAI-compatible server honors under its declared control."""
+    if str_control == COMPATIBLE_THINKING_REASONING_EFFORT:
+        # Early return: low, medium, high, the values such servers accept.
+        return AIThinkingCapabilities(
+            levels=[AIThinkingLevel.LOW, AIThinkingLevel.MEDIUM, AIThinkingLevel.HIGH],
+            notes="reasoning_effort low|medium|high",
+        )
+    if str_control == COMPATIBLE_THINKING_ENABLE_THINKING:
+        # Early return: an on/off switch; on is recorded as medium.
+        return AIThinkingCapabilities(
+            levels=[AIThinkingLevel.OFF, AIThinkingLevel.MEDIUM],
+            notes="extra_body.chat_template_kwargs.enable_thinking false|true",
+        )
+    # Normal return: no declared control.
+    return None
+
+
+def compatible_thinking_request_fields(
+    str_control: str | None, level: AIThinkingLevel
+) -> dict[str, Any]:
+    """The Chat Completions fields for one applied level under a declared control."""
+    if str_control == COMPATIBLE_THINKING_REASONING_EFFORT:
+        # Early return with the effort value.
+        return {"reasoning_effort": DICT_OPENAI_EFFORT[level]}
+    if str_control == COMPATIBLE_THINKING_ENABLE_THINKING:
+        # Early return with the chat-template switch (vLLM, SGLang).
+        return {
+            "extra_body": {
+                "chat_template_kwargs": {
+                    "enable_thinking": level is not AIThinkingLevel.OFF
+                }
+            }
+        }
+    # Normal return: nothing to send.
+    return {}
+
+
 def claude_thinking_capabilities(model_name: str) -> AIThinkingCapabilities | None:
     """The standard levels a Claude model honors, or None without a control."""
     str_class: str = claude_thinking_class(model_name)

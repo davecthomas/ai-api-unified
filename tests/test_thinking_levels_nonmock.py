@@ -180,3 +180,26 @@ def test_structured_output_classifier_classifies_with_thinking_off() -> None:
     )
     assert decision.choice in ("easy", "hard")
     assert classifier.completions_client.last_thinking.applied is AIThinkingLevel.OFF
+
+
+@pytest.mark.parametrize("level", ["off", "low", "high"])
+def test_nova_2_reasoning_levels_are_accepted_by_bedrock(level: str) -> None:
+    """Confirms the documented reasoningConfig fields against real Bedrock."""
+    try:
+        import boto3
+
+        boto3.client("sts", region_name="us-east-1").get_caller_identity()
+    except Exception as exception:  # noqa: BLE001 - any credential failure skips
+        pytest.skip(f"Skipping: no usable AWS credentials ({type(exception).__name__})")
+    client = AIFactory.get_ai_completions_client(
+        completions_engine="bedrock",
+        model_name="us.amazon.nova-2-lite-v1:0",
+        thinking=level,
+    )
+    try:
+        text = client.send_prompt(STR_PROMPT, max_response_tokens=4096)
+    except AiProviderRequestError as exception:
+        _skip_on_account(exception)
+    assert text and "pong" in text.lower()
+    assert client.last_thinking is not None
+    assert client.last_thinking.applied is AIThinkingLevel(level)
