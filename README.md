@@ -1,4 +1,4 @@
-# ai-api-unified 3.13.0
+# ai-api-unified 3.14.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -2097,6 +2097,7 @@ Every section of `models.json` is documented in
 | Section | Fields |
 | ------- | ------ |
 | `config_version` | A label for this configuration (top level); see [Which configuration routed a call](#which-configuration-routed-a-call) |
+| `service` | The service this configuration belongs to (top level); carried as the `service` tag for cost attribution, see [Per-request cost](#per-request-cost) |
 | `completions` | `engine`, `model`, `fallbacks` (see Model fallback), `fallback_on`, `retry_policy`, `thinking` (see Thinking levels), `cooldown` (see Cooldowns), `require` (see [Startup requirements](#startup-requirements)) |
 | `classifier` | `engine`, `model`, `base_url`, `timeout_seconds`, `instructions`, `min_confidence` |
 | `router` | `tiers`, `classifier`, `default_tier`, `on_exhausted`, `followup`, `fallback_on` (see Model routing) |
@@ -2473,6 +2474,13 @@ independently. Each event carries the pricing provenance (effective date,
 source, confidence) so the cost is auditable. Unpriced models are skipped. This
 is observe-only — it never affects program flow.
 
+Thinking tokens count as output, as every provider bills them. Gemini
+reports them apart from the answer (`thoughts_token_count` beside
+`candidates_token_count`), so its output count is the sum of the two; the
+thinking share is also reported as `provider_reasoning_tokens` on the call's
+events and `reasoning_tokens` on the request line item. Claude, OpenAI, and
+Bedrock already include thinking in their output counts.
+
 Prompt-cache reads are captured per provider (OpenAI, OpenAI Responses,
 Anthropic, Bedrock, and Google Gemini) and billed at the model's cached-input
 rate: the event carries `cached_input_tokens`, and the cached subset of
@@ -2574,7 +2582,24 @@ report.billed_calls, report.failed_calls   # 3 and 1 in the example above
 report.served_by                           # "claude:claude-opus-5"
 for item in report.calls:                  # AIRequestCostLineItem, in call order
     item.role, item.route_tier, item.outcome, item.usd_cost, item.served
+    item.pricing_source, item.pricing_effective_date   # the rates' URL and date
+    item.reasoning_tokens                    # thinking share of output, when reported
+report.service, report.tenant, report.purpose          # attribution, see below
 ```
+
+Cost is attributable by service, tenant, purpose, difficulty level,
+provider, and model:
+
+| Dimension | Where it comes from |
+| --- | --- |
+| `service` | `service` at the top of `models.json`, stamped on every client the factory builds |
+| `tenant` | the application's observability context: `set_observability_context(tags={"tenant": "acme"})` |
+| `purpose` | a per-call hint, `provider_options={"purpose": "summarize"}`, removed before the request reaches the provider |
+| difficulty level | `route_tier` on each line item and `served_by_tier` on the report |
+| provider, model | `provider_engine` and `model` on each line item, `served_by` on the report |
+
+All three tags also ride on every per-call event as `tag_service`,
+`tag_tenant`, and `tag_purpose`, beside `tag_config_id`.
 
 A failed attempt is a line item with no cost and no tokens; it still counts
 as a call. A failed attempt the provider billed, a structured answer that
@@ -2602,10 +2627,13 @@ scope.report.total_usd      # both calls, every attempt behind them
 When `emit_cost` is on, the outermost scope emits one `ai_api_request_cost`
 event on the cost topic as it closes (normally or on an exception):
 `request_id`, `operation`, `status`, `caller_id`, `session_id`,
-`workflow_id`, `served_by`, `served_by_tier`, `served_by_method`,
+`workflow_id`, `service`, `tenant`, `purpose`, `served_by`,
+`served_by_tier`, `served_by_method`,
 `total_usd`, `classifier_usd`, `wasted_usd`, `billed_calls`,
 `failed_calls`, `unpriced_calls`, `elapsed_ms`, and `calls` (a compact list
-with `call_id`, `role`, `model`, `outcome`, `usd_cost`, `served`). The
+with `call_id`, `role`, `model`, `outcome`, `input_tokens`, `output_tokens`,
+`reasoning_tokens`, `usd_cost`, `pricing_source`, `pricing_effective_date`,
+`served`). The
 `request_id` is the router's `route_id` when routed, and every per-call
 event under the request carries it as `tag_request_id`, so the per-call
 events and the total join on one key.

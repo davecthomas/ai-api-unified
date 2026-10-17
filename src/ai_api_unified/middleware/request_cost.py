@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +41,13 @@ _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 OBSERVABILITY_EVENT_REQUEST_COST: str = "ai_api_request_cost"
 TAG_REQUEST_ID: str = "request_id"
+# Standard attribution tags. `service` comes from models.json (`service`),
+# `purpose` from the per-call provider_options["purpose"] hint, and `tenant`
+# from the application's own observability context
+# (set_observability_context(tags={"tenant": ...})).
+TAG_SERVICE: str = "service"
+TAG_TENANT: str = "tenant"
+TAG_PURPOSE: str = "purpose"
 TAG_ROUTER_ROLE: str = "router_role"
 TAG_VALUE_CLASSIFIER_ROLE: str = "classifier"
 TAG_ROUTE_TIER: str = "route_tier"
@@ -76,8 +83,12 @@ class AIRequestCostLineItem(BaseModel):
         cached_input_tokens: Cache-read subset of `input_tokens`.
         cache_write_5m_tokens: Tokens written to a 5-minute cache.
         cache_write_1h_tokens: Tokens written to a 1-hour cache.
+        reasoning_tokens: Thinking tokens, a subset of `output_tokens`, when
+            the provider reports them separately.
         usd_cost: Cost from registry pricing; None when the call failed, the
             model is unpriced, or the provider reported no usage.
+        pricing_source: URL of the rates `usd_cost` was computed from.
+        pricing_effective_date: Date those rates took effect.
         outcome: `ok` or `error`.
         error_type: Exception class name when the call failed.
         fallback_reason: The failure's `AiFallbackReason` value, if any.
@@ -100,7 +111,10 @@ class AIRequestCostLineItem(BaseModel):
     cached_input_tokens: int | None = None
     cache_write_5m_tokens: int | None = None
     cache_write_1h_tokens: int | None = None
+    reasoning_tokens: int | None = None
     usd_cost: Decimal | None = None
+    pricing_source: str | None = None
+    pricing_effective_date: date | None = None
     outcome: str = LINE_ITEM_OUTCOME_OK
     error_type: str | None = None
     fallback_reason: str | None = None
@@ -139,7 +153,14 @@ class AIRequestCostLineItem(BaseModel):
             "fallback_reason": self.fallback_reason,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
             "usd_cost": str(self.usd_cost) if self.usd_cost is not None else None,
+            "pricing_source": self.pricing_source,
+            "pricing_effective_date": (
+                self.pricing_effective_date.isoformat()
+                if self.pricing_effective_date is not None
+                else None
+            ),
             "served": self.served,
         }
 
@@ -196,6 +217,24 @@ class AIRequestCostReport(BaseModel):
     calls: list[AIRequestCostLineItem] = Field(default_factory=list)
 
     @property
+    def service(self) -> str | None:
+        """The service that made the request (models.json `service`)."""
+        # Normal return with the tag, if set.
+        return self.tags.get(TAG_SERVICE)
+
+    @property
+    def tenant(self) -> str | None:
+        """The tenant the application tagged the request with."""
+        # Normal return with the tag, if set.
+        return self.tags.get(TAG_TENANT)
+
+    @property
+    def purpose(self) -> str | None:
+        """The caller's purpose hint for the request."""
+        # Normal return with the tag, if set.
+        return self.tags.get(TAG_PURPOSE)
+
+    @property
     def served_by(self) -> str | None:
         """`engine:model` of the served call, or None when nothing was served."""
         if self.served_by_engine is None:
@@ -216,6 +255,9 @@ class AIRequestCostReport(BaseModel):
             "caller_id": self.caller_id,
             "session_id": self.session_id,
             "workflow_id": self.workflow_id,
+            "service": self.service,
+            "tenant": self.tenant,
+            "purpose": self.purpose,
             "served_by": self.served_by,
             "served_by_tier": self.served_by_tier,
             "served_by_method": self.served_by_method,
@@ -384,7 +426,10 @@ def build_line_item(
         cached_input_tokens=call_result_summary.provider_cached_input_tokens,
         cache_write_5m_tokens=call_result_summary.provider_cache_write_5m_tokens,
         cache_write_1h_tokens=call_result_summary.provider_cache_write_1h_tokens,
+        reasoning_tokens=call_result_summary.provider_reasoning_tokens,
         usd_cost=usd_cost,
+        pricing_source=pricing.source if pricing is not None else None,
+        pricing_effective_date=pricing.effective_date if pricing is not None else None,
         outcome=str_outcome,
         error_type=str_error_type,
         fallback_reason=str_fallback_reason,

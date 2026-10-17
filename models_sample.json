@@ -1,6 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/davecthomas/ai-api-unified/main/src/ai_api_unified/schemas/models.schema.json",
   "config_version": "2026-10-16",
+  "service": "my-service",
   "allow": ["claude:*", "google-gemini:*", "openai:*", "openai-decisions:*"],
   "deny": ["openai:gpt-4*", "bedrock"],
 

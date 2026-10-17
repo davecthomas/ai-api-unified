@@ -76,6 +76,7 @@ SET_STR_PROVIDER_USAGE_EVENT_KEYS: set[str] = {
     "provider_cached_input_tokens",
     "provider_cache_write_5m_tokens",
     "provider_cache_write_1h_tokens",
+    "provider_reasoning_tokens",
     "provider_total_tokens",
 }
 SET_STR_TOKEN_COUNT_EVENT_KEYS: set[str] = {
@@ -819,6 +820,10 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         if call_result_summary.provider_cache_write_5m_tokens is not None:
             dict_event_fields["provider_cache_write_5m_tokens"] = (
                 call_result_summary.provider_cache_write_5m_tokens
+            )
+        if call_result_summary.provider_reasoning_tokens is not None:
+            dict_event_fields["provider_reasoning_tokens"] = (
+                call_result_summary.provider_reasoning_tokens
             )
         if call_result_summary.provider_cache_write_1h_tokens is not None:
             dict_event_fields["provider_cache_write_1h_tokens"] = (
