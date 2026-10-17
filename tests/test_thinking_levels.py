@@ -648,3 +648,181 @@ class TestConfiguration:
         assert router.default_client.thinking_level is L.HIGH
         router.send_prompt("p")
         assert engines["claude:h"].thinking_level is L.HIGH
+
+
+# ── Native thinking fields, the classifier's level, batches ─────────────────
+
+
+class TestNativeThinkingOptions:
+    @pytest.mark.parametrize(
+        ("options", "path"),
+        [
+            ({"thinking": {"type": "disabled"}}, "thinking"),
+            ({"output_config": {"effort": "low"}}, "output_config.effort"),
+            ({"output_config": {"format": {}}}, None),
+            ({"temperature": 0}, None),
+            (None, None),
+        ],
+    )
+    def test_claude_paths(self, options: Any, path: str | None) -> None:
+        assert _anthropic("claude-opus-4-8")._native_thinking_option(options) == path
+
+    def test_every_engine_declares_its_fields(self) -> None:
+        assert _openai("gpt-5.4")._native_thinking_option(
+            {"reasoning_effort": "low"}
+        ) == ("reasoning_effort")
+        assert (
+            _openai(
+                "gpt-5.4", cls=AiOpenAIResponsesCompletions
+            )._native_thinking_option({"reasoning": {"effort": "low"}})
+            == "reasoning"
+        )
+        assert (
+            _build_gemini_client(Mock())._native_thinking_option(
+                {"thinking_config": {"thinking_budget": 0}}
+            )
+            == "thinking_config"
+        )
+        assert (
+            _bedrock(
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+            )._native_thinking_option(
+                {"additionalModelRequestFields": {"thinking": {"type": "disabled"}}}
+            )
+            == "additionalModelRequestFields.thinking"
+        )
+
+    def test_native_field_is_kept_recorded_as_caller_set_and_warned_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = _anthropic("claude-opus-4-8")
+        with caplog.at_level(logging.WARNING, logger="ai_api_unified.ai_base"):
+            for _ in range(2):
+                client.send_conversation(
+                    "sys",
+                    [{"role": "user", "content": "hi"}],
+                    provider_options={"thinking": {"type": "disabled"}},
+                )
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "disabled"}
+        # The layer added nothing of its own beside the caller's field.
+        assert "effort" not in (kwargs.get("output_config") or {})
+        resolution = client.last_thinking
+        assert resolution.requested is L.MEDIUM
+        assert resolution.applied is None and not resolution.exact
+        assert resolution.reason == "provider_option"
+        warned = [
+            r
+            for r in caplog.records
+            if getattr(r, "ai_thinking_event", "") == "provider_option"
+        ]
+        assert len(warned) == 1 and warned[0].provider_option == "thinking"
+        assert "thinking_level" in warned[0].getMessage()
+
+    def test_the_next_call_without_it_applies_the_level_again(self) -> None:
+        client = _anthropic("claude-opus-4-8")
+        client.send_conversation(
+            "sys",
+            [{"role": "user", "content": "hi"}],
+            provider_options={"thinking": {"type": "disabled"}},
+        )
+        client.send_conversation("sys", [{"role": "user", "content": "hi"}])
+        assert client.last_thinking.reason is None
+        assert client.last_thinking.applied is L.MEDIUM
+
+    def test_neutral_option_is_not_a_native_field(self) -> None:
+        client = _anthropic("claude-opus-4-8")
+        client.send_conversation(
+            "sys",
+            [{"role": "user", "content": "hi"}],
+            provider_options={"thinking_level": "high"},
+        )
+        assert client.last_thinking.applied is L.HIGH
+
+
+class TestClassifierThinking:
+    def _build(self, **kwargs: Any) -> Any:
+        from ai_api_unified.classification.ai_structured_output_classifier import (
+            AiStructuredOutputClassifier,
+        )
+
+        engine = Mock()
+        engine.capabilities.supports_structured_output = True
+        engine.model_name = "m"
+        engine.thinking_level = "untouched"
+        with patch(
+            "ai_api_unified.ai_factory.AIFactory._build_completions_client",
+            return_value=engine,
+        ):
+            AiStructuredOutputClassifier(engine="claude", **kwargs)
+        return engine
+
+    def test_a_built_client_classifies_with_thinking_off_by_default(self) -> None:
+        assert self._build().thinking_level is L.OFF
+
+    def test_explicit_and_configured_levels(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert self._build(thinking="low").thinking_level is L.LOW
+        monkeypatch.setenv(
+            "AI_MODELS_CONFIG", '{"classifier": {"thinking": "minimal"}}'
+        )
+        from ai_api_unified.ai_models_config import clear_models_config_cache
+
+        clear_models_config_cache()
+        try:
+            assert self._build().thinking_level is L.MINIMAL
+        finally:
+            clear_models_config_cache()
+
+    def test_a_callers_client_keeps_its_level_unless_one_is_passed(self) -> None:
+        from ai_api_unified.classification.ai_structured_output_classifier import (
+            AiStructuredOutputClassifier,
+        )
+
+        engine = Mock()
+        engine.capabilities.supports_structured_output = True
+        engine.model_name = "m"
+        engine.thinking_level = L.HIGH
+        AiStructuredOutputClassifier(completions_client=engine)
+        assert engine.thinking_level is L.HIGH
+        AiStructuredOutputClassifier(completions_client=engine, thinking="off")
+        assert engine.thinking_level is L.OFF
+
+    def test_bad_configured_level_fails_at_load(self) -> None:
+        from ai_api_unified.ai_models_config import AIModelsConfig
+
+        with pytest.raises(ValueError):
+            AIModelsConfig.model_validate({"classifier": {"thinking": "lots"}})
+
+
+class TestBatchThinking:
+    def test_each_item_gets_the_mapping_and_the_job_records_it(self) -> None:
+        from types import SimpleNamespace
+
+        from ai_api_unified.ai_base import AIBatchRequestItem
+
+        client = _anthropic("claude-opus-4-8")
+        client.client.messages.batches.create.return_value = SimpleNamespace(
+            id="msgbatch_1",
+            processing_status="in_progress",
+            request_counts=SimpleNamespace(
+                processing=2, succeeded=0, errored=0, canceled=0, expired=0
+            ),
+            created_at=None,
+            ended_at=None,
+        )
+        job = client.submit_batch(
+            [
+                AIBatchRequestItem(custom_id="a", prompt="x"),
+                AIBatchRequestItem(custom_id="b", prompt="y", thinking=L.HIGH),
+            ]
+        )
+        list_requests = client.client.messages.batches.create.call_args.kwargs[
+            "requests"
+        ]
+        dict_params = {r["custom_id"]: r["params"] for r in list_requests}
+        assert dict_params["a"]["output_config"]["effort"] == "medium"
+        assert dict_params["b"]["output_config"]["effort"] == "high"
+        assert job.thinking["a"].requested is L.MEDIUM
+        assert job.thinking["b"].applied is L.HIGH

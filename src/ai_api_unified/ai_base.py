@@ -64,6 +64,8 @@ from ai_api_unified.thinking import (
     COMPLETIONS_THINKING_KEY,
     DEFAULT_THINKING_LEVEL,
     THINKING_CALL_OVERRIDE,
+    THINKING_NATIVE_OPTION,
+    THINKING_REASON_PROVIDER_OPTION,
     AIThinkingCapabilities,
     AIThinkingLevel,
     AIThinkingResolution,
@@ -339,6 +341,8 @@ class AIBatchRequestItem(BaseModel):
     # requests run in any order over minutes to hours, so hits are best effort
     # and EXTENDED retention usually fits better; see AIPromptCacheHint.
     prompt_cache: AIPromptCacheHint | None = None
+    # This request's thinking level; None means the client's level.
+    thinking: AIThinkingLevel | None = None
 
 
 class AIBatchJob(BaseModel):
@@ -360,6 +364,9 @@ class AIBatchJob(BaseModel):
     submitted_at_utc: datetime | None = None
     ended_at_utc: datetime | None = None
     provider_engine: str | None = None
+    # Thinking resolution per custom_id, filled when the batch is submitted:
+    # the level each request asked for and the one it was sent with.
+    thinking: dict[str, AIThinkingResolution] = Field(default_factory=dict)
     provider_model_name: str | None = None
     provider_metadata: dict[str, Any] = {}
 
@@ -2777,6 +2784,10 @@ class AIBaseCompletions(AIBase):
     # send_conversation and send_structured_output; stripped before the
     # options reach the provider request.
     PROVIDER_OPTION_THINKING: ClassVar[str] = "thinking_level"
+    # provider_options paths that carry this engine's own thinking control.
+    # A call that sets one keeps it, and the layer records the level as set
+    # by the caller instead of applying its own.
+    TUPLE_NATIVE_THINKING_OPTION_PATHS: ClassVar[tuple[tuple[str, ...], ...]] = ()
 
     _thinking_level: AIThinkingLevel | None = None
     _last_thinking: AIThinkingResolution | None = None
@@ -2784,6 +2795,7 @@ class AIBaseCompletions(AIBase):
     # always-on model asked for off, a model with no control) is one line per
     # client rather than one per call.
     _set_logged_thinking: set[tuple[str, str | None, str | None]] | None = None
+    _set_warned_native_thinking: set[str] | None = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -2864,11 +2876,73 @@ class AIBaseCompletions(AIBase):
         resolution: AIThinkingResolution = resolve_thinking_level(
             requested, thinking_caps
         )
+        str_native: str | None = THINKING_NATIVE_OPTION.get()
+        if str_native is not None:
+            # The caller's provider field decides; apply nothing of our own.
+            resolution = resolution.model_copy(
+                update={
+                    "applied": None,
+                    "exact": False,
+                    "reason": THINKING_REASON_PROVIDER_OPTION,
+                }
+            )
+            self._last_thinking = resolution
+            self._warn_native_thinking_once(str_native)
+            # Early return with the caller-overridden resolution.
+            return resolution
         self._last_thinking = resolution
         if not resolution.exact:
             self._log_thinking_once(resolution, "nearest_level")
         # Normal return with the resolution the engine applies.
         return resolution
+
+    def _native_thinking_option(
+        self, provider_options: dict[str, Any] | None
+    ) -> str | None:
+        """
+        The provider_options path of a native thinking field this call sets,
+        as a dotted name, or None.
+        """
+        if not provider_options:
+            # Early return: no options.
+            return None
+        # Loop over the engine's native paths for the first one present.
+        for tuple_path in self.TUPLE_NATIVE_THINKING_OPTION_PATHS:
+            node: Any = provider_options
+            for str_key in tuple_path:
+                if not isinstance(node, dict) or str_key not in node:
+                    node = None
+                    break
+                node = node[str_key]
+            if node is not None:
+                # Early return with the path found.
+                return ".".join(tuple_path)
+        # Normal return: no native thinking field.
+        return None
+
+    def _warn_native_thinking_once(self, str_native: str) -> None:
+        """One WARNING per client per native field, naming the neutral option."""
+        if self._set_warned_native_thinking is None:
+            self._set_warned_native_thinking = set()
+        if str_native in self._set_warned_native_thinking:
+            # Early return: already reported for this client.
+            return None
+        self._set_warned_native_thinking.add(str_native)
+        _LOGGER.warning(
+            "THINKING: provider_options['%s'] sets %s's thinking directly, so the "
+            "layer applies no level and records the call as caller-set. Use the "
+            "provider-neutral provider_options['%s'] or other_params.thinking.",
+            str_native,
+            type(self).__name__,
+            self.PROVIDER_OPTION_THINKING,
+            extra={
+                "ai_thinking_event": "provider_option",
+                "model": self.model_name,
+                "provider_option": str_native,
+            },
+        )
+        # Normal return after the one-time warning.
+        return None
 
     def _log_thinking_once(
         self, resolution: AIThinkingResolution, str_event: str
@@ -4114,6 +4188,9 @@ class AIBaseCompletions(AIBase):
             provider_options
         )
         token_thinking = THINKING_CALL_OVERRIDE.set(thinking_override)
+        token_native = THINKING_NATIVE_OPTION.set(
+            self._native_thinking_option(provider_options)
+        )
         try:
             structured_result: AIStructuredOutputResult = (
                 self._send_structured_output_provider(
@@ -4129,6 +4206,7 @@ class AIBaseCompletions(AIBase):
             )
         finally:
             THINKING_CALL_OVERRIDE.reset(token_thinking)
+            THINKING_NATIVE_OPTION.reset(token_native)
         # Normal return after optional pydantic validation of the parsed data.
         return self._validate_structured_output_result(
             structured_result=self._stamp_thinking(structured_result),
@@ -4330,6 +4408,9 @@ class AIBaseCompletions(AIBase):
             provider_options
         )
         token_thinking = THINKING_CALL_OVERRIDE.set(thinking_override)
+        token_native = THINKING_NATIVE_OPTION.set(
+            self._native_thinking_option(provider_options)
+        )
         try:
             turn_result: AITurnResult = self._send_conversation_provider(
                 system_prompt=system_prompt,
@@ -4343,6 +4424,7 @@ class AIBaseCompletions(AIBase):
             )
         finally:
             THINKING_CALL_OVERRIDE.reset(token_thinking)
+            THINKING_NATIVE_OPTION.reset(token_native)
         # Normal return with the provider-implemented conversation turn.
         return self._stamp_thinking(turn_result)
 
@@ -4734,6 +4816,9 @@ class AIBaseCompletions(AIBase):
             provider_options
         )
         token_thinking = THINKING_CALL_OVERRIDE.set(thinking_override)
+        token_native = THINKING_NATIVE_OPTION.set(
+            self._native_thinking_option(provider_options)
+        )
         try:
             structured_result: AIStructuredOutputResult = (
                 await self._asend_structured_output_provider(
@@ -4749,6 +4834,7 @@ class AIBaseCompletions(AIBase):
             )
         finally:
             THINKING_CALL_OVERRIDE.reset(token_thinking)
+            THINKING_NATIVE_OPTION.reset(token_native)
         # Normal return after optional pydantic validation of the parsed data.
         return self._validate_structured_output_result(
             structured_result=self._stamp_thinking(structured_result),
@@ -4802,6 +4888,9 @@ class AIBaseCompletions(AIBase):
             provider_options
         )
         token_thinking = THINKING_CALL_OVERRIDE.set(thinking_override)
+        token_native = THINKING_NATIVE_OPTION.set(
+            self._native_thinking_option(provider_options)
+        )
         try:
             turn_result: AITurnResult = await self._asend_conversation_provider(
                 system_prompt=system_prompt,
@@ -4815,6 +4904,7 @@ class AIBaseCompletions(AIBase):
             )
         finally:
             THINKING_CALL_OVERRIDE.reset(token_thinking)
+            THINKING_NATIVE_OPTION.reset(token_native)
         # Normal return with the provider-implemented async conversation turn.
         return self._stamp_thinking(turn_result)
 

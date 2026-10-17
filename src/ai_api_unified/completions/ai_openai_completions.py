@@ -288,6 +288,9 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
     # The request field that carries the thinking level; the Responses
     # engine nests it instead.
     THINKING_REQUEST_FIELD: ClassVar[str] = "reasoning_effort"
+    TUPLE_NATIVE_THINKING_OPTION_PATHS: ClassVar[tuple[tuple[str, ...], ...]] = (
+        ("reasoning_effort",),
+    )
 
     def _thinking_request_kwargs(
         self, other_params: AICompletionsPromptParamsBase | None = None

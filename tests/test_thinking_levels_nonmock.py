@@ -135,3 +135,48 @@ def test_always_on_model_applies_nearest_level_and_records_it(
     assert resolution.requested is AIThinkingLevel.OFF
     assert resolution.applied is AIThinkingLevel.LOW
     assert not resolution.exact and resolution.reason == "unsupported_level"
+
+
+def test_native_field_decides_and_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    _skip_without("ANTHROPIC_API_KEY", "api.anthropic.com")
+    client = AIFactory.get_ai_completions_client(
+        completions_engine="claude", model_name="claude-haiku-4-5", thinking="high"
+    )
+    try:
+        result = client.send_structured_output(
+            "Answer with the word pong.",
+            response_model=_Word,
+            provider_options={"thinking": {"type": "disabled"}},
+        )
+    except AiProviderRequestError as exception:
+        _skip_on_account(exception)
+    assert result.data["word"].lower() == "pong"
+    assert result.thinking is not None
+    assert result.thinking.requested is AIThinkingLevel.HIGH
+    assert result.thinking.applied is None
+    assert result.thinking.reason == "provider_option"
+
+
+def test_structured_output_classifier_classifies_with_thinking_off() -> None:
+    _skip_without("ANTHROPIC_API_KEY", "api.anthropic.com")
+    from ai_api_unified import AIClassificationChoice
+    from ai_api_unified.classification.ai_structured_output_classifier import (
+        AiStructuredOutputClassifier,
+    )
+
+    classifier = AiStructuredOutputClassifier(model="claude-haiku-4-5", engine="claude")
+    try:
+        decision = classifier.classify_choice(
+            "What is 2 + 2?",
+            [
+                AIClassificationChoice(value="easy", description="simple"),
+                AIClassificationChoice(value="hard", description="complex"),
+            ],
+        )
+    except AiProviderRequestError as exception:
+        _skip_on_account(exception)
+    print(
+        f"\n  classified {decision.choice}; thinking {classifier.completions_client.last_thinking}"
+    )
+    assert decision.choice in ("easy", "hard")
+    assert classifier.completions_client.last_thinking.applied is AIThinkingLevel.OFF

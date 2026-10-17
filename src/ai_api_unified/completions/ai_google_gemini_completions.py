@@ -1285,6 +1285,9 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
         )
 
     _FROZENSET_CONFIG_KEYS: ClassVar[frozenset[str] | None] = None
+    TUPLE_NATIVE_THINKING_OPTION_PATHS: ClassVar[tuple[tuple[str, ...], ...]] = (
+        ("thinking_config",),
+    )
 
     def _known_provider_option_keys(self) -> frozenset[str] | None:
         """

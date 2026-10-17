@@ -27,6 +27,12 @@ from ..ai_base import (
     AIStructuredOutputResult,
 )
 from ..ai_completions_exceptions import StructuredResponseTokenLimitError
+from ..thinking import (
+    CLASSIFIER_THINKING_KEY,
+    DEFAULT_CLASSIFIER_THINKING_LEVEL,
+    AIThinkingLevel,
+    parse_thinking_level,
+)
 from ..ai_provider_exceptions import (
     AiProviderCapabilityUnsupportedError,
     AiProviderConfigurationError,
@@ -89,8 +95,11 @@ class AiStructuredOutputClassifier(AIBaseClassifier):
         engine: str | None = None,
         base_url: str | None = None,
         completions_client: AIBaseCompletions | None = None,
+        thinking: AIThinkingLevel | str | None = None,
     ) -> None:
         super().__init__(model=model)
+        level_explicit: AIThinkingLevel | None = parse_thinking_level(thinking)
+        bool_built_here: bool = completions_client is None
         if completions_client is None:
             if not engine:
                 raise AiProviderConfigurationError(
@@ -111,9 +120,28 @@ class AiStructuredOutputClassifier(AIBaseClassifier):
                 "output, so it cannot classify. Pick a model whose capabilities "
                 "include supports_structured_output."
             )
+        if level_explicit is not None or bool_built_here:
+            # A client built here classifies at the classifier's level (default
+            # off); a caller's client keeps its own unless one was passed.
+            completions_client.thinking_level = (
+                level_explicit or self._configured_thinking_level()
+            )
         self.str_engine: str = engine or ""
         self._completions: AIBaseCompletions = completions_client
         self.model = completions_client.model_name
+
+    @staticmethod
+    def _configured_thinking_level() -> AIThinkingLevel:
+        """`classifier.thinking` in models.json, else off."""
+        from ..util.env_settings import EnvSettings
+
+        # Normal return with the configured level, or the classifier default.
+        return (
+            parse_thinking_level(
+                EnvSettings().get_setting(CLASSIFIER_THINKING_KEY, None)
+            )
+            or DEFAULT_CLASSIFIER_THINKING_LEVEL
+        )
 
     @property
     def completions_client(self) -> AIBaseCompletions:

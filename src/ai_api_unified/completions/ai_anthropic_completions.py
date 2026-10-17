@@ -156,6 +156,10 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     SEND_PROMPT_MAX_TOKENS: ClassVar[int] = 16_000
     # Streaming has no timeout concern; give the model room.
     STREAMING_MAX_TOKENS: ClassVar[int] = 64_000
+    TUPLE_NATIVE_THINKING_OPTION_PATHS: ClassVar[tuple[tuple[str, ...], ...]] = (
+        ("thinking",),
+        ("output_config", "effort"),
+    )
 
     def _thinking_request_kwargs(
         self,
@@ -2414,6 +2418,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     def _submit_batch_provider(self, requests: list[AIBatchRequestItem]) -> AIBatchJob:
         """Create an Anthropic message batch from the request items."""
         list_batch_requests: list[dict[str, Any]] = []
+        dict_thinking: dict[str, Any] = {}
         # Loop through request items so each prompt is redacted and shaped for the API.
         for item in requests:
             str_prompt: str = self.pii_middleware.process_input(item.prompt)
@@ -2430,12 +2435,26 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
                 ),
                 "messages": [{"role": "user", "content": str_prompt}],
             }
+            # The same mapping a single call gets, at the item's level.
+            dict_thinking_fields: dict[str, Any] = self._thinking_request_kwargs(
+                (
+                    AICompletionsPromptParamsBase(thinking=item.thinking)
+                    if item.thinking is not None
+                    else None
+                ),
+                max_tokens=int(dict_params["max_tokens"]),
+            )
+            dict_params.update(dict_thinking_fields)
+            if self._last_thinking is not None:
+                dict_thinking[item.custom_id] = self._last_thinking
             list_batch_requests.append(
                 {"custom_id": item.custom_id, "params": dict_params}
             )
         batch = self.client.messages.batches.create(requests=list_batch_requests)
-        # Normal return with the normalized submitted batch job.
-        return self._normalize_batch_job(batch)
+        # Normal return with the submitted job and each request's thinking.
+        return self._normalize_batch_job(batch).model_copy(
+            update={"thinking": dict_thinking}
+        )
 
     def _get_batch_provider(self, batch_id: str) -> AIBatchJob:
         """Retrieve current status for an Anthropic message batch."""

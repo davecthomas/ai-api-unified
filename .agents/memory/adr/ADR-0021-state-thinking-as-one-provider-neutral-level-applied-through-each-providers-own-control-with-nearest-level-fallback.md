@@ -54,6 +54,15 @@ Derived from: owner-specified feature requirements (2026-10-15)
   thinking on at medium for models where omitting the field meant off; the
   changelog says so, and `off` restores the old shape where the model
   allows it.
+- **A caller's native field is recorded, never silent** (amended
+  2026-10-17, 3.12.0). A provider thinking field in `provider_options` is
+  still honored, but the layer then applies nothing of its own, records the
+  call as `applied` empty with reason `provider_option`, and warns once per
+  client and field, naming the neutral option.
+- **Classifiers run at their own level, default off** (amended 2026-10-17):
+  `classifier.thinking`, so routing decisions do not spend thinking tokens.
+- **Batches apply the level per item** (amended 2026-10-17), and the
+  submitted job records each request's resolution.
 - **Engine-side exceptions are recorded, never silent.** A forced
   `tool_choice`, an assistant prefill, or a `max_tokens` too small for the
   minimum budget turns thinking off on models that allow it, with the
