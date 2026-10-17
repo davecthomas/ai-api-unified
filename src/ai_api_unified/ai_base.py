@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
@@ -750,6 +751,55 @@ class AIStructuredOutputResult(BaseModel):
     provider_engine: str | None = None
     model_name: str | None = None
     thinking: AIThinkingResolution | None = None
+
+
+# Characters per token for the route preview's local input estimate; a
+# conservative English average across the providers' tokenizers.
+INT_PREVIEW_CHARS_PER_TOKEN: int = 4
+ROUTE_PREVIEW_METHOD_DIRECT: str = "direct"
+
+
+class AIRoutePreview(BaseModel):
+    """
+    Where one request would go, and what it would cost, without sending it.
+
+    Attributes:
+        tier: Router tier the request would use; None off a router or on
+            the default route.
+        method: How the tier was chosen (classifier, low_confidence, floor,
+            override, pinned, default), or "direct" off a router.
+        confidence: The classifier's confidence, when it ran and reported one.
+        engine: Engine token of the model that would answer first.
+        model: That model.
+        thinking: The level that model would apply for the configured level.
+        input_tokens: Estimated input tokens.
+        input_token_source: "provider" (count_tokens) or "estimated"
+            (characters / INT_PREVIEW_CHARS_PER_TOKEN).
+        max_output_tokens: The output cap the estimate assumes.
+        usd_input: Estimated input cost; None when the model is unpriced.
+        usd_max: Input cost plus the cap's worth of output at the output
+            rate: the most the call should cost before fallbacks; None when
+            unpriced.
+        pricing_source, pricing_effective_date: The rates used.
+        classifier_usd: What the preview itself spent classifying.
+        config_id: The routing configuration that would route it.
+    """
+
+    tier: str | None = None
+    method: str = ROUTE_PREVIEW_METHOD_DIRECT
+    confidence: float | None = None
+    engine: str
+    model: str | None = None
+    thinking: AIThinkingResolution | None = None
+    input_tokens: int
+    input_token_source: str
+    max_output_tokens: int
+    usd_input: Decimal | None = None
+    usd_max: Decimal | None = None
+    pricing_source: str | None = None
+    pricing_effective_date: date | None = None
+    classifier_usd: Decimal = Decimal("0")
+    config_id: str | None = None
 
 
 class AIEmbeddingsCapabilitiesBase(BaseModel):
@@ -3618,6 +3668,144 @@ class AIBaseCompletions(AIBase):
         """
         raise AiProviderCapabilityUnsupportedError(
             f"{type(self).__name__} does not implement streaming completions."
+        )
+
+    def preview_route(
+        self,
+        prompt: str | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        provider_options: dict[str, Any] | None = None,
+        bool_count_tokens: bool = False,
+    ) -> AIRoutePreview:
+        """
+        Where this request would go and what it would cost, without sending
+        it. A plain engine answers for itself; a fallback chain names the
+        candidate it would try first, and a router runs its classifier (the
+        only call a preview makes, and it is billed) to pick the tier.
+
+        Args:
+            prompt: The prompt text, for a send_prompt or structured call.
+            messages: The conversation, for a conversation call.
+            system_prompt: The system prompt, counted toward the estimate.
+            max_response_tokens: The output cap the estimate assumes; the
+                engine's own default when omitted.
+            provider_options: The call's options; the router reads `route`
+                and `route_floor` from them.
+            bool_count_tokens: True asks the provider to count the prompt's
+                tokens (one free API call where supported) instead of the
+                local character estimate.
+
+        Returns:
+            The preview.
+        """
+        # Normal return with this engine's own preview.
+        return self._preview_for_client(
+            self,
+            prompt=prompt,
+            messages=messages,
+            system_prompt=system_prompt,
+            max_response_tokens=max_response_tokens,
+            bool_count_tokens=bool_count_tokens,
+        )
+
+    @staticmethod
+    def _preview_text(
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        system_prompt: str | None,
+    ) -> str:
+        """Every piece of text the request would send, for the estimate."""
+        list_parts: list[str] = [system_prompt or "", prompt or ""]
+        # Loop over messages so string and block content both count.
+        for message in messages or []:
+            content: Any = message.get("content")
+            if isinstance(content, str):
+                list_parts.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and isinstance(block.get("text"), str):
+                        list_parts.append(block["text"])
+        # Normal return with the joined text.
+        return "\n".join(part for part in list_parts if part)
+
+    @classmethod
+    def _preview_for_client(
+        cls,
+        client: AIBaseCompletions,
+        *,
+        prompt: str | None,
+        messages: list[dict[str, Any]] | None,
+        system_prompt: str | None,
+        max_response_tokens: int | None,
+        bool_count_tokens: bool,
+    ) -> AIRoutePreview:
+        """The preview of one engine client: its model, level, and cost."""
+        from ai_api_unified.pricing.pricing_registry import get_model_pricing
+
+        int_input: int | None = None
+        str_source: str = "estimated"
+        if (
+            bool_count_tokens
+            and prompt
+            and not messages
+            and getattr(client.capabilities, "supports_token_counting", False)
+        ):
+            int_input = client.count_tokens(prompt)
+            str_source = "provider"
+        if int_input is None:
+            int_input = max(
+                1,
+                math.ceil(
+                    len(cls._preview_text(prompt, messages, system_prompt))
+                    / INT_PREVIEW_CHARS_PER_TOKEN
+                ),
+            )
+        int_max_output: int = int(
+            max_response_tokens
+            or getattr(
+                client,
+                "SEND_PROMPT_MAX_TOKENS",
+                cls.STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS,
+            )
+        )
+        thinking_caps: Any = getattr(client.capabilities, "thinking", None)
+        resolution: AIThinkingResolution = resolve_thinking_level(
+            client.thinking_level,
+            (
+                thinking_caps
+                if isinstance(thinking_caps, AIThinkingCapabilities)
+                else None
+            ),
+        )
+        pricing: Any = get_model_pricing(
+            client._resolve_observability_provider_vendor(), client.model_name
+        )
+        rates: Any = getattr(pricing, "token_rates", None)
+        usd_input: Decimal | None = None
+        usd_max: Decimal | None = None
+        if rates is not None:
+            usd_input = Decimal(int_input) * rates.input_per_1m / Decimal(1_000_000)
+            usd_max = usd_input + (
+                Decimal(int_max_output) * (rates.output_per_1m or Decimal(0))
+            ) / Decimal(1_000_000)
+        # Normal return with the client's preview.
+        return AIRoutePreview(
+            engine=client._resolve_observability_provider_engine(),
+            model=client.model_name,
+            thinking=resolution,
+            input_tokens=int_input,
+            input_token_source=str_source,
+            max_output_tokens=int_max_output,
+            usd_input=usd_input,
+            usd_max=usd_max,
+            pricing_source=getattr(pricing, "source", None) if rates else None,
+            pricing_effective_date=(
+                getattr(pricing, "effective_date", None) if rates else None
+            ),
+            config_id=client.config_id,
         )
 
     def count_tokens(

@@ -47,6 +47,7 @@ from ..ai_base import (
     AIPromptCacheHint,
     AIProviderOrgInfoBase,
     AIProviderOrgInfoCapability,
+    AIRoutePreview,
     AIStructuredOutputResult,
     AIStructuredPrompt,
     AITool,
@@ -59,7 +60,11 @@ from ..middleware.observability_runtime import (
     reset_observability_context,
     set_observability_context,
 )
-from ..middleware.request_cost import RequestCostScope, current_request_cost_scope
+from ..middleware.request_cost import (
+    RequestCostScope,
+    current_request_cost_scope,
+    request_cost_scope,
+)
 from ..pricing.pricing_registry import get_model_pricing
 from ..thinking import parse_thinking_level
 from ..routing.router_config import (
@@ -1352,6 +1357,66 @@ class AiRouterCompletions(AIBaseCompletions):
                     "fallback_reason": str_reason,
                 },
             )
+
+    # ── Route preview ───────────────────────────────────────────────────────
+
+    def preview_route(
+        self,
+        prompt: str | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        provider_options: dict[str, Any] | None = None,
+        bool_count_tokens: bool = False,
+    ) -> AIRoutePreview:
+        """
+        Picks the tier this request would use, exactly as a call would (the
+        classifier, overrides, floors, a pinned history), then previews that
+        tier's chain. The classifier call is real and billed; its cost is on
+        the preview as `classifier_usd`. Nothing is sent to an answering
+        model, and no route is logged.
+        """
+        _, str_route, str_floor = self._strip_route_option(provider_options)
+        str_route_id: str = uuid.uuid4().hex
+        with request_cost_scope("preview_route", request_id=str_route_id) as scope:
+            int_index, str_method, decision = self._select(
+                str_text=classification_text_for(prompt, messages),
+                messages=messages,
+                str_route=str_route,
+                str_floor=str_floor,
+                str_operation="preview_route",
+                str_route_id=str_route_id,
+            )
+        client: AIBaseCompletions | None = self._client_at(int_index)
+        if client is None:
+            # The tier cannot be built; the call would move on, so preview
+            # the default route.
+            client, int_index = self._default_client, None
+        preview: AIRoutePreview = client.preview_route(
+            prompt,
+            messages=messages,
+            system_prompt=system_prompt,
+            max_response_tokens=max_response_tokens,
+            bool_count_tokens=bool_count_tokens,
+        )
+        classifier_usd: Any = (
+            scope.report.classifier_usd if scope.report is not None else None
+        )
+        # Normal return with the tier, how it was chosen, and the preview cost.
+        return preview.model_copy(
+            update={
+                "tier": (
+                    self._config.tiers[int_index].name
+                    if int_index is not None
+                    else None
+                ),
+                "method": str_method,
+                "confidence": decision.confidence if decision is not None else None,
+                "classifier_usd": classifier_usd or preview.classifier_usd,
+                "config_id": self.config_id or preview.config_id,
+            }
+        )
 
     # ── Public API ──────────────────────────────────────────────────────────
 
