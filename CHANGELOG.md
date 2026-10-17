@@ -4,6 +4,21 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.15.0
+
+### Added
+
+- Route preview: `client.preview_route(prompt | messages, ...)` returns an
+  `AIRoutePreview` with the tier and how it was chosen (with the
+  classifier's confidence), the engine, model, and thinking level that
+  would answer first, the estimated input tokens, and the estimated cost:
+  `usd_input` and `usd_max` (input plus `max_response_tokens` of output),
+  with the rates' source and date. Nothing is sent to the answering model.
+  A router runs its classifier for the preview (billed, and reported as
+  `classifier_usd`); a fallback chain previews its first candidate that is
+  not resting; a plain engine previews itself. `bool_count_tokens=True`
+  uses the provider's token count instead of the local estimate.
+
 ## 3.14.0
 
 ### Fixed
