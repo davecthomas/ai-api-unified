@@ -14,6 +14,7 @@ import time
 import urllib.parse
 import uuid
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -49,6 +50,8 @@ from ai_api_unified.middleware.observability_runtime import (
     execute_observed_call,
     execute_observed_streaming_call,
     get_observability_context,
+    push_observability_tags,
+    reset_observability_context,
     resolve_originating_caller,
 )
 from ai_api_unified.middleware.request_cost import (
@@ -683,6 +686,8 @@ class AITokenUsage(BaseModel):
     output_tokens: int | None = None
     cached_input_tokens: int | None = None
     total_tokens: int | None = None
+    # Thinking tokens, a subset of output_tokens, when reported separately.
+    reasoning_tokens: int | None = None
     cache_write_5m_tokens: int | None = None
     cache_write_1h_tokens: int | None = None
 
@@ -840,17 +845,24 @@ class AIBase(ABC):
         self.model: str | None = model
 
     def set_config_identity(
-        self, config_id: str | None, config_version: str | None = None
+        self,
+        config_id: str | None,
+        config_version: str | None = None,
+        service: str | None = None,
     ) -> None:
         """
         Records the configuration that built this client. Every request it
-        opens carries them as the `config_id` and `config_version` tags.
+        opens carries them as the `config_id`, `config_version`, and
+        `service` tags.
 
         Args:
             config_id: Hash of the routing configuration, or None.
             config_version: The models.json `config_version` label, or None.
+            service: The models.json `service` name, or None.
         """
         dict_tags: dict[str, str] = {}
+        if service:
+            dict_tags["service"] = service
         if config_id:
             dict_tags["config_id"] = config_id
         if config_version:
@@ -1423,6 +1435,9 @@ class AiApiObservedCompletionsResultModel(Generic[CompletionsReturnType]):
     # original argument mapping.
     provider_cache_write_5m_tokens: int | None = None
     provider_cache_write_1h_tokens: int | None = None
+    # Thinking (reasoning) tokens, a subset of provider_completion_tokens,
+    # when the provider reports them separately.
+    provider_reasoning_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -2663,6 +2678,7 @@ class AIBaseClassifier(AIBase):
             ),
             provider_prompt_tokens=result.usage.input_tokens,
             provider_completion_tokens=result.usage.output_tokens,
+            provider_reasoning_tokens=result.usage.reasoning_tokens,
             provider_total_tokens=result.usage.total_tokens,
             finish_reason="refusal" if result.refused else "complete",
             dict_metadata={
@@ -2784,6 +2800,9 @@ class AIBaseCompletions(AIBase):
     # send_conversation and send_structured_output; stripped before the
     # options reach the provider request.
     PROVIDER_OPTION_THINKING: ClassVar[str] = "thinking_level"
+    # Reserved per-call purpose hint (for example "summarize"), carried as
+    # the `purpose` tag on every event and the request cost report.
+    PROVIDER_OPTION_PURPOSE: ClassVar[str] = "purpose"
     # provider_options paths that carry this engine's own thinking control.
     # A call that sets one keeps it, and the layer records the level as set
     # by the caller instead of applying its own.
@@ -2895,6 +2914,51 @@ class AIBaseCompletions(AIBase):
             self._log_thinking_once(resolution, "nearest_level")
         # Normal return with the resolution the engine applies.
         return resolution
+
+    @classmethod
+    @contextmanager
+    def _purpose_scope(cls, provider_options: dict[str, Any] | None) -> Iterator[None]:
+        """
+        Tags everything inside with the call's purpose hint, for wrappers
+        (fallback chains, the router) that open the request before the
+        engine strips the key.
+        """
+        str_purpose: str = str(
+            (provider_options or {}).get(cls.PROVIDER_OPTION_PURPOSE) or ""
+        ).strip()
+        token: Any = (
+            push_observability_tags({"purpose": str_purpose}) if str_purpose else None
+        )
+        try:
+            yield
+        finally:
+            if token is not None:
+                reset_observability_context(token)
+
+    @classmethod
+    def _push_purpose_option(
+        cls, provider_options: dict[str, Any] | None
+    ) -> tuple[dict[str, Any] | None, Any]:
+        """
+        Removes the reserved purpose hint from provider_options and pushes it
+        as the `purpose` observability tag.
+
+        Returns:
+            (the options without the key, the context token to reset, or
+            None when the call names no purpose).
+        """
+        if not provider_options or cls.PROVIDER_OPTION_PURPOSE not in provider_options:
+            # Early return: no purpose on this call.
+            return provider_options, None
+        dict_options: dict[str, Any] = dict(provider_options)
+        str_purpose: str = str(
+            dict_options.pop(cls.PROVIDER_OPTION_PURPOSE) or ""
+        ).strip()
+        if not str_purpose:
+            # Early return: a blank purpose is no purpose.
+            return dict_options or None, None
+        # Normal return with the stripped options and the tag's reset token.
+        return dict_options or None, push_observability_tags({"purpose": str_purpose})
 
     def _native_thinking_option(
         self, provider_options: dict[str, Any] | None
@@ -3267,6 +3331,7 @@ class AIBaseCompletions(AIBase):
             provider_cached_input_tokens=observed_result.provider_cached_input_tokens,
             provider_cache_write_5m_tokens=observed_result.provider_cache_write_5m_tokens,
             provider_cache_write_1h_tokens=observed_result.provider_cache_write_1h_tokens,
+            provider_reasoning_tokens=observed_result.provider_reasoning_tokens,
             provider_total_tokens=observed_result.provider_total_tokens,
             finish_reason=observed_result.finish_reason,
             dict_metadata={
@@ -4191,6 +4256,7 @@ class AIBaseCompletions(AIBase):
         token_native = THINKING_NATIVE_OPTION.set(
             self._native_thinking_option(provider_options)
         )
+        provider_options, token_purpose = self._push_purpose_option(provider_options)
         try:
             structured_result: AIStructuredOutputResult = (
                 self._send_structured_output_provider(
@@ -4207,6 +4273,8 @@ class AIBaseCompletions(AIBase):
         finally:
             THINKING_CALL_OVERRIDE.reset(token_thinking)
             THINKING_NATIVE_OPTION.reset(token_native)
+            if token_purpose is not None:
+                reset_observability_context(token_purpose)
         # Normal return after optional pydantic validation of the parsed data.
         return self._validate_structured_output_result(
             structured_result=self._stamp_thinking(structured_result),
@@ -4411,6 +4479,7 @@ class AIBaseCompletions(AIBase):
         token_native = THINKING_NATIVE_OPTION.set(
             self._native_thinking_option(provider_options)
         )
+        provider_options, token_purpose = self._push_purpose_option(provider_options)
         try:
             turn_result: AITurnResult = self._send_conversation_provider(
                 system_prompt=system_prompt,
@@ -4425,6 +4494,8 @@ class AIBaseCompletions(AIBase):
         finally:
             THINKING_CALL_OVERRIDE.reset(token_thinking)
             THINKING_NATIVE_OPTION.reset(token_native)
+            if token_purpose is not None:
+                reset_observability_context(token_purpose)
         # Normal return with the provider-implemented conversation turn.
         return self._stamp_thinking(turn_result)
 
@@ -4819,6 +4890,7 @@ class AIBaseCompletions(AIBase):
         token_native = THINKING_NATIVE_OPTION.set(
             self._native_thinking_option(provider_options)
         )
+        provider_options, token_purpose = self._push_purpose_option(provider_options)
         try:
             structured_result: AIStructuredOutputResult = (
                 await self._asend_structured_output_provider(
@@ -4835,6 +4907,8 @@ class AIBaseCompletions(AIBase):
         finally:
             THINKING_CALL_OVERRIDE.reset(token_thinking)
             THINKING_NATIVE_OPTION.reset(token_native)
+            if token_purpose is not None:
+                reset_observability_context(token_purpose)
         # Normal return after optional pydantic validation of the parsed data.
         return self._validate_structured_output_result(
             structured_result=self._stamp_thinking(structured_result),
@@ -4891,6 +4965,7 @@ class AIBaseCompletions(AIBase):
         token_native = THINKING_NATIVE_OPTION.set(
             self._native_thinking_option(provider_options)
         )
+        provider_options, token_purpose = self._push_purpose_option(provider_options)
         try:
             turn_result: AITurnResult = await self._asend_conversation_provider(
                 system_prompt=system_prompt,
@@ -4905,6 +4980,8 @@ class AIBaseCompletions(AIBase):
         finally:
             THINKING_CALL_OVERRIDE.reset(token_thinking)
             THINKING_NATIVE_OPTION.reset(token_native)
+            if token_purpose is not None:
+                reset_observability_context(token_purpose)
         # Normal return with the provider-implemented async conversation turn.
         return self._stamp_thinking(turn_result)
 
@@ -5015,6 +5092,7 @@ class AIBaseCompletions(AIBase):
                     provider_cached_input_tokens=observed_result.provider_cached_input_tokens,
                     provider_cache_write_5m_tokens=observed_result.provider_cache_write_5m_tokens,
                     provider_cache_write_1h_tokens=observed_result.provider_cache_write_1h_tokens,
+                    provider_reasoning_tokens=observed_result.provider_reasoning_tokens,
                     provider_total_tokens=observed_result.provider_total_tokens,
                     dict_metadata={
                         "stream_chunk_count": int_chunk_count,

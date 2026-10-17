@@ -343,6 +343,8 @@ class AIModelsConfig(BaseModel):
         config_version: A label for this configuration (a date, a release,
             a commit); every call the completions client makes carries it
             as the `config_version` tag, next to the computed `config_id`.
+        service: The name of the service this configuration belongs to,
+            carried as the `service` tag for cost attribution.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -352,6 +354,9 @@ class AIModelsConfig(BaseModel):
     # The JSON Schema an editor validates the file against; ignored here.
     schema_ref: str | None = Field(default=None, alias="$schema")
     config_version: str | None = None
+    # The service this configuration belongs to; every call and request
+    # cost report carries it as the `service` tag for cost attribution.
+    service: str | None = None
     allow: list[str] = Field(default_factory=list)
     deny: list[str] = Field(default_factory=list)
     completions: AICompletionsSelection = Field(default_factory=AICompletionsSelection)

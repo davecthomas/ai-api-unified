@@ -1292,7 +1292,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "The whole file.\n\nAttributes:\n    allow: Model globs the library may use; empty means all.\n    deny: Model globs the library may never use; wins over allow.\n    completions: Primary engine and model, chain, reasons, retry policy.\n    classifier: The classification engine and model.\n    router: The complexity router.\n    model_check: The configured-model check mode and timeout.\n    embeddings, images, videos, voice: Per-capability selections.\n    geo_residency: Geo hint (`US`), as AI_API_GEO_RESIDENCY.\n    providers: Per-provider settings that are not secrets (base URLs,\n        regions, Vertex project, OpenAI-compatible server details).\n    middleware: The PII redaction and observability middleware, the\n        same list the middleware YAML holds under `middleware`.\n    strict_deprecations: True turns a deprecated-model warning into a\n        startup error.\n    config_version: A label for this configuration (a date, a release,\n        a commit); every call the completions client makes carries it\n        as the `config_version` tag, next to the computed `config_id`.",
+  "description": "The whole file.\n\nAttributes:\n    allow: Model globs the library may use; empty means all.\n    deny: Model globs the library may never use; wins over allow.\n    completions: Primary engine and model, chain, reasons, retry policy.\n    classifier: The classification engine and model.\n    router: The complexity router.\n    model_check: The configured-model check mode and timeout.\n    embeddings, images, videos, voice: Per-capability selections.\n    geo_residency: Geo hint (`US`), as AI_API_GEO_RESIDENCY.\n    providers: Per-provider settings that are not secrets (base URLs,\n        regions, Vertex project, OpenAI-compatible server details).\n    middleware: The PII redaction and observability middleware, the\n        same list the middleware YAML holds under `middleware`.\n    strict_deprecations: True turns a deprecated-model warning into a\n        startup error.\n    config_version: A label for this configuration (a date, a release,\n        a commit); every call the completions client makes carries it\n        as the `config_version` tag, next to the computed `config_id`.\n    service: The name of the service this configuration belongs to,\n        carried as the `service` tag for cost attribution.",
   "properties": {
     "_comment": {
       "anyOf": [
@@ -1329,6 +1329,18 @@
       ],
       "default": null,
       "title": "Config Version"
+    },
+    "service": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Service"
     },
     "allow": {
       "items": {

@@ -28,3 +28,4 @@
 | ADR-0024 | [Route unsure picks up, allow a floor per call, and descend only by opt-in](ADR-0024-route-unsure-picks-up-allow-a-floor-per-call-and-descent-only-by-opt-in.md) | accepted | 2026-10-16 | docs | true |  |  |
 | ADR-0025 | [Identify the routing configuration on every call, and check declared route requirements at build](ADR-0025-identify-the-routing-configuration-on-every-call-and-check-declared-route-requirements-at-build.md) | accepted | 2026-10-16 | docs | true |  |  |
 | ADR-0026 | [Keep only secrets in the environment and everything else in models.json](ADR-0026-keep-only-secrets-in-the-environment-and-everything-else-in-models-json.md) | accepted | 2026-10-16 | docs | true |  |  |
+| ADR-0027 | [Attribute cost by service, tenant, and purpose through standard observability tags](ADR-0027-attribute-cost-by-service-tenant-and-purpose-through-standard-observability-tags.md) | accepted | 2026-10-17 | docs | true |  |  |
