@@ -100,6 +100,11 @@ def _patch_models_schema(dict_schema: dict[str, Any]) -> dict[str, Any]:
         "type": "string",
         "enum": sorted(FROZENSET_CAPABILITY_FIELDS),
     }
+    dict_defs["AIClassifierSelection"]["properties"]["thinking"] = {
+        "anyOf": [{"$ref": "#/$defs/AIThinkingLevel"}, {"type": "null"}],
+        "default": None,
+        "title": "Thinking",
+    }
     dict_completions["fallbacks"]["items"] = {
         "type": "string",
         "description": "An 'engine:model' pair; the split is on the first colon.",

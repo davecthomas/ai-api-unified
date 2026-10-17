@@ -236,6 +236,15 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
     structured-output prompts.
     """
 
+    # The Claude thinking fields (and other families' reasoning switches)
+    # ride in additionalModelRequestFields on Converse.
+    TUPLE_NATIVE_THINKING_OPTION_PATHS: ClassVar[tuple[tuple[str, ...], ...]] = (
+        ("additionalModelRequestFields", "thinking"),
+        ("additionalModelRequestFields", "output_config"),
+        ("additionalModelRequestFields", "reasoning_config"),
+        ("additionalModelRequestFields", "reasoningConfig"),
+    )
+
     def __init__(
         self, model: str = "", *, retry_policy: str | None = None, **kwargs: Any
     ):

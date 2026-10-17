@@ -162,6 +162,18 @@
           ],
           "default": null,
           "title": "Min Confidence"
+        },
+        "thinking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AIThinkingLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thinking"
         }
       },
       "title": "AIClassifierSelection",

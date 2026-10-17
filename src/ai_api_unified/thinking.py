@@ -51,6 +51,12 @@ class AIThinkingLevel(str, Enum):
 LIST_THINKING_LEVELS: list[AIThinkingLevel] = list(AIThinkingLevel)
 DEFAULT_THINKING_LEVEL: AIThinkingLevel = AIThinkingLevel.MEDIUM
 
+# The structured-output classifier's own level: classification picks one
+# label, so it runs with thinking off unless configured (classifier.thinking).
+# An always-on model applies its nearest level, which is recorded.
+CLASSIFIER_THINKING_KEY: str = "CLASSIFIER_THINKING"
+DEFAULT_CLASSIFIER_THINKING_LEVEL: AIThinkingLevel = AIThinkingLevel.OFF
+
 
 def parse_thinking_level(value: AIThinkingLevel | str | None) -> AIThinkingLevel | None:
     """
@@ -228,6 +234,16 @@ def thinking_event_fields(resolution: AIThinkingResolution) -> dict[str, Any]:
 
 THINKING_REASON_FORCED_TOOL_CHOICE: str = "forced_tool_choice"
 THINKING_REASON_MAX_TOKENS_TOO_SMALL: str = "max_tokens_too_small"
+# The caller set the provider's own thinking field in provider_options, so
+# the layer applied no level of its own and the provider field decides.
+THINKING_REASON_PROVIDER_OPTION: str = "provider_option"
+
+# The provider_options path holding a native thinking field on this call
+# (for example "reasoning_effort"), or None. Set by the completions templates
+# so the engine's thinking resolution can step aside and record it.
+THINKING_NATIVE_OPTION: ContextVar[str | None] = ContextVar(
+    "ai_api_unified_thinking_native_option", default=None
+)
 
 LIST_EFFORT_LEVELS: list[AIThinkingLevel] = [
     AIThinkingLevel.LOW,

@@ -408,6 +408,9 @@ class AiOpenAIResponsesCompletions(AiOpenAICompletions):
     # ── Conversation, structured output, async (Responses wire shapes) ──────
 
     PROVIDER_ENGINE_TOKEN: ClassVar[str] = "openai-responses"
+    TUPLE_NATIVE_THINKING_OPTION_PATHS: ClassVar[tuple[tuple[str, ...], ...]] = (
+        ("reasoning",),
+    )
 
     RESPONSES_STATUS_INCOMPLETE: ClassVar[str] = "incomplete"
     RESPONSES_INCOMPLETE_MAX_TOKENS: ClassVar[str] = "max_output_tokens"

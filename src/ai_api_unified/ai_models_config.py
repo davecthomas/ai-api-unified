@@ -165,6 +165,19 @@ class AIClassifierSelection(BaseModel):
     instructions: str | None = None
     # Router only: below this confidence (0 to 1) a request goes one tier up.
     min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Thinking level for classifiers that run on a completions model;
+    # default off, since a classification is one short label.
+    thinking: str | None = None
+
+    @field_validator("thinking", mode="before")
+    @classmethod
+    def _check_thinking(cls, value: Any) -> Any:
+        """Fails a misspelled level at load."""
+        if value is None or not str(value).strip():
+            # Early return: unset.
+            return None
+        # Normal return with the level's canonical value.
+        return parse_thinking_level(str(value)).value
 
 
 class AIModelCheckSelection(BaseModel):
@@ -507,6 +520,8 @@ DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
     "COMPLETIONS_THINKING": lambda c: c.completions.thinking,
     "CLASSIFIER_ENGINE": lambda c: c.classifier.engine,
     "CLASSIFIER_MODEL_NAME": lambda c: c.classifier.model,
+    # No .env key ever held this; it is served from the file only.
+    "CLASSIFIER_THINKING": lambda c: c.classifier.thinking,
     "COMPLETIONS_ROUTER_CLASSIFIER": _classifier_pair,
     "COMPLETIONS_ROUTER_CONFIG": _router_with_classifier,
     "AI_MODEL_CHECK": lambda c: c.model_check.mode,

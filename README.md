@@ -1,4 +1,4 @@
-# ai-api-unified 3.11.0
+# ai-api-unified 3.12.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -511,8 +511,29 @@ How each engine applies a level:
 | Bedrock | Nova, DeepSeek, Qwen, GLM | no control | no control | no control |
 
 On Bedrock the Claude fields travel under `additionalModelRequestFields`.
-The engines merge these fields before `provider_options`, so a caller's own
-`thinking`, `reasoning_effort`, or `thinking_config` still wins. Three
+
+A provider's own thinking field in `provider_options` (`thinking` or
+`output_config.effort` on Claude, `reasoning_effort` on OpenAI chat,
+`reasoning` on Responses, `thinking_config` on Gemini, and the thinking
+fields under `additionalModelRequestFields` on Bedrock) is still accepted
+and decides that call: the layer adds no thinking field of its own, records
+the call with `applied` empty and reason `provider_option`, and logs one
+WARNING per client and field naming the neutral `thinking_level` option.
+Use the neutral option instead; the record then shows the level applied.
+
+The router's classifier, and any structured-output classifier that builds
+its own client, classifies with thinking `off`, since a classification is
+one short label: set `classifier.thinking` in `models.json`, or pass
+`thinking=` to `AiStructuredOutputClassifier`, to change it. An always-on
+model applies its nearest level, which is recorded. A classifier handed an
+existing client keeps that client's level unless `thinking=` is passed.
+
+A batch request takes an optional `thinking` level per item
+(`AIBatchRequestItem.thinking`, default the client's level). Each item gets
+the same mapping as a single call, and the submitted `AIBatchJob.thinking`
+records each request's resolution by `custom_id`.
+
+Three
 request shapes turn thinking off on models that allow it, with the reason
 recorded: a forced `tool_choice` (Claude rejects the pair), an assistant
 prefill (Bedrock's `strict_schema_prompt` on pre-4.6 Claude), and a

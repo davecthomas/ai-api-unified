@@ -4,6 +4,35 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.12.0
+
+### Added
+
+- `classifier.thinking` in models.json and `thinking=` on
+  `AiStructuredOutputClassifier`. A structured-output classifier that
+  builds its own client (the router's included) now classifies with
+  thinking `off` by default; an always-on model applies its nearest level,
+  which is recorded. A classifier handed an existing client keeps that
+  client's level unless `thinking=` is passed.
+- `AIBatchRequestItem.thinking`: each Anthropic batch request now gets the
+  same thinking mapping as a single call (default the client's level), and
+  `AIBatchJob.thinking` records each request's resolution by `custom_id`.
+  Batches used to omit thinking fields entirely.
+
+### Changed
+
+- A provider's own thinking field in `provider_options` (`thinking`,
+  `output_config.effort`, `reasoning_effort`, `reasoning`,
+  `thinking_config`, or the Bedrock fields under
+  `additionalModelRequestFields`) still decides that call, but the layer
+  now adds no thinking field of its own beside it, records the call with
+  `applied` empty and reason `provider_option` (it used to record the
+  configured level as applied), and logs one WARNING per client and field
+  naming the neutral `thinking_level` option
+  (`ai_thinking_event=provider_option`).
+- The router's classifier spends no thinking tokens by default (it used to
+  run at the completions level, medium unless configured).
+
 ## 3.11.0
 
 ### Added
