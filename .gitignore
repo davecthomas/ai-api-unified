@@ -57,3 +57,5 @@ settings.json
 .agents/memory/.auto_bootstrap_running
 
 # Added by the agentmemory SessionStart/bootstrap flow.
+# Service-account JSON files (GOOGLE_APPLICATION_CREDENTIALS)
+credentials/

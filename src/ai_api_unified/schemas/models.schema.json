@@ -592,6 +592,23 @@
           ],
           "default": null,
           "title": "Context Window"
+        },
+        "thinking_control": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "reasoning_effort",
+                "enable_thinking"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thinking Control"
         }
       },
       "title": "AIOpenAICompatibleProviderSettings",

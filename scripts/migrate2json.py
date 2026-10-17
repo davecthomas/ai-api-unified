@@ -75,7 +75,8 @@ DICT_PROVIDER_KEY_TO_FIELD: dict[str, tuple[str, str]] = {
     "ANTHROPIC_BASE_URL_OVERRIDE": ("anthropic", "base_url"),
     "ANTHROPIC_ADMIN_BASE_URL_OVERRIDE": ("anthropic", "admin_base_url"),
     "ANTHROPIC_USER": ("anthropic", "user"),
-    "GOOGLE_AUTH_METHOD": ("google", "auth_method"),
+    # Maps a setting name to its models.json path; holds no credential.
+    "GOOGLE_AUTH_METHOD": ("google", "auth_method"),  # ggignore
     "GOOGLE_PROJECT_ID": ("google", "project_id"),
     "GOOGLE_LOCATION": ("google", "location"),
     "GOOGLE_GEMINI_BASE_URL_OVERRIDE": ("google", "base_url"),

@@ -179,7 +179,7 @@ def test_rejected_key_is_unreachable_and_a_fixed_key_reprobes(
         pytest.skip("Skipping: ANTHROPIC_API_KEY not set")
     AiModelChecker.reset_cache()
     candidate = AIFallbackCandidate(engine="claude", model="claude-haiku-4-5")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-invalid-for-model-check")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "invalid-key-for-model-check")
     rejected = AiModelChecker().check(candidate)
     print(f"\n  bad key:  {rejected.status.value:13} {rejected.detail}")
     assert rejected.status is AiModelCheckStatus.UNREACHABLE

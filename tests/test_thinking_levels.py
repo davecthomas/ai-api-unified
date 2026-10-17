@@ -253,7 +253,7 @@ class TestOpenAIAndGeminiTables:
             is None
         )
 
-    def test_bedrock_only_claude_has_a_control(self) -> None:
+    def test_bedrock_claude_has_a_control_and_nova_1_none(self) -> None:
         claude = AICompletionsCapabilitiesBedrock.for_model(
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0", context_window_length=1
         )
@@ -826,3 +826,124 @@ class TestBatchThinking:
         assert dict_params["b"]["output_config"]["effort"] == "high"
         assert job.thinking["a"].requested is L.MEDIUM
         assert job.thinking["b"].applied is L.HIGH
+
+
+class TestNovaReasoning:
+    @pytest.mark.parametrize(
+        ("level", "expected", "applied"),
+        [
+            (L.OFF, {"type": "disabled"}, L.OFF),
+            (L.LOW, {"type": "enabled", "maxReasoningEffort": "low"}, L.LOW),
+            (L.MEDIUM, {"type": "enabled", "maxReasoningEffort": "medium"}, L.MEDIUM),
+            (L.MAX, {"type": "enabled", "maxReasoningEffort": "high"}, L.HIGH),
+        ],
+    )
+    def test_levels_map_to_reasoning_config(
+        self, level: AIThinkingLevel, expected: dict, applied: AIThinkingLevel
+    ) -> None:
+        client = _bedrock("us.amazon.nova-2-lite-v1:0")
+        client.send_prompt("hi", other_params=_Params(thinking=level))
+        kwargs = client.client.converse.call_args.kwargs
+        assert kwargs["additionalModelRequestFields"] == {"reasoningConfig": expected}
+        assert client.last_thinking.applied is applied
+
+    def test_high_effort_drops_sampling_parameters(self) -> None:
+        client = _bedrock("us.amazon.nova-2-lite-v1:0")
+        client.send_prompt("hi", other_params=_Params(thinking=L.HIGH))
+        assert "temperature" not in client.client.converse.call_args.kwargs.get(
+            "inferenceConfig", {}
+        )
+
+    def test_forced_tool_choice_does_not_turn_nova_reasoning_off(self) -> None:
+        from ai_api_unified.ai_base import AITool
+
+        client = _bedrock("us.amazon.nova-2-lite-v1:0")
+        client.client.converse.return_value = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"toolUse": {"toolUseId": "t", "name": "f", "input": {}}}
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+            "usage": {"inputTokens": 9, "outputTokens": 2, "totalTokens": 11},
+        }
+        client.send_conversation(
+            "sys",
+            [{"role": "user", "content": "hi"}],
+            tools=[AITool(name="f", description="d", input_schema={"type": "object"})],
+            tool_choice="f",
+        )
+        assert client.last_thinking.reason != "forced_tool_choice"
+
+    def test_nova_1_still_has_no_control(self) -> None:
+        from ai_api_unified.thinking import nova_thinking_capabilities
+
+        assert nova_thinking_capabilities("amazon.nova-lite-v1:0") is None
+        assert nova_thinking_capabilities("amazon.nova-2-sonic-v1:0") is None
+
+
+class TestCompatibleThinkingControl:
+    def _client(self, str_control: str | None) -> Any:
+        from ai_api_unified.completions.ai_openai_compatible_completions import (
+            AiOpenAICompatibleCompletions,
+        )
+
+        dict_settings: dict[str, str] = {
+            "OPENAI_COMPATIBLE_BASE_URL": "http://localhost:8000/v1",
+            "COMPLETIONS_MODEL_NAME": "qwen3-32b",
+        }
+        if str_control is not None:
+            dict_settings["OPENAI_COMPATIBLE_THINKING_CONTROL"] = str_control
+        with patch(
+            "ai_api_unified.util.env_settings.EnvSettings.get_setting",
+            side_effect=lambda key, default=None: dict_settings.get(key, default),
+        ):
+            client = AiOpenAICompatibleCompletions()
+        client.client = Mock()
+        client.client.chat.completions.create.return_value = _chat_response()
+        return client
+
+    def test_enable_thinking_switch(self) -> None:
+        client = self._client("enable_thinking")
+        client.send_prompt("hi", other_params=_Params(thinking=L.OFF))
+        kwargs = client.client.chat.completions.create.call_args.kwargs
+        assert kwargs["extra_body"] == {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+        client.send_prompt("hi", other_params=_Params(thinking=L.HIGH))
+        kwargs = client.client.chat.completions.create.call_args.kwargs
+        assert kwargs["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        # High is recorded as the switch's one "on" level.
+        assert client.last_thinking.applied is L.MEDIUM
+
+    def test_reasoning_effort(self) -> None:
+        client = self._client("reasoning_effort")
+        client.send_prompt("hi", other_params=_Params(thinking=L.MAX))
+        kwargs = client.client.chat.completions.create.call_args.kwargs
+        assert kwargs["reasoning_effort"] == "high"
+        assert client.last_thinking.applied is L.HIGH
+
+    @pytest.mark.parametrize("str_control", [None, "none"])
+    def test_undeclared_sends_nothing(self, str_control: str | None) -> None:
+        client = self._client(str_control)
+        client.send_prompt("hi")
+        kwargs = client.client.chat.completions.create.call_args.kwargs
+        assert "reasoning_effort" not in kwargs and "extra_body" not in kwargs
+        assert client.last_thinking.applied is None
+
+    def test_unknown_control_fails_at_build(self) -> None:
+        from ai_api_unified.ai_provider_exceptions import AiProviderConfigurationError
+
+        with pytest.raises(AiProviderConfigurationError, match="thinking_control"):
+            self._client("magic")
+
+    def test_models_json_rejects_an_unknown_control(self) -> None:
+        from ai_api_unified.ai_models_config import AIModelsConfig
+
+        with pytest.raises(ValueError):
+            AIModelsConfig.model_validate(
+                {"providers": {"openai_compatible": {"thinking_control": "magic"}}}
+            )

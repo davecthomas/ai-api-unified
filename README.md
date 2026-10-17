@@ -1,4 +1,4 @@
-# ai-api-unified 3.12.0
+# ai-api-unified 3.13.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -503,14 +503,26 @@ How each engine applies a level:
 | `openai`, `openai-responses` | GPT-5.1 and later, GPT-6 | `reasoning_effort: none` (not on GPT-6 Astra) | nearest | `low` / `medium` / `high` / `xhigh` |
 | `openai`, `openai-responses` | GPT-5, GPT-5 mini, nano, pro, codex, and dated snapshots | nearest: `minimal` | `minimal` | `low` / `medium` / `high` / nearest: `high` |
 | `openai`, `openai-responses` | o-series | nearest: `low` | nearest: `low` | `low` / `medium` / `high` / nearest: `high` |
-| `openai`, `openai-compatible` | GPT-4.1, GPT-4o, uncataloged | no control | no control | no control |
+| `openai` | GPT-4.1, GPT-4o, uncataloged | no control | no control | no control |
+| `openai-compatible` | `thinking_control: reasoning_effort` | nearest: `low` | nearest: `low` | `reasoning_effort` `low` / `medium` / `high` / nearest: `high` |
+| `openai-compatible` | `thinking_control: enable_thinking` (vLLM, SGLang) | `enable_thinking: false` | nearest: `off` | `enable_thinking: true`, recorded as `medium` |
+| `openai-compatible` | `thinking_control` unset or `none` | no control | no control | no control |
 | `google-gemini` | Gemini 3 Flash and later | nearest: `minimal` | `thinking_level: MINIMAL` | `LOW` / `MEDIUM` / `HIGH` / nearest: `HIGH` |
 | `google-gemini` | Gemini 3 Pro | nearest: `low` | nearest: `low` | `LOW` / nearest / `HIGH` / nearest: `HIGH` |
 | `google-gemini` | Gemini 2.5 Flash, Flash Lite | `thinking_budget: 0` | nearest: `off` | `thinking_budget` 1024 / 8192 / 16384 / 24576 |
 | `google-gemini` | Gemini 2.5 Pro | nearest: `low` | nearest: `low` | `thinking_budget` 1024 / 8192 / 16384 / 32768 |
-| Bedrock | Nova, DeepSeek, Qwen, GLM | no control | no control | no control |
+| Bedrock | Nova 2 Lite, Nova 2 Pro | `reasoningConfig.type: disabled` | nearest: `off` | `maxReasoningEffort` `low` / `medium` / `high` / nearest: `high`; `high` drops temperature, topP, and topK |
+| Bedrock | Nova 1, DeepSeek, Qwen, GLM | no control | no control | no control |
 
-On Bedrock the Claude fields travel under `additionalModelRequestFields`.
+On Bedrock the Claude and Nova 2 fields travel under
+`additionalModelRequestFields`. AWS documents no thinking control for the
+DeepSeek, Qwen, and GLM models it hosts, so those record no control.
+
+An OpenAI-compatible server's thinking control cannot be discovered, so
+`providers.openai_compatible.thinking_control` declares it:
+`reasoning_effort` for servers that accept the OpenAI field,
+`enable_thinking` for vLLM and SGLang chat templates (Qwen3 and similar,
+sent as `extra_body.chat_template_kwargs`), or `none` (the default).
 
 A provider's own thinking field in `provider_options` (`thinking` or
 `output_config.effort` on Claude, `reasoning_effort` on OpenAI chat,
@@ -2114,6 +2126,7 @@ Every section of `models.json` is documented in
 | `providers.openai_compatible.base_url` | The server's `/v1` base URL (required for `openai-compatible`) |
 | `providers.openai_compatible.structured_output` | `json_schema` (default) or `json_object` |
 | `providers.openai_compatible.context_window` | Input token limit for the client-side context guard |
+| `providers.openai_compatible.thinking_control` | `reasoning_effort`, `enable_thinking`, or `none` (default); see [Thinking levels](#thinking-levels) |
 | `providers.azure_speech.region` | Azure speech region |
 
 ### What stays in `.env`

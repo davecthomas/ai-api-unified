@@ -17,6 +17,8 @@ from ..thinking import (
     claude_thinking_capabilities,
     claude_thinking_class,
     claude_thinking_request_fields,
+    nova_thinking_capabilities,
+    nova_thinking_request_fields,
 )
 from ..ai_base import (
     AIBaseCompletions,
@@ -219,13 +221,13 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
                 for marker in cls.TUPLE_PROMPT_CACHE_1H_TTL_MODEL_MARKERS
             ),
             pricing=get_model_pricing(PROVIDER_BEDROCK, model_name),
-            # Thinking levels map to Claude's own controls through
-            # additionalModelRequestFields; the other families on Converse
-            # expose no comparable control here.
+            # Thinking levels map to Claude's and Nova 2's own controls through
+            # additionalModelRequestFields; AWS documents no comparable
+            # control for the other families on Converse.
             thinking=(
                 claude_thinking_capabilities(normalized_name)
                 if "claude" in normalized_name
-                else None
+                else nova_thinking_capabilities(normalized_name)
             ),
         )
 
@@ -461,7 +463,7 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
     ) -> dict[str, Any]:
         """
         The Converse `additionalModelRequestFields` that apply this call's
-        thinking level on a Claude model, or nothing elsewhere.
+        thinking level on a Claude or Nova 2 model, or nothing elsewhere.
 
         A forced tool_choice, or an assistant prefill, turns thinking off on
         models that allow it, since the API rejects either pair. With a
@@ -492,6 +494,9 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         if level is None:
             # Early return: no thinking control on this model.
             return {}
+        if nova_thinking_capabilities(self.model) is not None:
+            # Early return with Nova 2's reasoningConfig.
+            return self._nova_thinking_converse_kwargs(level, inference_config)
         thinking_caps = getattr(self.capabilities, "thinking", None)
         bool_can_turn_off: bool = (
             thinking_caps is not None and not thinking_caps.always_on
@@ -539,6 +544,22 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             inference_config.pop("topP", None)
         # Normal return with the Claude fields under Converse's escape hatch.
         return {"additionalModelRequestFields": dict_fields}
+
+    @staticmethod
+    def _nova_thinking_converse_kwargs(
+        level: AIThinkingLevel, inference_config: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """
+        Nova 2's reasoningConfig for one applied level. High effort rejects
+        sampling parameters, so they are removed from `inference_config` in
+        place.
+        """
+        if level is AIThinkingLevel.HIGH and inference_config is not None:
+            inference_config.pop("temperature", None)
+            inference_config.pop("topP", None)
+            inference_config.pop("topK", None)
+        # Normal return with the reasoning fields under Converse's escape hatch.
+        return {"additionalModelRequestFields": nova_thinking_request_fields(level)}
 
     def strict_schema_prompt(
         self,

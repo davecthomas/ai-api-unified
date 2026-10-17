@@ -4,6 +4,37 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.13.0
+
+### Added
+
+- Thinking levels on Amazon Nova 2 (Lite and Pro) on Bedrock, through
+  `reasoningConfig` in `additionalModelRequestFields`: `off` sends
+  `type: disabled`; `low`, `medium`, and `high` send `maxReasoningEffort`;
+  `minimal` and `max` apply the nearest level and record both. At `high`,
+  temperature, topP, and topK are removed, as Nova 2 requires.
+- `providers.openai_compatible.thinking_control` declares an
+  OpenAI-compatible server's thinking control: `reasoning_effort` (low,
+  medium, high), `enable_thinking` (vLLM and SGLang chat templates, an
+  on/off switch sent as `extra_body.chat_template_kwargs`), or `none`
+  (default). A vendor subclass can fix it with `THINKING_CONTROL`.
+
+### Changed
+
+- Default level medium now turns reasoning on for Nova 2 models, which had
+  no mapped control before; `completions.thinking: off` restores the old
+  behavior.
+- The forced-tool-choice and assistant-prefill rules that turn thinking
+  off on Bedrock apply to Claude only, where the API requires them.
+
+### Security
+
+- No secret was committed. GitGuardian flagged the models.json path tuple
+  `("google", "auth_method")` in `scripts/migrate2json.py` as an
+  "authentication tuple"; the line is marked `ggignore`. The live test's fake
+  Anthropic key no longer looks like a real key, and `credentials/` (where
+  `env_template` suggests service-account files go) is gitignored.
+
 ## 3.12.0
 
 ### Added
