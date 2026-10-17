@@ -1,4 +1,4 @@
-# ai-api-unified 3.14.0
+# ai-api-unified 3.15.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1802,6 +1802,35 @@ cost by tier needs no extra work. The classifier call itself carries
   `send_prompt` and streaming, which take no `provider_options`.
 - `client.last_tier`, `client.last_decision`, and `client.last_route_client`
   report the most recent call.
+
+### Route preview
+
+`client.preview_route(...)` answers "where would this request go, and what
+would it cost?" without sending it to the answering model:
+
+```python
+preview = client.preview_route(prompt, max_response_tokens=2000)
+preview.tier, preview.method, preview.confidence   # "hard", "classifier", 0.96
+preview.engine, preview.model, preview.thinking    # "claude", "claude-opus-5-5", medium
+preview.input_tokens, preview.input_token_source   # 26, "estimated"
+preview.usd_input, preview.usd_max                 # input cost; input plus a full 2000-token answer
+preview.classifier_usd                             # what classifying cost
+```
+
+- A router picks the tier exactly as a call would: the classifier,
+  `min_confidence`, `route` and `route_floor` in `provider_options`, the
+  follow-up ratchet, and a pinned tool history. The classifier call is real
+  and billed, and its cost is on the preview. Nothing is logged as routed.
+- A fallback chain previews the candidate it would try first: the primary,
+  or the first candidate that is not resting after a recent failure.
+- A plain engine previews itself (method `direct`).
+- Input tokens are estimated locally (characters / 4, over the system
+  prompt, prompt, and message text). `bool_count_tokens=True` asks the
+  provider's free token count instead where the engine supports it.
+- `usd_max` is the input cost plus `max_response_tokens` (the engine's
+  default when omitted) at the output rate, thinking included: the most
+  the first attempt should cost. Fallbacks and escalations, if they
+  happen, add to it. An unpriced model has no cost estimate.
 
 ### Configuration reference
 
