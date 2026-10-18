@@ -162,7 +162,11 @@ class EnvSettings(BaseSettings):
         (or holds inline JSON); unset means ./models.json when it exists;
         blank means no file.
         """
-        from ..ai_models_config import AI_MODELS_CONFIG_KEY, resolve_models_config
+        from ..ai_models_config import (
+            AI_MODELS_CONFIG_KEY,
+            AI_MODELS_ENV_KEY,
+            resolve_models_config,
+        )
 
         str_dotenv_key: str = AI_MODELS_CONFIG_KEY.lower()
         bool_in_dotenv: bool = bool(
@@ -186,7 +190,30 @@ class EnvSettings(BaseSettings):
                 str(self.model_extra[str_dotenv_key]) if bool_in_dotenv else None
             )
         # Normal return with the resolved config, or None.
-        return resolve_models_config(str_configured, bool_configured=bool_configured)
+        return resolve_models_config(
+            str_configured,
+            bool_configured=bool_configured,
+            str_environment=self._raw_setting(AI_MODELS_ENV_KEY),
+        )
+
+    def _raw_setting(self, str_key: str) -> str | None:
+        """
+        A setting from an exact-case attribute, the process environment, or
+        .env, without consulting the models config (which it may select).
+        """
+        object_attribute: Any = getattr(self, str_key, None)
+        if object_attribute is not None:
+            # Early return with the attribute.
+            return str(object_attribute)
+        if str_key in os.environ:
+            # Early return with the process environment.
+            return os.environ[str_key]
+        str_dotenv_key: str = str_key.lower()
+        if self.model_extra and str_dotenv_key in self.model_extra:
+            # Early return with the .env value.
+            return str(self.model_extra[str_dotenv_key])
+        # Normal return: not set.
+        return None
 
     # Alias
     def get(self, setting: str, default: Any = None) -> Any:

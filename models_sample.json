@@ -68,5 +68,15 @@
      "settings": {"direction": "input_only"}}
   ],
 
-  "strict_deprecations": false
+  "strict_deprecations": false,
+
+  "environments": {
+    "prod": {
+      "model_check": {"mode": "strict"},
+      "completions": {"require": {"mode": "strict"}}
+    },
+    "dev": {
+      "completions": {"model": "gemini-2.5-flash-lite", "fallbacks": []}
+    }
+  }
 }

@@ -1020,20 +1020,25 @@ class AIBase(ABC):
         config_id: str | None,
         config_version: str | None = None,
         service: str | None = None,
+        environment: str | None = None,
     ) -> None:
         """
         Records the configuration that built this client. Every request it
-        opens carries them as the `config_id`, `config_version`, and
-        `service` tags.
+        opens carries them as the `config_id`, `config_version`, `service`,
+        and `config_env` tags.
 
         Args:
             config_id: Hash of the routing configuration, or None.
             config_version: The models.json `config_version` label, or None.
             service: The models.json `service` name, or None.
+            environment: The models.json environment merged in
+                (AI_MODELS_ENV), or None.
         """
         dict_tags: dict[str, str] = {}
         if service:
             dict_tags["service"] = service
+        if environment:
+            dict_tags["config_env"] = environment
         if config_id:
             dict_tags["config_id"] = config_id
         if config_version:

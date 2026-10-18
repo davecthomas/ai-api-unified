@@ -4,6 +4,20 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.22.0
+
+### Added
+
+- Per-environment overrides in `models.json`: an `environments` map of
+  partial configs, and `AI_MODELS_ENV` (process environment or `.env`) to
+  pick one. It is deep-merged over the file before validation (objects
+  merge; lists and values replace), so any setting can differ by
+  environment, router tiers and `require` included. An unknown name is a
+  load error listing the defined environments. `AIModelsConfig.environment`
+  records the one applied, and every factory-built client carries it as
+  the `config_env` tag. The JSON Schema, `models_sample.json`, and
+  `env_template` show the section.
+
 ## 3.21.0
 
 ### Added
