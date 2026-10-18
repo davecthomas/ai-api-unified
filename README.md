@@ -1,4 +1,4 @@
-# ai-api-unified 3.21.0
+# ai-api-unified 3.22.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -2294,7 +2294,32 @@ Secrets only: `OPENAI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`,
 `ELEVEN_LABS_API_KEY`, and `MICROSOFT_COGNITIVE_SERVICES_API_KEY`; plus
 `AI_MODELS_CONFIG`, which names the file (a path to `models.json`/`.yaml`,
 or inline JSON; unset uses `./models.json` when present; blank turns the
-file off). `AWS_REGION` may sit here too, since AWS hosts set it.
+file off), and `AI_MODELS_ENV`, which picks an environment (below).
+`AWS_REGION` may sit here too, since AWS hosts set it.
+
+### Per-environment overrides
+
+Any setting in the file can differ by environment. Put partial configs
+under `environments`, and set `AI_MODELS_ENV` to the one to apply:
+
+```json
+"environments": {
+  "prod": {
+    "model_check": {"mode": "strict"},
+    "completions": {"require": {"mode": "strict"}}
+  },
+  "dev": {"completions": {"model": "gemini-2.5-flash-lite", "fallbacks": []}}
+}
+```
+
+The entry is merged over the rest of the file before it is validated:
+objects merge key by key, and lists and values replace (a `fallbacks` or
+`router.tiers` list in an environment is the whole list). An
+`AI_MODELS_ENV` that names no entry stops the load and lists the defined
+ones. Every client the factory builds carries the applied environment as
+the `config_env` tag, beside `config_id`, on its events and request cost
+reports. A `.env` or process-environment setting still overrides the
+merged file, as it overrides the file alone.
 
 ### Cataloged Completions Models
 

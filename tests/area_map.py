@@ -56,6 +56,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_ai_api.py": ("core",),
     "test_env_settings_extra_keys.py": ("core",),
     "test_models_config.py": ("core", "completions", "embeddings", "images"),
+    "test_models_env_overlay.py": ("core", "completions", "embeddings"),
     "test_migrate2json.py": ("core",),
     "test_model_policy_nonmock.py": ("core", "completions"),
     "test_model_check_nonmock.py": ("core", "completions"),

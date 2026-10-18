@@ -505,13 +505,19 @@ class AIFactory:
         )
         str_config_version: str | None = AIFactory._resolve_config_version(env_settings)
         str_service: str | None = AIFactory._resolve_service_name(env_settings)
+        str_environment: str | None = AIFactory._resolve_environment(env_settings)
 
         def _stamp_identity(client: Any) -> None:
             """Records the configuration on a client that can carry it; a
             registry-loaded class outside AIBase is left as it is."""
             setter: Any = getattr(client, "set_config_identity", None)
             if callable(setter):
-                setter(str_config_id, str_config_version, str_service)
+                setter(
+                    str_config_id,
+                    str_config_version,
+                    str_service,
+                    environment=str_environment,
+                )
 
         def _build_leveled(candidate: AIFallbackCandidate) -> AIBaseCompletions:
             """Builds one candidate's client with the thinking level and the
@@ -1105,6 +1111,13 @@ class AIFactory:
         )
 
     @staticmethod
+    def _resolve_environment(env_settings: EnvSettings) -> str | None:
+        """The models.json environment merged in (AI_MODELS_ENV), or None."""
+        config: Any = env_settings.get_models_config()
+        # Normal return with the environment, or None.
+        return config.environment if isinstance(config, AIModelsConfig) else None
+
+    @staticmethod
     def _resolve_service_name(env_settings: EnvSettings) -> str | None:
         """The models.json `service` name, or None."""
         config: Any = env_settings.get_models_config()
@@ -1393,6 +1406,7 @@ class AIFactory:
             str_config_id,
             AIFactory._resolve_config_version(env_settings),
             AIFactory._resolve_service_name(env_settings),
+            environment=AIFactory._resolve_environment(env_settings),
         )
         # Normal return after stamping.
         return None

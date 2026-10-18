@@ -17,6 +17,13 @@ the file is where the configuration is authored.
 The file is found through `AI_MODELS_CONFIG` (a path, or inline JSON); when
 that is unset, `./models.json` is used if it exists. A blank
 `AI_MODELS_CONFIG` turns the file off.
+
+Per-environment overrides live in the same file, under `environments`: a
+map from an environment name to a partial config. `AI_MODELS_ENV` (the
+process environment or `.env`) picks one, and it is deep-merged over the
+rest of the file before validation: objects merge key by key, and lists
+and values replace. An `AI_MODELS_ENV` that names no environment is a
+load error that lists the defined ones.
 """
 
 from __future__ import annotations
@@ -39,6 +46,8 @@ from .routing.router_config import AIRouterClassifierConfig, AIRouterConfig
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 AI_MODELS_CONFIG_KEY: str = "AI_MODELS_CONFIG"
+# Names the `environments` entry merged over the file; see the module docstring.
+AI_MODELS_ENV_KEY: str = "AI_MODELS_ENV"
 DEFAULT_MODELS_CONFIG_FILENAME: str = "models.json"
 TUPLE_YAML_SUFFIXES: tuple[str, ...] = (".yaml", ".yml")
 
@@ -345,6 +354,9 @@ class AIModelsConfig(BaseModel):
             as the `config_version` tag, next to the computed `config_id`.
         service: The name of the service this configuration belongs to,
             carried as the `service` tag for cost attribution.
+        environments: Per-environment partial configs; AI_MODELS_ENV picks
+            one to merge over the rest of the file.
+        environment: The environment merged into this config, or None.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -373,6 +385,11 @@ class AIModelsConfig(BaseModel):
     # file's are, so one bad entry is skipped with a warning.
     middleware: list[dict[str, Any]] | None = None
     strict_deprecations: bool | None = None
+    # Partial configs by environment name, merged by load_models_config; each
+    # is validated as part of the merged config, not on its own.
+    environments: dict[str, dict[str, Any]] | None = None
+    # Set by the loader to the environment it merged; not written by hand.
+    environment: str | None = None
 
     @field_validator("allow", "deny")
     @classmethod
@@ -581,20 +598,92 @@ DICT_SETTING_GETTERS: dict[str, Callable[[AIModelsConfig], Any]] = {
 FROZENSET_FILE_BACKED_SETTINGS: frozenset[str] = frozenset(DICT_SETTING_GETTERS)
 
 
-def load_models_config(str_value: str) -> AIModelsConfig:
+def merge_config_overlay(
+    dict_base: dict[str, Any], dict_overlay: dict[str, Any]
+) -> dict[str, Any]:
     """
-    Parses the models config from a file path or inline JSON.
+    Deep-merges an environment's partial config over the base: objects merge
+    key by key; lists and values replace.
+    """
+    dict_merged: dict[str, Any] = dict(dict_base)
+    # Loop over the overlay's keys, recursing into objects on both sides.
+    for str_key, value in dict_overlay.items():
+        base_value: Any = dict_merged.get(str_key)
+        if isinstance(value, dict) and isinstance(base_value, dict):
+            dict_merged[str_key] = merge_config_overlay(base_value, value)
+        else:
+            dict_merged[str_key] = value
+    # Normal return with the merged payload.
+    return dict_merged
+
+
+def _apply_environment(
+    dict_payload: dict[str, Any], str_environment: str | None
+) -> dict[str, Any]:
+    """
+    Merges the named environment over the payload.
+
+    Raises:
+        ValueError: The environment is not defined, or an environment entry
+            is not an object or nests `environments`.
+    """
+    raw_environments: Any = dict_payload.get("environments")
+    if raw_environments is not None and not isinstance(raw_environments, dict):
+        raise ValueError("Models config 'environments' must be an object.")
+    dict_environments: dict[str, Any] = raw_environments or {}
+    # Loop over the entries to reject shapes the merge cannot apply.
+    for str_name, entry in dict_environments.items():
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Models config environments.{str_name} must be an object."
+            )
+        if "environments" in entry or "environment" in entry:
+            raise ValueError(
+                f"Models config environments.{str_name} cannot set "
+                "'environments' or 'environment'."
+            )
+    if "environment" in dict_payload:
+        raise ValueError(
+            "Models config 'environment' is set by the loader from "
+            f"{AI_MODELS_ENV_KEY}; remove it from the file."
+        )
+    str_name: str = (str_environment or "").strip()
+    if not str_name:
+        # Early return: no environment selected.
+        return dict_payload
+    if str_name not in dict_environments:
+        raise ValueError(
+            f"{AI_MODELS_ENV_KEY}={str_name!r} names no entry under "
+            "'environments' in the models config; defined: "
+            f"{sorted(dict_environments) or 'none'}."
+        )
+    dict_merged: dict[str, Any] = merge_config_overlay(
+        dict_payload, dict_environments[str_name]
+    )
+    dict_merged["environment"] = str_name
+    # Normal return with the environment merged in.
+    return dict_merged
+
+
+def load_models_config(
+    str_value: str, str_environment: str | None = None
+) -> AIModelsConfig:
+    """
+    Parses the models config from a file path or inline JSON, merging the
+    named environment over it.
 
     Args:
         str_value: A path to a `.json`, `.yaml`, or `.yml` file, or inline
             JSON text.
+        str_environment: The `environments` entry to merge (AI_MODELS_ENV),
+            or None.
 
     Returns:
         The validated config.
 
     Raises:
-        ValueError: The value is blank, the file is missing, or the content
-            is invalid or fails validation.
+        ValueError: The value is blank, the file is missing, the content is
+            invalid or fails validation, or the environment is not defined.
     """
     str_stripped: str = str_value.strip()
     if not str_stripped:
@@ -637,6 +726,7 @@ def load_models_config(str_value: str) -> AIModelsConfig:
         dict_payload = {}
     if not isinstance(dict_payload, dict):
         raise ValueError("Models config must be an object at the top level.")
+    dict_payload = _apply_environment(dict_payload, str_environment)
     try:
         # Normal return with the validated config.
         return AIModelsConfig.model_validate(dict_payload)
@@ -648,24 +738,28 @@ class _ModelsConfigCache:
     """Loads the file once per (path, mtime) for the process."""
 
     _lock: threading.Lock = threading.Lock()
-    _dict_cache: dict[tuple[str, float], AIModelsConfig] = {}
-    _dict_inline: dict[str, AIModelsConfig] = {}
+    _dict_cache: dict[tuple[str, float, str], AIModelsConfig] = {}
+    _dict_inline: dict[tuple[str, str], AIModelsConfig] = {}
 
     @classmethod
-    def get(cls, str_value: str) -> AIModelsConfig:
+    def get(cls, str_value: str, str_environment: str | None = None) -> AIModelsConfig:
         str_stripped: str = str_value.strip()
+        str_env: str = (str_environment or "").strip()
         if str_stripped.startswith(("{", "[")):
+            key_inline: tuple[str, str] = (str_stripped, str_env)
             with cls._lock:
-                if str_stripped not in cls._dict_inline:
-                    cls._dict_inline[str_stripped] = load_models_config(str_stripped)
+                if key_inline not in cls._dict_inline:
+                    cls._dict_inline[key_inline] = load_models_config(
+                        str_stripped, str_env
+                    )
                 # Early return with the inline config.
-                return cls._dict_inline[str_stripped]
+                return cls._dict_inline[key_inline]
         path: Path = Path(str_stripped).expanduser()
         float_mtime: float = path.stat().st_mtime if path.is_file() else -1.0
-        key: tuple[str, float] = (str(path), float_mtime)
+        key: tuple[str, float, str] = (str(path), float_mtime, str_env)
         with cls._lock:
             if key not in cls._dict_cache:
-                cls._dict_cache[key] = load_models_config(str_stripped)
+                cls._dict_cache[key] = load_models_config(str_stripped, str_env)
             # Normal return with the cached config.
             return cls._dict_cache[key]
 
@@ -677,7 +771,10 @@ class _ModelsConfigCache:
 
 
 def resolve_models_config(
-    str_configured_value: str | None, *, bool_configured: bool
+    str_configured_value: str | None,
+    *,
+    bool_configured: bool,
+    str_environment: str | None = None,
 ) -> AIModelsConfig | None:
     """
     Finds and loads the models config for this process.
@@ -687,6 +784,7 @@ def resolve_models_config(
         bool_configured: True when AI_MODELS_CONFIG was set at all; a blank
             value then means "no file", while an unset key means "use
             ./models.json if it exists".
+        str_environment: The AI_MODELS_ENV value, if any.
 
     Returns:
         The config, or None when there is none.
@@ -697,10 +795,10 @@ def resolve_models_config(
             # Early return: turned off on purpose.
             return None
         # Early return with the configured file.
-        return _ModelsConfigCache.get(str_value)
+        return _ModelsConfigCache.get(str_value, str_environment)
     if os.path.isfile(DEFAULT_MODELS_CONFIG_FILENAME):
         # Early return with the default file.
-        return _ModelsConfigCache.get(DEFAULT_MODELS_CONFIG_FILENAME)
+        return _ModelsConfigCache.get(DEFAULT_MODELS_CONFIG_FILENAME, str_environment)
     # Normal return: no file.
     return None
 

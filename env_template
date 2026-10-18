@@ -11,6 +11,10 @@
 # inline JSON). Unset means ./models.json when it exists; blank turns the
 # file off.
 # AI_MODELS_CONFIG=./models.json
+# AI_MODELS_ENV picks an entry under "environments" in the file and merges
+# it over the rest (objects merge, lists and values replace). Unset or
+# blank uses the file as written.
+# AI_MODELS_ENV=prod
 #
 # This file holds secrets only. A pre-models.json setting left in .env
 # still overrides the file and logs a deprecation warning; move it with

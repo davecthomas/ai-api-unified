@@ -278,14 +278,18 @@ class AIVoiceBase(BaseModel, ABC):
         config_id: str | None,
         config_version: str | None = None,
         service: str | None = None,
+        environment: str | None = None,
     ) -> None:
         """
         Records the configuration that built this client; every call carries
-        them as the `config_id`, `config_version`, and `service` tags.
+        them as the `config_id`, `config_version`, `service`, and
+        `config_env` tags.
         """
         dict_tags: dict[str, str] = {}
         if service:
             dict_tags["service"] = service
+        if environment:
+            dict_tags["config_env"] = environment
         if config_id:
             dict_tags["config_id"] = config_id
         if config_version:
