@@ -4,6 +4,17 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.20.0
+
+### Added
+
+- `provider_options["route_ceiling"]` on router calls: the most demanding
+  tier a call may use. A classified, default, or floored pick above it is
+  lowered to it (route method `ceiling`), and escalation after a failed
+  tier stops there. It wins over the follow-up ratchet; a `route_floor`
+  above it raises `ValueError`; a `route` override and a model pin are not
+  affected. Route previews honor it.
+
 ## 3.19.0
 
 ### Added

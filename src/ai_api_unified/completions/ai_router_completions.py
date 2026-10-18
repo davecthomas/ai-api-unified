@@ -35,6 +35,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from contextvars import ContextVar
 from collections.abc import Awaitable, Callable, Iterator
 from decimal import Decimal
 from typing import Any, ClassVar, Type, TypeVar
@@ -114,11 +115,19 @@ ROUTE_METHOD_PINNED: str = "pinned"
 ROUTE_METHOD_OVERRIDE: str = "override"
 ROUTE_METHOD_LOW_CONFIDENCE: str = "low_confidence"
 ROUTE_METHOD_FLOOR: str = "floor"
+ROUTE_METHOD_CEILING: str = "ceiling"
 
 # Methods a floor (route_floor, or the follow-up ratchet) may raise. An
 # override or a pinned history is never moved.
 FROZENSET_FLOORABLE_METHODS: frozenset[str] = frozenset(
     {ROUTE_METHOD_CLASSIFIER, ROUTE_METHOD_LOW_CONFIDENCE, ROUTE_METHOD_DEFAULT}
+)
+
+# Tier index the running call may not route or escalate above (its
+# route_ceiling), or None. _select sets it on every routed call, so it never
+# carries over from an earlier call in the same context.
+ROUTE_CEILING_INDEX: ContextVar[int | None] = ContextVar(
+    "ai_api_unified_route_ceiling_index", default=None
 )
 
 # Pricing-registry provider by engine token, for the classifier cost check.
@@ -166,6 +175,9 @@ class AiRouterCompletions(AIBaseCompletions):
     PROVIDER_OPTION_ROUTE: ClassVar[str] = "route"
     # Reserved provider option: a tier name the call may not route below.
     PROVIDER_OPTION_ROUTE_FLOOR: ClassVar[str] = "route_floor"
+    # Reserved provider option: a tier name the call may not route or
+    # escalate above.
+    PROVIDER_OPTION_ROUTE_CEILING: ClassVar[str] = "route_ceiling"
 
     def __init__(
         self,
@@ -563,32 +575,33 @@ class AiRouterCompletions(AIBaseCompletions):
 
     def _strip_route_option(
         self, provider_options: dict[str, Any] | None
-    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    ) -> tuple[dict[str, Any] | None, str | None, str | None, str | None]:
         """
-        Removes the reserved route and route_floor keys before options reach
-        a chain.
+        Removes the reserved route, route_floor, and route_ceiling keys
+        before options reach a chain.
 
         Args:
             provider_options: The call's provider_options.
 
         Returns:
             (remaining options or None, the route override or None, the
-            route floor or None).
+            route floor or None, the route ceiling or None).
         """
         if not provider_options:
             # Early return: nothing to strip.
-            return None, None, None
+            return None, None, None, None
         dict_copy: dict[str, Any] = dict(provider_options)
-        raw_route: Any = dict_copy.pop(self.PROVIDER_OPTION_ROUTE, None)
-        raw_floor: Any = dict_copy.pop(self.PROVIDER_OPTION_ROUTE_FLOOR, None)
-        str_route: str | None = (
-            str(raw_route).strip().lower() if raw_route not in (None, "") else None
-        )
-        str_floor: str | None = (
-            str(raw_floor).strip().lower() if raw_floor not in (None, "") else None
-        )
-        # Normal return with the stripped options, the override, and the floor.
-        return dict_copy or None, str_route, str_floor
+
+        def _pop(str_key: str) -> str | None:
+            raw: Any = dict_copy.pop(str_key, None)
+            # Normal return with the normalized tier name, or None.
+            return str(raw).strip().lower() if raw not in (None, "") else None
+
+        str_route: str | None = _pop(self.PROVIDER_OPTION_ROUTE)
+        str_floor: str | None = _pop(self.PROVIDER_OPTION_ROUTE_FLOOR)
+        str_ceiling: str | None = _pop(self.PROVIDER_OPTION_ROUTE_CEILING)
+        # Normal return with the stripped options and the three hints.
+        return dict_copy or None, str_route, str_floor, str_ceiling
 
     def _select(
         self,
@@ -599,12 +612,18 @@ class AiRouterCompletions(AIBaseCompletions):
         str_operation: str,
         str_route_id: str,
         str_floor: str | None = None,
+        str_ceiling: str | None = None,
     ) -> tuple[int | None, str, AIClassificationResult | None]:
         """
-        Decides which tier serves one call, then applies any floor. A call
-        pinned to a model skips both and runs on the pin's route.
+        Decides which tier serves one call, then applies any floor and
+        ceiling. A call pinned to a model skips all three and runs on the
+        pin's route.
         """
         pin: AIFallbackCandidate | None = current_model_pin()
+        int_ceiling: int | None = (
+            None if pin is not None else self._ceiling_index(str_ceiling, str_floor)
+        )
+        ROUTE_CEILING_INDEX.set(int_ceiling)
         if pin is not None:
             # Early return: the pin decides the route; nothing is classified.
             return self._pin_tier(pin), ROUTE_METHOD_MODEL_PIN, None
@@ -615,9 +634,12 @@ class AiRouterCompletions(AIBaseCompletions):
             str_operation=str_operation,
             str_route_id=str_route_id,
         )
-        # Normal return with the floored selection.
+        int_floored, str_floored = self._apply_floor(
+            int_index, str_method, messages, str_floor
+        )
+        # Normal return with the floored and capped selection.
         return (
-            *self._apply_floor(int_index, str_method, messages, str_floor),
+            *self._apply_ceiling(int_floored, str_floored, int_ceiling),
             decision,
         )
 
@@ -668,6 +690,66 @@ class AiRouterCompletions(AIBaseCompletions):
             return int_index, str_method
         # Normal return: the pick is raised to the floor.
         return int_floor, ROUTE_METHOD_FLOOR
+
+    def _ceiling_index(
+        self, str_ceiling: str | None, str_floor: str | None
+    ) -> int | None:
+        """
+        The tier index a call may not go above, or None.
+
+        Raises:
+            ValueError: route_ceiling names no tier, or sits below route_floor.
+        """
+        if str_ceiling is None:
+            # Early return: no ceiling on this call.
+            return None
+        str_resolved: str | None = self._config.resolve_tier_name(str_ceiling)
+        int_ceiling: int | None = (
+            self._config.tier_index(str_resolved) if str_resolved is not None else None
+        )
+        if int_ceiling is None:
+            raise ValueError(
+                f"Unknown router tier {str_ceiling!r} in provider_options "
+                f"'{self.PROVIDER_OPTION_ROUTE_CEILING}'; expected one of "
+                f"{[tier.name for tier in self._config.tiers]}."
+            )
+        if str_floor is not None:
+            str_floor_tier: str | None = self._config.resolve_tier_name(str_floor)
+            int_floor: int | None = (
+                self._config.tier_index(str_floor_tier)
+                if str_floor_tier is not None
+                else None
+            )
+            if int_floor is not None and int_floor > int_ceiling:
+                raise ValueError(
+                    f"provider_options '{self.PROVIDER_OPTION_ROUTE_FLOOR}' "
+                    f"{str_floor!r} is above "
+                    f"'{self.PROVIDER_OPTION_ROUTE_CEILING}' {str_ceiling!r}."
+                )
+        # Normal return with the ceiling's tier index.
+        return int_ceiling
+
+    @staticmethod
+    def _apply_ceiling(
+        int_index: int | None, str_method: str, int_ceiling: int | None
+    ) -> tuple[int | None, str]:
+        """
+        Lowers a classified, default, or floored pick to the call's ceiling.
+        An override and a pinned history are never moved, and the default
+        chain is not a tier, so it is left alone. The ceiling wins over the
+        follow-up ratchet; an explicit route_floor above it is rejected
+        earlier.
+        """
+        if (
+            int_ceiling is None
+            or int_index is None
+            or int_index <= int_ceiling
+            or str_method not in (*FROZENSET_FLOORABLE_METHODS, ROUTE_METHOD_FLOOR)
+        ):
+            # Early return: nothing to lower.
+            return int_index, str_method
+        # Normal return: the pick is lowered to the ceiling.
+        return int_ceiling, ROUTE_METHOD_CEILING
 
     def _select_unfloored(
         self,
@@ -895,9 +977,14 @@ class AiRouterCompletions(AIBaseCompletions):
         str_operation: str,
         str_route_id: str,
         str_floor: str | None = None,
+        str_ceiling: str | None = None,
     ) -> tuple[int | None, str, AIClassificationResult | None]:
         """Async twin of _select."""
         pin: AIFallbackCandidate | None = current_model_pin()
+        int_ceiling: int | None = (
+            None if pin is not None else self._ceiling_index(str_ceiling, str_floor)
+        )
+        ROUTE_CEILING_INDEX.set(int_ceiling)
         if pin is not None:
             # Early return: the pin decides the route; nothing is classified.
             return self._pin_tier(pin), ROUTE_METHOD_MODEL_PIN, None
@@ -908,9 +995,12 @@ class AiRouterCompletions(AIBaseCompletions):
             str_operation=str_operation,
             str_route_id=str_route_id,
         )
-        # Normal return with the floored selection.
+        int_floored, str_floored = self._apply_floor(
+            int_index, str_method, messages, str_floor
+        )
+        # Normal return with the floored and capped selection.
         return (
-            *self._apply_floor(int_index, str_method, messages, str_floor),
+            *self._apply_ceiling(int_floored, str_floored, int_ceiling),
             decision,
         )
 
@@ -970,9 +1060,18 @@ class AiRouterCompletions(AIBaseCompletions):
         )
 
     def _next_tier_up(self, int_index: int, str_family: str | None) -> int | None:
-        """The next tier above one that may serve this call, or None."""
+        """
+        The next tier above one that may serve this call, or None. A
+        route_ceiling bounds the climb.
+        """
+        int_ceiling: int | None = ROUTE_CEILING_INDEX.get()
+        int_top: int = (
+            len(self._config.tiers)
+            if int_ceiling is None
+            else min(len(self._config.tiers), int_ceiling + 1)
+        )
         # Loop upward for the first tier that can take the call.
-        for int_next in range(int_index + 1, len(self._config.tiers)):
+        for int_next in range(int_index + 1, int_top):
             if self._tier_takes_family(int_next, str_family):
                 # Early return with the eligible tier.
                 return int_next
@@ -1473,7 +1572,9 @@ class AiRouterCompletions(AIBaseCompletions):
         the preview as `classifier_usd`. Nothing is sent to an answering
         model, and no route is logged.
         """
-        _, str_route, str_floor = self._strip_route_option(provider_options)
+        _, str_route, str_floor, str_ceiling = self._strip_route_option(
+            provider_options
+        )
         str_route_id: str = uuid.uuid4().hex
         with request_cost_scope("preview_route", request_id=str_route_id) as scope:
             int_index, str_method, decision = self._select(
@@ -1481,6 +1582,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 messages=messages,
                 str_route=str_route,
                 str_floor=str_floor,
+                str_ceiling=str_ceiling,
                 str_operation="preview_route",
                 str_route_id=str_route_id,
             )
@@ -1695,7 +1797,9 @@ class AiRouterCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         str_route_id: str = uuid.uuid4().hex
-        dict_options, str_route, str_floor = self._strip_route_option(provider_options)
+        dict_options, str_route, str_floor, str_ceiling = self._strip_route_option(
+            provider_options
+        )
 
         def _routed() -> AIStructuredOutputResult:
             int_index, str_method, decision = self._select(
@@ -1703,6 +1807,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 messages=messages,
                 str_route=str_route,
                 str_floor=str_floor,
+                str_ceiling=str_ceiling,
                 str_operation="send_structured_output",
                 str_route_id=str_route_id,
             )
@@ -1748,7 +1853,9 @@ class AiRouterCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AIStructuredOutputResult:
         str_route_id: str = uuid.uuid4().hex
-        dict_options, str_route, str_floor = self._strip_route_option(provider_options)
+        dict_options, str_route, str_floor, str_ceiling = self._strip_route_option(
+            provider_options
+        )
 
         async def _routed() -> AIStructuredOutputResult:
             int_index, str_method, decision = await self._aselect(
@@ -1756,6 +1863,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 messages=messages,
                 str_route=str_route,
                 str_floor=str_floor,
+                str_ceiling=str_ceiling,
                 str_operation="asend_structured_output",
                 str_route_id=str_route_id,
             )
@@ -1800,7 +1908,9 @@ class AiRouterCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         str_route_id: str = uuid.uuid4().hex
-        dict_options, str_route, str_floor = self._strip_route_option(provider_options)
+        dict_options, str_route, str_floor, str_ceiling = self._strip_route_option(
+            provider_options
+        )
 
         def _routed() -> AITurnResult:
             int_index, str_method, decision = self._select(
@@ -1808,6 +1918,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 messages=messages,
                 str_route=str_route,
                 str_floor=str_floor,
+                str_ceiling=str_ceiling,
                 str_operation="send_conversation",
                 str_route_id=str_route_id,
             )
@@ -1851,7 +1962,9 @@ class AiRouterCompletions(AIBaseCompletions):
         prompt_cache: AIPromptCacheHint | None = None,
     ) -> AITurnResult:
         str_route_id: str = uuid.uuid4().hex
-        dict_options, str_route, str_floor = self._strip_route_option(provider_options)
+        dict_options, str_route, str_floor, str_ceiling = self._strip_route_option(
+            provider_options
+        )
 
         async def _routed() -> AITurnResult:
             int_index, str_method, decision = await self._aselect(
@@ -1859,6 +1972,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 messages=messages,
                 str_route=str_route,
                 str_floor=str_floor,
+                str_ceiling=str_ceiling,
                 str_operation="asend_conversation",
                 str_route_id=str_route_id,
             )
