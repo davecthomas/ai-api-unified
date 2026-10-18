@@ -2,7 +2,9 @@ from __future__ import (
     annotations,
 )  # Postpone evaluation of type hints to avoid circular imports and allow forward references with | None
 
+import asyncio
 import base64
+import contextvars
 import functools
 import json
 import inspect
@@ -25,7 +27,17 @@ from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from collections.abc import Mapping
-from typing import Any, ClassVar, Generic, Iterator, Literal, NoReturn, Type, TypeVar
+from typing import (
+    Any,
+    AsyncIterator,
+    ClassVar,
+    Generic,
+    Iterator,
+    Literal,
+    NoReturn,
+    Type,
+    TypeVar,
+)
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -2279,6 +2291,14 @@ class AIBaseEmbeddings(AIBase):
         # Normal return with the provider-implemented multimodal embedding payload.
         return self._generate_embeddings_multimodal_provider(params)
 
+    async def agenerate_embeddings_multimodal(
+        self,
+        params: AIEmbeddingsMultimodalParams,
+    ) -> dict[str, Any]:
+        """Async twin of generate_embeddings_multimodal; runs on a worker thread."""
+        # Normal return with the embedding.
+        return await asyncio.to_thread(self.generate_embeddings_multimodal, params)
+
     def _generate_embeddings_multimodal_provider(
         self,
         params: AIEmbeddingsMultimodalParams,
@@ -3001,6 +3021,60 @@ class AIStructuredPrompt(BaseModel):
                 exc,
             )
             return None
+
+
+async def aiter_in_thread(iterator: Iterator[Any]) -> AsyncIterator[Any]:
+    """
+    Consumes a blocking iterator on one worker thread and yields its items
+    on the event loop.
+
+    The whole iteration runs in one copied context, so a request cost scope
+    or observability tags the iterator opens stay valid from its first item
+    to its last. Stopping early (break, cancel) asks the worker to close the
+    iterator after its current item.
+
+    Args:
+        iterator: A blocking iterator, such as send_prompt_streaming's.
+
+    Yields:
+        The iterator's items, in order.
+
+    Raises:
+        Whatever the iterator raises.
+    """
+    loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[bool, Any]] = asyncio.Queue()
+    stop: list[bool] = [False]
+
+    def _pump() -> None:
+        try:
+            # Loop over the blocking iterator on this worker thread.
+            for item in iterator:
+                loop.call_soon_threadsafe(queue.put_nowait, (False, item))
+                if stop[0]:
+                    close: Any = getattr(iterator, "close", None)
+                    if callable(close):
+                        close()
+                    break
+            loop.call_soon_threadsafe(queue.put_nowait, (True, None))
+        except BaseException as exception:
+            loop.call_soon_threadsafe(queue.put_nowait, (True, exception))
+
+    future: asyncio.Future[None] = loop.run_in_executor(
+        None, contextvars.copy_context().run, _pump
+    )
+    try:
+        # Loop over the worker's items until it reports the end.
+        while True:
+            bool_done, value = await queue.get()
+            if bool_done:
+                if value is not None:
+                    raise value
+                break
+            yield value
+    finally:
+        stop[0] = True
+        await future
 
 
 # True while an outer completions call owns the result envelope, so the
@@ -4222,6 +4296,117 @@ class AIBaseCompletions(AIBase):
             )
         # Normal return with the provider-implemented streaming iterator.
         return self._send_prompt_streaming_provider(prompt, other_params=other_params)
+
+    async def asend_prompt_streaming(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> AsyncIterator[str]:
+        """
+        Async twin of send_prompt_streaming: yields the same chunks on the
+        event loop. The engine's stream runs on a worker thread, so every
+        engine, fallback chain, and router that streams supports it, with
+        the same failover, metering, and logging.
+        """
+        # Loop over the blocking stream's chunks as they arrive.
+        async for str_chunk in aiter_in_thread(
+            self.send_prompt_streaming(prompt, other_params=other_params)
+        ):
+            yield str_chunk
+
+    async def acount_tokens(
+        self,
+        prompt: str,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> int:
+        """Async twin of count_tokens; runs on a worker thread."""
+        # Normal return with the token count.
+        return await asyncio.to_thread(
+            self.count_tokens, prompt, other_params=other_params
+        )
+
+    async def astrict_schema_prompt(
+        self,
+        prompt: str,
+        response_model: Type[AIStructuredPrompt],
+        max_response_tokens: int = STRUCTURED_DEFAULT_MAX_RESPONSE_TOKENS,
+        *,
+        other_params: AICompletionsPromptParamsBase | None = None,
+    ) -> AIStructuredPrompt:
+        """Async twin of strict_schema_prompt; runs on a worker thread."""
+        # Normal return with the validated model.
+        return await asyncio.to_thread(
+            self.strict_schema_prompt,
+            prompt,
+            response_model,
+            max_response_tokens,
+            other_params=other_params,
+        )
+
+    async def apreview_route(
+        self,
+        prompt: str | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        provider_options: dict[str, Any] | None = None,
+        bool_count_tokens: bool = False,
+    ) -> AIRoutePreview:
+        """Async twin of preview_route; runs on a worker thread."""
+        # Normal return with the preview.
+        return await asyncio.to_thread(
+            self.preview_route,
+            prompt,
+            messages=messages,
+            system_prompt=system_prompt,
+            max_response_tokens=max_response_tokens,
+            provider_options=provider_options,
+            bool_count_tokens=bool_count_tokens,
+        )
+
+    async def asubmit_batch(self, requests: list[AIBatchRequestItem]) -> AIBatchJob:
+        """Async twin of submit_batch; runs on a worker thread."""
+        # Normal return with the submitted job.
+        return await asyncio.to_thread(self.submit_batch, requests)
+
+    async def aget_batch(self, batch: str | AIBatchJob) -> AIBatchJob:
+        """Async twin of get_batch; runs on a worker thread."""
+        # Normal return with the job's state.
+        return await asyncio.to_thread(self.get_batch, batch)
+
+    async def aget_batch_results(
+        self, batch: str | AIBatchJob
+    ) -> list[AIBatchResultItem]:
+        """Async twin of get_batch_results; runs on a worker thread."""
+        # Normal return with the results.
+        return await asyncio.to_thread(self.get_batch_results, batch)
+
+    async def acancel_batch(self, batch: str | AIBatchJob) -> AIBatchJob:
+        """Async twin of cancel_batch; runs on a worker thread."""
+        # Normal return with the canceled job.
+        return await asyncio.to_thread(self.cancel_batch, batch)
+
+    async def arun_batch(
+        self,
+        requests: list[AIBatchRequestItem],
+        *,
+        timeout_seconds: float | None = None,
+        poll_interval_seconds: float | None = None,
+    ) -> list[AIBatchResultItem]:
+        """
+        Async twin of run_batch: submits, polls, and collects on a worker
+        thread, so the event loop stays free while the batch runs.
+        """
+        # Normal return with the results.
+        return await asyncio.to_thread(
+            self.run_batch,
+            requests,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
 
     def _send_prompt_streaming_provider(
         self,
@@ -6071,6 +6256,27 @@ class AIBaseImages(AIBase):
 
         return saved_paths
 
+    async def agenerate_images(
+        self, image_prompt: str, image_properties: AIBaseImageProperties
+    ) -> list[bytes]:
+        """Async twin of generate_images; runs on a worker thread."""
+        # Normal return with the image bytes.
+        return await asyncio.to_thread(
+            self.generate_images, image_prompt, image_properties
+        )
+
+    async def agenerate_image_files(
+        self,
+        image_prompt: str,
+        image_properties: AIBaseImageProperties = AIBaseImageProperties(),
+        root_file_name: str = "generate_image_files",
+    ) -> list[Path]:
+        """Async twin of generate_image_files; runs on a worker thread."""
+        # Normal return with the saved paths.
+        return await asyncio.to_thread(
+            self.generate_image_files, image_prompt, image_properties, root_file_name
+        )
+
 
 class AIBaseVideos(AIBase):
     """
@@ -6325,6 +6531,61 @@ class AIBaseVideos(AIBase):
             current_job = self.get_video_generation_job(current_job)
 
         return current_job
+
+    async def agenerate_video(
+        self,
+        video_prompt: str,
+        video_properties: AIBaseVideoProperties = AIBaseVideoProperties(),
+    ) -> AIVideoGenerationResult:
+        """
+        Async twin of generate_video: submits, polls, and downloads on a
+        worker thread, so the event loop stays free while the video renders.
+        """
+        # Normal return with the finished video.
+        return await asyncio.to_thread(
+            self.generate_video, video_prompt, video_properties
+        )
+
+    async def asubmit_video_generation(
+        self,
+        video_prompt: str,
+        video_properties: AIBaseVideoProperties = AIBaseVideoProperties(),
+    ) -> AIVideoGenerationJob:
+        """Async twin of submit_video_generation; runs on a worker thread."""
+        # Normal return with the submitted job.
+        return await asyncio.to_thread(
+            self.submit_video_generation, video_prompt, video_properties
+        )
+
+    async def aget_video_generation_job(
+        self, job: str | AIVideoGenerationJob
+    ) -> AIVideoGenerationJob:
+        """Async twin of get_video_generation_job; runs on a worker thread."""
+        # Normal return with the job's state.
+        return await asyncio.to_thread(self.get_video_generation_job, job)
+
+    async def await_for_video_generation(
+        self,
+        job: str | AIVideoGenerationJob,
+        *,
+        timeout_seconds: int | None = None,
+        poll_interval_seconds: int | None = None,
+    ) -> AIVideoGenerationJob:
+        """Async twin of wait_for_video_generation; polls on a worker thread."""
+        # Normal return with the finished job.
+        return await asyncio.to_thread(
+            self.wait_for_video_generation,
+            job,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
+    async def adownload_video_result(
+        self, job: str | AIVideoGenerationJob
+    ) -> AIVideoGenerationResult:
+        """Async twin of download_video_result; runs on a worker thread."""
+        # Normal return with the downloaded video.
+        return await asyncio.to_thread(self.download_video_result, job)
 
     @staticmethod
     def extract_image_frames_from_video_buffer(

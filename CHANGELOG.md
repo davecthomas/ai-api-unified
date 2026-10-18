@@ -4,6 +4,26 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.21.0
+
+### Added
+
+- An async form of every remaining call: `asend_prompt_streaming` (an
+  async iterator), `acount_tokens`, `astrict_schema_prompt`,
+  `apreview_route`, the five batch calls (`asubmit_batch`, `aget_batch`,
+  `aget_batch_results`, `acancel_batch`, `arun_batch`),
+  `agenerate_embeddings_multimodal`, `agenerate_images` and
+  `agenerate_image_files`, the video calls (`agenerate_video`,
+  `asubmit_video_generation`, `aget_video_generation_job`,
+  `await_for_video_generation`, `adownload_video_result`), and the voice
+  calls (`atext_to_voice`, `astream_audio`, `aspeech_to_text`,
+  `aspeech_to_text_from_file`, `atext_to_voice_with_emotion_prompt`).
+  They run the blocking call on a worker thread in the caller's context,
+  so cost scopes, tags, pins, and fallback carry over; fallback chains and
+  routers inherit them.
+- `aiter_in_thread(iterator)`: consumes a blocking iterator on one worker
+  thread and yields its items on the event loop.
+
 ## 3.20.0
 
 ### Added

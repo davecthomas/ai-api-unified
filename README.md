@@ -1,4 +1,4 @@
-# ai-api-unified 3.20.0
+# ai-api-unified 3.21.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -313,6 +313,34 @@ Nothing else changes: `send_prompt`, `send_conversation`,
 `send_structured_output`, streaming, and the async variants all work as
 before. See [Model fallback](#model-fallback) for what triggers a failover,
 what does not, and how to see which model answered.
+
+### Async everywhere
+
+Every call that reaches a provider has an async form. Where the SDK has an async client
+(prompts, structured output, conversations, embeddings, classifiers), the
+`a`-prefixed method uses it. Everywhere else the async twin runs the
+blocking call on a worker thread in the caller's context, so request cost
+scopes, observability tags, pins, and fallback behave exactly as in the
+sync call:
+
+| Sync | Async |
+| --- | --- |
+| `send_prompt_streaming` | `asend_prompt_streaming` (an async iterator) |
+| `count_tokens`, `strict_schema_prompt`, `preview_route` | `acount_tokens`, `astrict_schema_prompt`, `apreview_route` |
+| `submit_batch`, `get_batch`, `get_batch_results`, `cancel_batch`, `run_batch` | `asubmit_batch`, `aget_batch`, `aget_batch_results`, `acancel_batch`, `arun_batch` |
+| `generate_embeddings_multimodal` | `agenerate_embeddings_multimodal` |
+| `generate_images`, `generate_image_files` | `agenerate_images`, `agenerate_image_files` |
+| `generate_video`, `submit_video_generation`, `get_video_generation_job`, `wait_for_video_generation`, `download_video_result` | `agenerate_video`, `asubmit_video_generation`, `aget_video_generation_job`, `await_for_video_generation`, `adownload_video_result` |
+| `text_to_voice`, `stream_audio`, `speech_to_text`, `speech_to_text_from_file`, `text_to_voice_with_emotion_prompt` | the same names with an `a` prefix |
+
+```python
+async for chunk in client.asend_prompt_streaming("Tell me a short story."):
+    print(chunk, end="", flush=True)
+```
+
+`asend_prompt_streaming` runs the whole stream on one worker thread and
+hands chunks to the event loop as they arrive; breaking out of the loop
+closes the stream after its current chunk.
 
 ### Streaming Completions
 

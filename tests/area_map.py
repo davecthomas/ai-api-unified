@@ -234,6 +234,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_model_router_config.py": ("completions",),
     "test_model_router.py": ("completions", "core"),
     "test_route_ceiling.py": ("completions", "core"),
+    "test_async_twins.py": ("completions", "core", "images", "voice"),
     "test_model_router_nonmock.py": (
         "completions",
         "core",
