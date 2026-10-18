@@ -12,6 +12,12 @@ enabled, so the report is always available programmatically. When the
 outermost scope closes, one `ai_api_request_cost` event goes to the cost topic
 if `emit_cost` is on. Per-call `ai_api_call_cost` events are unchanged and
 gain a `tag_request_id` field for correlation.
+
+A public call that returns its own result envelope (`send_prompt_with_result`)
+opens a `capture_request_calls()` ledger as well. It sees the same line items
+as the request it runs in, but only the ones this call made, so the envelope
+stays right when the call joins a caller's larger request or runs alongside
+other calls on the same client.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ if TYPE_CHECKING:
         AiApiCallContextModel,
         AiApiCallResultSummaryModel,
     )
+    from ai_api_unified.thinking import AIThinkingResolution
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -652,6 +659,135 @@ REQUEST_COST_SCOPE: ContextVar[RequestCostScope | None] = ContextVar(
 )
 
 
+class RequestCallCapture(RequestCostScope):
+    """
+    The ledger of one public call, kept beside the request it runs in.
+
+    It records the same line items as the request scope, but only the ones
+    made while this call ran, and it never emits. On its first line item it
+    takes the request's id and tags, so its report correlates with the
+    request's `ai_api_request_cost` event even when the call joined a
+    caller's larger request.
+
+    Attributes:
+        thinking: The thinking resolution of the latest non-classifier
+            provider call; after a call returns, that is the served one.
+        served_engine: Engine token of the chain candidate that served the
+            call, when a fallback chain served it.
+        served_model: That candidate's model.
+        route_tier: Router tier that served the call, when a router did.
+        route_method: How the router chose it.
+    """
+
+    def __init__(self, operation: str) -> None:
+        super().__init__(operation)
+        self.thinking: AIThinkingResolution | None = None
+        self.served_engine: str | None = None
+        self.served_model: str | None = None
+        self.route_tier: str | None = None
+        self.route_method: str | None = None
+        self._bool_adopted: bool = False
+
+    def adopt(self, scope: RequestCostScope) -> None:
+        """Takes the request's id and tags, once."""
+        if self._bool_adopted:
+            # Early return: already correlated with its request.
+            return None
+        self._bool_adopted = True
+        self.request_id = scope.request_id
+        self._tags = dict(scope._tags)
+        # Normal return after adopting the request's identity.
+        return None
+
+
+REQUEST_CALL_CAPTURES: ContextVar[tuple[RequestCallCapture, ...]] = ContextVar(
+    "ai_api_unified_request_call_captures", default=()
+)
+
+
+@contextmanager
+def capture_request_calls(operation: str) -> Iterator[RequestCallCapture]:
+    """
+    Collects the line items of the provider calls made inside the block.
+
+    Args:
+        operation: Public operation name for the capture's report.
+
+    Yields:
+        The capture; call `build_report()` on it after the block's call
+        returns.
+    """
+    capture: RequestCallCapture = RequestCallCapture(operation)
+    token: Token[tuple[RequestCallCapture, ...]] = REQUEST_CALL_CAPTURES.set(
+        (*REQUEST_CALL_CAPTURES.get(), capture)
+    )
+    try:
+        yield capture
+    finally:
+        try:
+            REQUEST_CALL_CAPTURES.reset(token)
+        except ValueError:
+            # Closed from another context; drop this capture directly.
+            REQUEST_CALL_CAPTURES.set(
+                tuple(c for c in REQUEST_CALL_CAPTURES.get() if c is not capture)
+            )
+
+
+def _capturing_non_classifier() -> tuple[RequestCallCapture, ...]:
+    """Active captures, or none when the current call is the router's classifier."""
+    tuple_captures: tuple[RequestCallCapture, ...] = REQUEST_CALL_CAPTURES.get()
+    if not tuple_captures:
+        # Early return: nothing is capturing.
+        return ()
+    from ai_api_unified.middleware.observability_runtime import (
+        get_observability_context,
+    )
+
+    if (
+        get_observability_context().tags.get(TAG_ROUTER_ROLE)
+        == TAG_VALUE_CLASSIFIER_ROLE
+    ):
+        # Early return: the classifier's settings are not the answer's.
+        return ()
+    # Normal return with the captures to update.
+    return tuple_captures
+
+
+def note_call_thinking(resolution: AIThinkingResolution | None) -> None:
+    """Records the thinking resolution of the provider call about to run."""
+    # Loop over the active captures to record the level.
+    for capture in _capturing_non_classifier():
+        capture.thinking = resolution
+    # Normal return after recording.
+    return None
+
+
+def note_served_route(
+    *,
+    engine: str | None = None,
+    model: str | None = None,
+    route_tier: str | None = None,
+    route_method: str | None = None,
+) -> None:
+    """
+    Records what a wrapper knows about the client that served a call: a
+    fallback chain names the candidate's engine token and model, a router
+    names the tier and how it was chosen. Fields left None are kept.
+    """
+    # Loop over the active captures to record the route.
+    for capture in _capturing_non_classifier():
+        if engine is not None:
+            capture.served_engine = engine
+        if model is not None:
+            capture.served_model = model
+        if route_tier is not None:
+            capture.route_tier = route_tier
+        if route_method is not None:
+            capture.route_method = route_method
+    # Normal return after recording.
+    return None
+
+
 def current_request_cost_scope() -> RequestCostScope | None:
     """The active request scope, or None outside any request."""
     # Normal return with the contextvar value.
@@ -674,14 +810,17 @@ def record_call_line_item(
         # Early return: no request is open.
         return None
     try:
-        scope.record(
-            build_line_item(
-                call_context=call_context,
-                call_result_summary=call_result_summary,
-                float_elapsed_ms=float_elapsed_ms,
-                exception=exception,
-            )
+        item: AIRequestCostLineItem = build_line_item(
+            call_context=call_context,
+            call_result_summary=call_result_summary,
+            float_elapsed_ms=float_elapsed_ms,
+            exception=exception,
         )
+        scope.record(item)
+        # Loop over the calls capturing their own ledger.
+        for capture in REQUEST_CALL_CAPTURES.get():
+            capture.adopt(scope)
+            capture.record(item)
     except Exception as record_exception:
         _LOGGER.warning(
             "request_cost_line_item_failed error_type=%s",

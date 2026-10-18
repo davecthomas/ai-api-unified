@@ -1,4 +1,4 @@
-# ai-api-unified 3.15.0
+# ai-api-unified 3.16.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -256,6 +256,30 @@ client: AIBaseCompletions = AIFactory.get_ai_completions_client()
 response: str = client.send_prompt("Say hello in one short sentence.")
 print(response)
 ```
+
+### Completions with the full result
+
+`send_prompt_with_result` sends the same prompt and returns an
+`AIPromptResult`: the text, plus which provider and model answered, the
+router tier and how it was chosen, the thinking level, the tokens used, and
+what the call cost. `send_prompt` is unchanged and still returns a string.
+
+```python
+result = client.send_prompt_with_result("Say hello in one short sentence.")
+result.text                                # the response
+result.provider, result.provider_engine    # "anthropic", "claude"
+result.model_name                          # "claude-opus-5"
+result.route_tier, result.route_method     # "hard", "classifier" (None off a router)
+result.thinking                            # requested and applied level
+result.usage.input_tokens, result.usage.output_tokens
+result.total_usd                           # Decimal, classifier and failed attempts included
+result.cost                                # the full AIRequestCostReport for this call
+result.request_id, result.config_id        # correlate with logs and cost events
+```
+
+Every field describes this call alone, even inside a caller's
+`request_cost_scope()` or when several calls run at once on one client.
+`asend_prompt_with_result` is the async twin.
 
 ### Completions with automatic fallback
 
@@ -1831,6 +1855,39 @@ preview.classifier_usd                             # what classifying cost
   default when omitted) at the output rate, thinking included: the most
   the first attempt should cost. Fallbacks and escalations, if they
   happen, add to it. An unpriced model has no cost estimate.
+
+### Pinning a model for one call
+
+`model=` on `send_prompt_with_result` (and its async twin) names the model
+for one call:
+
+```python
+result = client.send_prompt_with_result(prompt, model="claude:claude-opus-5-5")
+result.model_pin                           # "claude:claude-opus-5-5"
+result.route_method                        # "model_pin"
+```
+
+The call skips routing (no classifier, no tier pick) and keeps everything
+else: fallback, metering, logging, and redaction.
+
+- Name the model as `engine:model`, or as a bare model id that the
+  configuration already uses. Bedrock ids keep their colons
+  (`bedrock:amazon.nova-pro-v1:0`).
+- On a fallback chain the call starts on the pinned model, then tries the
+  chain's own candidates in order. A model outside the chain is built on
+  first use and kept for later pins; unpinned calls never use it.
+- On a router the call runs on the chain of the tier that holds the pinned
+  model, else on the default chain, and never escalates to another tier.
+- On a single configured model, the pinned model falls back to the
+  configured one.
+- The models.json allow/deny policy applies; a denied model raises
+  `ValueError`. A pinned model that cannot be built raises instead of
+  moving silently to another model.
+
+Operators can find every pinned call: it logs one `MODEL PIN` line
+(`ai_route_event: "model_pin"`), and its events and request cost report
+carry the tags `model_pin` (the engine:model) and `route_method`
+(`model_pin`). A routed call's `ROUTED` line shows method `model_pin`.
 
 ### Configuration reference
 

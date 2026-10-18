@@ -56,10 +56,15 @@ from ai_api_unified.middleware.observability_runtime import (
     resolve_originating_caller,
 )
 from ai_api_unified.middleware.request_cost import (
+    REQUEST_STATUS_OK,
+    AIRequestCostLineItem,
     AIRequestCostReport,
     JoinedRequestCostScope,
+    RequestCallCapture,
     RequestCostScope,
+    capture_request_calls,
     current_request_cost_scope,
+    note_call_thinking,
     request_cost_scope,
 )
 from ai_api_unified.pricing.model_pricing import AIModelPricing
@@ -751,6 +756,73 @@ class AIStructuredOutputResult(BaseModel):
     provider_engine: str | None = None
     model_name: str | None = None
     thinking: AIThinkingResolution | None = None
+
+
+class AIPromptResult(BaseModel):
+    """
+    Result of send_prompt_with_result: the response text, and which model
+    produced it, how, and at what cost.
+
+    Every field describes this call alone, even when it ran inside a
+    caller's larger `request_cost_scope()` or alongside other calls on the
+    same client.
+
+    Attributes:
+        text: The model's response text, as send_prompt returns it.
+        provider: Vendor that served the answer (openai, anthropic, google,
+            bedrock, ...).
+        provider_engine: Engine token that served it (openai,
+            openai-responses, claude, google-gemini, nova, ...).
+        model_name: Model that served it.
+        route_tier: Router tier that served it; None off a router.
+        route_method: How the route was chosen (classifier, default, floor,
+            override, low_confidence, model_pin); None off a router unless
+            the call was pinned.
+        model_pin: The engine:model the call was pinned to, or None.
+        thinking: The thinking level requested and the one applied on the
+            served call; see AIThinkingResolution.
+        usage: Token usage of the served call.
+        cost: Every provider call this call made (the classifier, failed
+            attempts, fallbacks) with its totals. Its request_id is the one
+            on the call's `ai_api_request_cost` event.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+    provider: str | None = None
+    provider_engine: str | None = None
+    model_name: str | None = None
+    route_tier: str | None = None
+    route_method: str | None = None
+    model_pin: str | None = None
+    thinking: AIThinkingResolution | None = None
+    usage: AITokenUsage = Field(default_factory=AITokenUsage)
+    cost: AIRequestCostReport
+
+    @property
+    def total_usd(self) -> Decimal:
+        """What the call cost in USD, classifier and failed attempts included."""
+        # Normal return with the call's priced total.
+        return self.cost.total_usd
+
+    @property
+    def request_id(self) -> str:
+        """Correlation id of the request the call ran in."""
+        # Normal return with the report's id.
+        return self.cost.request_id
+
+    @property
+    def config_id(self) -> str | None:
+        """Hash of the configuration that routed the call, if any."""
+        # Normal return with the tag, if set.
+        return self.cost.tags.get("config_id")
+
+    @property
+    def config_version(self) -> str | None:
+        """The models.json `config_version` label, if any."""
+        # Normal return with the tag, if set.
+        return self.cost.tags.get("config_version")
 
 
 # Characters per token for the route preview's local input estimate; a
@@ -2865,6 +2937,14 @@ class AIBaseCompletions(AIBase):
     # client rather than one per call.
     _set_logged_thinking: set[tuple[str, str | None, str | None]] | None = None
     _set_warned_native_thinking: set[str] | None = None
+    # What a single configured client needs to serve a per-call model pin;
+    # set by the factory (see _configure_model_pins). Wrappers handle pins
+    # themselves.
+    _pin_candidate: Any = None
+    _pin_builder: Callable[[Any], "AIBaseCompletions"] | None = None
+    _pin_fallback_on: frozenset[Any] | None = None
+    _pin_cooldown: Any = None
+    _pin_chain: "AIBaseCompletions | None" = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -2956,10 +3036,12 @@ class AIBaseCompletions(AIBase):
                 }
             )
             self._last_thinking = resolution
+            note_call_thinking(resolution)
             self._warn_native_thinking_once(str_native)
             # Early return with the caller-overridden resolution.
             return resolution
         self._last_thinking = resolution
+        note_call_thinking(resolution)
         if not resolution.exact:
             self._log_thinking_once(resolution, "nearest_level")
         # Normal return with the resolution the engine applies.
@@ -3111,6 +3193,7 @@ class AIBaseCompletions(AIBase):
             self._last_thinking = self._last_thinking.model_copy(
                 update={"applied": applied, "exact": False, "reason": reason}
             )
+            note_call_thinking(self._last_thinking)
             self._log_thinking_once(self._last_thinking, "engine_override")
         # Normal return after recording the override.
         return None
@@ -3587,6 +3670,254 @@ class AIBaseCompletions(AIBase):
             request_timeout_seconds: Optional per-call provider timeout.
             other_params: Optional provider-specific parameters.
         """
+
+    # ── Result envelope and model pins ───────────────────────────────────────
+
+    def send_prompt_with_result(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
+        other_params: AICompletionsPromptParamsBase | None = None,
+        model: str | None = None,
+    ) -> AIPromptResult:
+        """
+        Sends a prompt like send_prompt, and returns the text with which
+        provider and model answered, the router tier and method, the
+        thinking level, the token usage, and the cost.
+
+        Args:
+            prompt: The text prompt to send.
+            system_prompt: Optional persistent instructions.
+            max_response_tokens: Optional response token budget override.
+            request_timeout_seconds: Optional per-call provider timeout.
+            other_params: Optional provider-specific parameters.
+            model: Optional pin, `engine:model` or a configured model id:
+                this call skips routing and starts on that model, keeping
+                fallback, metering, logging, and redaction. See
+                completions/ai_model_pin.py.
+
+        Returns:
+            The AIPromptResult for this call.
+
+        Raises:
+            ValueError: The pin is malformed, names an unknown bare model,
+                or names a model the models.json policy denies.
+            AiProviderConfigurationError: The client cannot build the
+                pinned model (it was not built by AIFactory).
+        """
+        from ai_api_unified.completions.ai_model_pin import model_pin_scope
+
+        pin, target = self._model_pin_for_call(model)
+        report_before: AIRequestCostReport | None = target.last_request_cost
+        with (
+            model_pin_scope(pin, "send_prompt_with_result", config_id=self.config_id),
+            capture_request_calls("send_prompt_with_result") as capture,
+        ):
+            str_text: str = target.send_prompt(
+                prompt,
+                system_prompt=system_prompt,
+                max_response_tokens=max_response_tokens,
+                request_timeout_seconds=request_timeout_seconds,
+                other_params=other_params,
+            )
+        self._adopt_request_cost(target, report_before)
+        # Normal return with the call's envelope.
+        return self._prompt_result(str_text, capture, pin)
+
+    async def asend_prompt_with_result(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        max_response_tokens: int | None = None,
+        request_timeout_seconds: float | None = None,
+        other_params: AICompletionsPromptParamsBase | None = None,
+        model: str | None = None,
+    ) -> AIPromptResult:
+        """Async twin of send_prompt_with_result."""
+        from ai_api_unified.completions.ai_model_pin import model_pin_scope
+
+        pin, target = self._model_pin_for_call(model)
+        report_before: AIRequestCostReport | None = target.last_request_cost
+        with (
+            model_pin_scope(pin, "asend_prompt_with_result", config_id=self.config_id),
+            capture_request_calls("asend_prompt_with_result") as capture,
+        ):
+            str_text: str = await target.asend_prompt(
+                prompt,
+                system_prompt=system_prompt,
+                max_response_tokens=max_response_tokens,
+                request_timeout_seconds=request_timeout_seconds,
+                other_params=other_params,
+            )
+        self._adopt_request_cost(target, report_before)
+        # Normal return with the call's envelope.
+        return self._prompt_result(str_text, capture, pin)
+
+    def _configure_model_pins(
+        self,
+        *,
+        candidate: Any,
+        client_builder: Callable[[Any], "AIBaseCompletions"],
+        fallback_on: frozenset[Any],
+        cooldown: Any,
+    ) -> None:
+        """
+        Lets a single configured client serve per-call model pins: a pinned
+        call starts on the pinned model, built with `client_builder`, and
+        falls back to this client.
+
+        Args:
+            candidate: This client's own AIFallbackCandidate.
+            client_builder: Builds a client for the pinned candidate.
+            fallback_on: Reasons that move a pinned call back to this client.
+            cooldown: Rest policy for the pinned model after a trigger failure.
+        """
+        self._pin_candidate = candidate
+        self._pin_builder = client_builder
+        self._pin_fallback_on = frozenset(fallback_on)
+        self._pin_cooldown = cooldown
+        self._pin_chain = None
+        # Normal return after recording the pin support.
+        return None
+
+    def _known_pin_candidates(self) -> list[Any]:
+        """Configured candidates a bare-model pin may name."""
+        # Normal return with this client's own candidate, when the factory set it.
+        return [self._pin_candidate] if self._pin_candidate is not None else []
+
+    def _model_pin_target(self, pin: Any) -> "AIBaseCompletions | None":
+        """
+        The client that serves a call pinned to `pin`, or None when this
+        client cannot serve it. Wrappers return themselves; a single
+        configured client returns a chain of the pinned model then itself.
+        """
+        if self._pin_candidate is not None and self._pin_builder is not None:
+            if self._pin_chain is None:
+                from ai_api_unified.completions.ai_fallback_completions import (
+                    AiFallbackCompletions,
+                )
+
+                chain: AiFallbackCompletions = AiFallbackCompletions(
+                    primary=self,
+                    primary_candidate=self._pin_candidate,
+                    fallback_candidates=(),
+                    client_builder=self._pin_builder,
+                    fallback_on=self._pin_fallback_on or frozenset(),
+                    cooldown=self._pin_cooldown,
+                )
+                chain._dict_config_tags = self._dict_config_tags
+                self._pin_chain = chain
+            # Early return with the pinned-model-then-this-client chain.
+            return self._pin_chain
+        if pin.model and pin.model == (self.model_name or ""):
+            # Early return: the pin names this client's own model.
+            return self
+        # Normal return: nothing here can build the pinned model.
+        return None
+
+    def _model_pin_for_call(
+        self, str_model: str | None
+    ) -> tuple[Any, "AIBaseCompletions"]:
+        """
+        Resolves a call's pin and the client that serves it.
+
+        Returns:
+            (the pin's AIFallbackCandidate or None, the client to call).
+
+        Raises:
+            ValueError: A malformed or unknown pin.
+            AiProviderConfigurationError: No client here can serve the pin.
+        """
+        if str_model is None:
+            # Early return: not pinned; this client serves the call.
+            return None, self
+        from ai_api_unified.completions.ai_model_pin import resolve_model_pin
+
+        pin: Any = resolve_model_pin(str_model, self._known_pin_candidates())
+        target: AIBaseCompletions | None = self._model_pin_target(pin)
+        if target is None:
+            raise AiProviderConfigurationError(
+                f"{type(self).__name__} cannot pin a call to {pin.label}: it was "
+                "not built by AIFactory, so it cannot build another model. Build "
+                "it with AIFactory.get_ai_completions_client(), or construct a "
+                f"client for {pin.label} directly."
+            )
+        # Normal return with the pin and its serving client.
+        return pin, target
+
+    def _adopt_request_cost(
+        self,
+        target: "AIBaseCompletions",
+        report_before: AIRequestCostReport | None,
+    ) -> None:
+        """Keeps last_request_cost current when another client ran the request."""
+        if target is not self and target.last_request_cost is not report_before:
+            self._last_request_cost = target.last_request_cost
+        # Normal return after adopting the report, if there was a new one.
+        return None
+
+    def _prompt_result(
+        self, str_text: str, capture: RequestCallCapture, pin: Any
+    ) -> AIPromptResult:
+        """Builds the envelope from the call's own ledger."""
+        capture.mark_served()
+        report: AIRequestCostReport = capture.build_report(REQUEST_STATUS_OK)
+        served: AIRequestCostLineItem | None = next(
+            (item for item in reversed(report.calls) if item.served), None
+        )
+        # A wrapper's record names the chain's engine token and the router's
+        # tier; the line item fills in what no wrapper recorded.
+        str_engine: str | None = capture.served_engine
+        if str_engine is None and self._pin_candidate is not None:
+            str_engine = self._pin_candidate.engine
+        if str_engine is None and served is not None:
+            str_engine = served.provider_engine
+        str_model: str | None = served.model if served is not None else None
+        if not str_model:
+            str_model = capture.served_model or self.model_name
+        str_tier: str | None = capture.route_tier or (
+            served.route_tier if served is not None else None
+        )
+        str_method: str | None = capture.route_method or (
+            served.route_method if served is not None else None
+        )
+        if str_method is None and pin is not None:
+            from ai_api_unified.completions.ai_model_pin import ROUTE_METHOD_MODEL_PIN
+
+            str_method = ROUTE_METHOD_MODEL_PIN
+        usage: AITokenUsage = AITokenUsage()
+        if served is not None:
+            usage = AITokenUsage(
+                input_tokens=served.input_tokens,
+                output_tokens=served.output_tokens,
+                cached_input_tokens=served.cached_input_tokens,
+                total_tokens=(
+                    served.input_tokens + served.output_tokens
+                    if served.input_tokens is not None
+                    and served.output_tokens is not None
+                    else None
+                ),
+                reasoning_tokens=served.reasoning_tokens,
+                cache_write_5m_tokens=served.cache_write_5m_tokens,
+                cache_write_1h_tokens=served.cache_write_1h_tokens,
+            )
+        # Normal return with the envelope.
+        return AIPromptResult(
+            text=str_text,
+            provider=served.provider if served is not None else None,
+            provider_engine=str_engine,
+            model_name=str_model,
+            route_tier=str_tier,
+            route_method=str_method,
+            model_pin=pin.label if pin is not None else None,
+            thinking=capture.thinking,
+            usage=usage,
+            cost=report,
+        )
 
     @property
     def capabilities(self) -> AICompletionsCapabilitiesBase:
