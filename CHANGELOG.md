@@ -4,6 +4,24 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.19.0
+
+### Added
+
+- The configured-model check covers embeddings, images, and videos: the
+  factory probes the configured model with the same provider's probe
+  (OpenAI, Gemini, Bedrock), memoized as for completions. A missing model
+  raises `ValueError` naming `embeddings.model`, `images.model`, or
+  `videos.model`; an unreachable one raises `AiProviderConfigurationError`.
+  `model_check.mode: "off"` skips it. Voyage, voice, and engine-default
+  models are not probed.
+- Configuration identity on every client the factory builds: embeddings,
+  images, videos, voice, and classifier clients get a `config_id` (hashed
+  from capability, engine, model, and embedding dimensions),
+  `config_version`, and `service`, and their calls and request cost reports
+  carry them as tags. `AIVoiceBase` gains `set_config_identity` and
+  `config_id`.
+
 ## 3.18.0
 
 ### Changed
