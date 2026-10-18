@@ -233,6 +233,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     # Routing
     "test_model_router_config.py": ("completions",),
     "test_model_router.py": ("completions", "core"),
+    "test_route_ceiling.py": ("completions", "core"),
     "test_model_router_nonmock.py": (
         "completions",
         "core",

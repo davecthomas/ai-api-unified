@@ -1,4 +1,4 @@
-# ai-api-unified 3.19.0
+# ai-api-unified 3.20.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1836,7 +1836,11 @@ cost by tier needs no extra work. The classifier call itself carries
 - `provider_options={"route": "hard"}` pins one structured-output or
   conversation call to a tier; `"default"` pins it to the default route.
   `provider_options={"route_floor": "medium"}` sets a minimum tier
-  instead (see Follow-up turns). The router removes both keys before
+  instead (see Follow-up turns), and `{"route_ceiling": "medium"}` a
+  maximum: a pick above it is lowered to it (method `ceiling`), and a
+  failed tier never escalates past it. The ceiling wins over the
+  follow-up ratchet; a `route_floor` above it raises `ValueError`, and a
+  `route` override is not moved. The router removes all three keys before
   options reach the engine.
 - `client.for_tier("hard")` returns that tier's chain client, for
   `send_prompt` and streaming, which take no `provider_options`.
@@ -1858,7 +1862,8 @@ preview.classifier_usd                             # what classifying cost
 ```
 
 - A router picks the tier exactly as a call would: the classifier,
-  `min_confidence`, `route` and `route_floor` in `provider_options`, the
+  `min_confidence`, `route`, `route_floor`, and `route_ceiling` in
+  `provider_options`, the
   follow-up ratchet, and a pinned tool history. The classifier call is real
   and billed, and its cost is on the preview. Nothing is logged as routed.
 - A fallback chain previews the candidate it would try first: the primary,
@@ -1888,8 +1893,8 @@ turn = client.send_conversation(
 )
 ```
 
-The call skips routing (no classifier, no tier pick, and no `route` or
-`route_floor` option) and keeps everything else: fallback, metering,
+The call skips routing (no classifier, no tier pick, and no `route`,
+`route_floor`, or `route_ceiling` option) and keeps everything else: fallback, metering,
 logging, and redaction. The `model` key is removed before the request
 reaches the provider.
 
