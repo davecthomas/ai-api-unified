@@ -1,4 +1,4 @@
-# ai-api-unified 3.17.0
+# ai-api-unified 3.18.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -825,6 +825,15 @@ except AiProviderRequestError as error:
 
 You do not have to write that loop yourself: a [fallback chain](#model-fallback)
 does it inside the client.
+
+Embeddings, images, videos, and voice raise the same error. A provider
+failure on any of them (an OpenAI, Google, Bedrock, Voyage, or ElevenLabs
+SDK error, or an HTTP error from httpx) becomes `AiProviderRequestError`
+with the same `status_code` and `fallback_reason` rules, and the SDK's own
+exception as its `__cause__`. Errors the library raises about the request
+itself (a malformed input, a provider response with no vectors) keep their
+own types. `AiProviderRequestError` is a `RuntimeError`, so an existing
+`except RuntimeError` still catches it.
 
 ### Batch completions (Anthropic)
 
