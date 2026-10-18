@@ -4,6 +4,26 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.16.0
+
+### Added
+
+- Result envelope: `client.send_prompt_with_result(prompt, ...)` and
+  `asend_prompt_with_result` return an `AIPromptResult` with the text and
+  the provider, engine, and model that answered, the router tier and
+  method, the thinking level, the token usage, and the cost
+  (`total_usd`, and the full `AIRequestCostReport` as `cost`). Every field
+  describes that call alone, also inside a caller's `request_cost_scope()`
+  and under concurrent calls on one client. `send_prompt` is unchanged.
+- Per-call model pins: `send_prompt_with_result(prompt, model="engine:model")`
+  skips routing and starts on the named model, keeping fallback, metering,
+  logging, and redaction. A fallback chain tries its own candidates after
+  the pin; a router runs the pin on the tier that holds it (else the
+  default chain) without escalating; a single configured model is the
+  pin's fallback. Pinned calls log a `MODEL PIN` line and carry the
+  `model_pin` and `route_method: model_pin` tags. The models.json
+  allow/deny policy applies to pinned models.
+
 ## 3.15.0
 
 ### Added

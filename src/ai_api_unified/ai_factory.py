@@ -496,7 +496,11 @@ class AIFactory:
 
         def _build_leveled(candidate: AIFallbackCandidate) -> AIBaseCompletions:
             """Builds one candidate's client with the thinking level and the
-            configuration's identity."""
+            configuration's identity. The allow/deny policy is checked here
+            too, so a per-call model pin cannot reach a denied model."""
+            AIFactory._require_allowed(
+                policy, candidate.engine, candidate.model, "completions model"
+            )
             client: AIBaseCompletions = AIFactory._build_completions_client(
                 candidate.engine, candidate.model, candidate.base_url
             )
@@ -512,6 +516,17 @@ class AIFactory:
             # key); this covers a primary that builds but cannot be called.
             raise AiProviderConfigurationError(str_primary_unreachable)
         default_client: AIBaseCompletions = primary
+        if not list_fallbacks:
+            # A single configured model serves a per-call pin itself: the
+            # pinned model first, then this one.
+            configure_pins: Any = getattr(primary, "_configure_model_pins", None)
+            if callable(configure_pins):
+                configure_pins(
+                    candidate=primary_candidate,
+                    client_builder=_build_leveled,
+                    fallback_on=frozenset_reasons,
+                    cooldown=policy_cooldown,
+                )
         if list_fallbacks:
             default_client = AiFallbackCompletions(
                 primary=primary,

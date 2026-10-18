@@ -23,6 +23,10 @@ the default chain, and the reason is logged.
 Every call logs a `routed` event before it runs, and pushes route tags
 (route_id, route_tier, route_method) onto the observability context so the
 engine's own input, output, and cost events carry them.
+
+A call pinned to one model (see ai_model_pin.py) skips the classifier: it
+runs on the chain of the tier that holds the pinned model, else on the
+default chain, with route method `model_pin`, and never escalates.
 """
 
 from __future__ import annotations
@@ -63,6 +67,7 @@ from ..middleware.observability_runtime import (
 from ..middleware.request_cost import (
     RequestCostScope,
     current_request_cost_scope,
+    note_served_route,
     request_cost_scope,
 )
 from ..pricing.pricing_registry import get_model_pricing
@@ -73,11 +78,17 @@ from ..routing.router_config import (
     classification_text_for,
 )
 from .ai_fallback_cooldown import AIFallbackCooldownPolicy
+from ..ai_provider_exceptions import AiProviderConfigurationError
 from .ai_fallback_completions import (
     DICT_ENGINE_FAMILY_BY_TOKEN,
     AIFallbackCandidate,
     AiFallbackCompletions,
     history_family_of,
+)
+from .ai_model_pin import (
+    ROUTE_METHOD_MODEL_PIN,
+    current_model_pin,
+    find_pinned_candidate,
 )
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -1042,6 +1053,8 @@ class AiRouterCompletions(AIBaseCompletions):
         int_current: int | None = int_index
         while True:
             client: AIBaseCompletions | None = self._client_at(int_current)
+            if str_method == ROUTE_METHOD_MODEL_PIN:
+                client = self._pin_client(client, int_current)
             if client is None:
                 int_current = self._next_after_unbuildable(
                     int_current, int_index, str_operation, str_route_id, str_family
@@ -1057,7 +1070,7 @@ class AiRouterCompletions(AIBaseCompletions):
             try:
                 result: T = call(client)
             except Exception as exception:
-                if not self._should_escalate(
+                if str_method == ROUTE_METHOD_MODEL_PIN or not self._should_escalate(
                     int_current, int_index, exception, str_family
                 ):
                     raise
@@ -1073,6 +1086,9 @@ class AiRouterCompletions(AIBaseCompletions):
                 continue
             finally:
                 reset_observability_context(token)
+            note_served_route(
+                route_tier=self._tier_label(int_current), route_method=str_method
+            )
             self._last_tier_index = int_current
             self._last_route_client = client
             # Normal return with the result.
@@ -1095,6 +1111,8 @@ class AiRouterCompletions(AIBaseCompletions):
         int_current: int | None = int_index
         while True:
             client: AIBaseCompletions | None = self._client_at(int_current)
+            if str_method == ROUTE_METHOD_MODEL_PIN:
+                client = self._pin_client(client, int_current)
             if client is None:
                 int_current = self._next_after_unbuildable(
                     int_current, int_index, str_operation, str_route_id, str_family
@@ -1110,7 +1128,7 @@ class AiRouterCompletions(AIBaseCompletions):
             try:
                 result: T = await call(client)
             except Exception as exception:
-                if not self._should_escalate(
+                if str_method == ROUTE_METHOD_MODEL_PIN or not self._should_escalate(
                     int_current, int_index, exception, str_family
                 ):
                     raise
@@ -1126,6 +1144,9 @@ class AiRouterCompletions(AIBaseCompletions):
                 continue
             finally:
                 reset_observability_context(token)
+            note_served_route(
+                route_tier=self._tier_label(int_current), route_method=str_method
+            )
             self._last_tier_index = int_current
             self._last_route_client = client
             # Normal return with the result.
@@ -1191,6 +1212,84 @@ class AiRouterCompletions(AIBaseCompletions):
             session_id=context.session_id,
             workflow_id=context.workflow_id,
             tags={**dict(context.tags), **dict_tags},
+        )
+
+    # ── Model pins ──────────────────────────────────────────────────────────
+
+    def _known_pin_candidates(self) -> list[AIFallbackCandidate]:
+        """The default chain's candidates, then every tier's, for a bare-model pin."""
+        list_candidates: list[AIFallbackCandidate] = list(
+            self._default_client._known_pin_candidates()
+        )
+        # Loop over the tiers to add their candidates in tier order.
+        for tier in self._config.tiers:
+            list_candidates.extend(tier.candidates)
+        # Normal return with every configured candidate.
+        return list_candidates
+
+    def _model_pin_target(self, pin: AIFallbackCandidate) -> AIBaseCompletions:
+        """The router serves its own pins."""
+        # Normal return: send_prompt picks the pinned route.
+        return self
+
+    def _pin_tier(self, pin: AIFallbackCandidate) -> int | None:
+        """
+        The route a pinned call runs on: the default chain when it holds the
+        pinned model, else the first tier that does, else the default chain.
+        """
+        if (
+            find_pinned_candidate(pin, self._default_client._known_pin_candidates())
+            is not None
+        ):
+            # Early return: the default chain holds the pinned model.
+            return None
+        # Loop over the tiers for the first that holds the pinned model.
+        for int_index, tier in enumerate(self._config.tiers):
+            if find_pinned_candidate(pin, tier.candidates) is not None:
+                # Early return with that tier.
+                return int_index
+        # Normal return: the default chain falls back for an unlisted pin.
+        return None
+
+    def _pin_client(
+        self, client: AIBaseCompletions | None, int_index: int | None
+    ) -> AIBaseCompletions:
+        """
+        The client that runs a pinned call on the chosen route.
+
+        Raises:
+            AiProviderConfigurationError: The route could not be built, or
+                its client cannot serve a pin.
+        """
+        pin: AIFallbackCandidate | None = current_model_pin()
+        target: AIBaseCompletions | None = (
+            client._model_pin_target(pin)
+            if client is not None and pin is not None
+            else client
+        )
+        if target is None:
+            raise AiProviderConfigurationError(
+                f"Router route {self._tier_label(int_index)} cannot serve a call "
+                f"pinned to {pin.label if pin is not None else 'a model'}."
+            )
+        # Normal return with the route's pin-aware client.
+        return target
+
+    def _select_or_pin(
+        self, str_text: str, str_operation: str, str_route_id: str
+    ) -> tuple[int | None, str, AIClassificationResult | None]:
+        """A pinned call's route without classifying, else the normal selection."""
+        pin: AIFallbackCandidate | None = current_model_pin()
+        if pin is not None:
+            # Early return: the pin skips the classifier.
+            return self._pin_tier(pin), ROUTE_METHOD_MODEL_PIN, None
+        # Normal return with the classified, floored selection.
+        return self._select(
+            str_text=str_text,
+            messages=None,
+            str_route=None,
+            str_operation=str_operation,
+            str_route_id=str_route_id,
         )
 
     # ── Logging ─────────────────────────────────────────────────────────────
@@ -1432,12 +1531,8 @@ class AiRouterCompletions(AIBaseCompletions):
         str_route_id: str = uuid.uuid4().hex
 
         def _routed() -> str:
-            int_index, str_method, decision = self._select(
-                str_text=prompt,
-                messages=None,
-                str_route=None,
-                str_operation="send_prompt",
-                str_route_id=str_route_id,
+            int_index, str_method, decision = self._select_or_pin(
+                prompt, "send_prompt", str_route_id
             )
             # Normal return with the serving tier's text.
             return self._run(
@@ -1473,13 +1568,18 @@ class AiRouterCompletions(AIBaseCompletions):
         str_route_id: str = uuid.uuid4().hex
 
         async def _routed() -> str:
-            int_index, str_method, decision = await self._aselect(
-                str_text=prompt,
-                messages=None,
-                str_route=None,
-                str_operation="asend_prompt",
-                str_route_id=str_route_id,
-            )
+            if current_model_pin() is not None:
+                int_index, str_method, decision = self._select_or_pin(
+                    prompt, "asend_prompt", str_route_id
+                )
+            else:
+                int_index, str_method, decision = await self._aselect(
+                    str_text=prompt,
+                    messages=None,
+                    str_route=None,
+                    str_operation="asend_prompt",
+                    str_route_id=str_route_id,
+                )
             # Normal return with the serving tier's text.
             return await self._arun(
                 "asend_prompt",

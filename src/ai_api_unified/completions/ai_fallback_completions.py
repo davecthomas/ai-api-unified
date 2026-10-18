@@ -42,11 +42,17 @@ Three limits follow from the engines' request shapes:
   chunk; after that the caller already holds partial output.
 - Batches, token counting, and capabilities always go to the primary. Cost
   helpers price at the candidate that served the most recent call.
+
+A call pinned to one model (see ai_model_pin.py) starts on that model and
+then tries the chain's own candidates in order. A pinned model outside the
+chain is built on first use, kept after the configured candidates, and
+never tried by an unpinned call.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from typing import Any, ClassVar, Type, TypeVar
 
@@ -68,7 +74,12 @@ from ..ai_base import (
     AITool,
     AITurnResult,
 )
-from ..ai_provider_exceptions import AiFallbackReason, AiProviderRequestError
+from ..ai_provider_exceptions import (
+    AiFallbackReason,
+    AiProviderConfigurationError,
+    AiProviderRequestError,
+)
+from ..middleware.request_cost import note_served_route
 from ..thinking import parse_thinking_level
 from .ai_fallback_cooldown import (
     FALLBACK_EVENT_RESTING,
@@ -375,6 +386,10 @@ class AiFallbackCompletions(AIBaseCompletions):
             primary_candidate,
             *fallback_candidates,
         ]
+        # Configured candidates come first; pinned models outside the chain
+        # are appended after them by _pin_index.
+        self._int_configured: int = len(self._candidates)
+        self._lock_pins: threading.Lock = threading.Lock()
         self._clients: dict[int, Any] = {0: primary}
         self._client_builder: Callable[[AIFallbackCandidate], AIBaseCompletions] = (
             client_builder
@@ -396,7 +411,7 @@ class AiFallbackCompletions(AIBaseCompletions):
     def candidates(self) -> list[AIFallbackCandidate]:
         """The chain, primary first."""
         # Normal return with a copy so callers cannot reorder the chain.
-        return list(self._candidates)
+        return list(self._candidates[: self._int_configured])
 
     @property
     def fallback_on(self) -> frozenset[AiFallbackReason]:
@@ -438,9 +453,9 @@ class AiFallbackCompletions(AIBaseCompletions):
     @thinking_level.setter
     def thinking_level(self, value: Any) -> None:
         self._thinking_level = parse_thinking_level(value)
-        # Loop over built candidates so each applies the level; later builds
-        # pick it up in _client_at.
-        for _, client in self._built_clients():
+        # Loop over built candidates, pinned models included, so each applies
+        # the level; later builds pick it up in _client_at.
+        for _, client in self._built_clients(bool_include_pins=True):
             client.thinking_level = self._thinking_level
         # Normal return after propagating the level.
         return None
@@ -547,14 +562,93 @@ class AiFallbackCompletions(AIBaseCompletions):
         # Normal return with the newly built client.
         return client
 
-    def _built_clients(self) -> list[tuple[int, AIBaseCompletions]]:
-        """Candidates already built, in chain order."""
+    def _built_clients(
+        self, *, bool_include_pins: bool = False
+    ) -> list[tuple[int, AIBaseCompletions]]:
+        """Candidates already built, in chain order; pinned models only on request."""
         # Normal return with (index, client) for each usable built client.
         return [
             (int_index, client)
             for int_index, client in sorted(self._clients.items())
             if client is not self._UNBUILDABLE
+            and (bool_include_pins or int_index < self._int_configured)
         ]
+
+    # ── Model pins ──────────────────────────────────────────────────────────
+
+    def _known_pin_candidates(self) -> list[AIFallbackCandidate]:
+        """The configured chain, for resolving a bare-model pin."""
+        # Normal return with the configured candidates.
+        return self.candidates
+
+    def _model_pin_target(self, pin: AIFallbackCandidate) -> AIBaseCompletions:
+        """A chain serves its own pins."""
+        # Normal return: this chain starts the call on the pin.
+        return self
+
+    def _pin_index(self, pin: AIFallbackCandidate) -> int:
+        """
+        Chain position of the pinned model, building it on first use when
+        the chain does not hold it.
+
+        Unlike a configured fallback, a pinned model that cannot be built
+        raises: the caller named it, so a silent move to another model would
+        hide the mistake.
+
+        Args:
+            pin: The resolved pin.
+
+        Returns:
+            The position to start the call from.
+
+        Raises:
+            Whatever the client builder raises (a denied model, an unknown
+            engine, a missing extra or key).
+        """
+        from .ai_model_pin import find_pinned_candidate
+
+        with self._lock_pins:
+            int_found: int | None = find_pinned_candidate(pin, self._candidates)
+            if int_found is not None and int_found < self._int_configured:
+                if self._client_at(int_found) is None:
+                    raise AiProviderConfigurationError(
+                        f"Pinned model {pin.label} is in this chain but could "
+                        "not be built; see the earlier FALLBACK error."
+                    )
+                # Early return with the configured candidate.
+                return int_found
+            if int_found is not None and self._clients.get(int_found) is not None:
+                # Early return with a pinned model built by an earlier call.
+                return int_found
+            client: AIBaseCompletions = self._client_builder(pin)
+            if self._thinking_level is not None:
+                client.thinking_level = self._thinking_level
+            if int_found is None:
+                self._candidates.append(pin)
+                int_found = len(self._candidates) - 1
+            self._clients[int_found] = client
+            # Normal return with the newly built pinned model.
+            return int_found
+
+    def _pinned_start(self, int_start: int) -> tuple[int, int | None]:
+        """
+        Where a call starts, given the active pin.
+
+        Args:
+            int_start: The start the call would use unpinned.
+
+        Returns:
+            (start position, pinned position or None when not pinned).
+        """
+        from .ai_model_pin import current_model_pin
+
+        pin: AIFallbackCandidate | None = current_model_pin()
+        if pin is None:
+            # Early return: not pinned.
+            return int_start, None
+        int_pin: int = self._pin_index(pin)
+        # Normal return: the pin is the start.
+        return int_pin, int_pin
 
     def _candidate_family(self, int_index: int) -> str | None:
         """
@@ -638,6 +732,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         tuple_capabilities: tuple[str, ...],
         set_failed_accounts: set[tuple[str, str | None]],
         str_family: str | None = None,
+        int_pin: int | None = None,
     ) -> Iterator[tuple[int, AIBaseCompletions, bool, int | None]]:
         """
         Yields the candidates one call may try, in order.
@@ -663,16 +758,26 @@ class AiFallbackCompletions(AIBaseCompletions):
                 caller iterates.
             str_family: When set, only candidates of this request-shape
                 family may follow the starting one.
+            int_pin: The pinned model's position, when the call is pinned:
+                it goes first and keeps its place whether or not it rests,
+                and the configured candidates follow in chain order.
 
         Yields:
             (index, client, is_last, index tried next or None) for each
             candidate to try.
         """
-        list_indexes: list[int] = (
-            list(range(int_start, len(self._candidates)))
-            if bool_allow_fallback
-            else [int_start]
-        )
+        list_indexes: list[int]
+        if not bool_allow_fallback:
+            list_indexes = [int_start]
+        elif int_pin is not None:
+            int_start = int_pin
+            list_indexes = [int_pin] + [
+                int_index
+                for int_index in range(self._int_configured)
+                if int_index != int_pin
+            ]
+        else:
+            list_indexes = list(range(int_start, self._int_configured))
         if str_family is not None:
             # Keep the start, the family's candidates, and any candidate
             # whose family is only known once built.
@@ -683,7 +788,11 @@ class AiFallbackCompletions(AIBaseCompletions):
                 or self._candidate_family(int_index) in (str_family, None)
             ]
         if bool_allow_fallback and len(list_indexes) > 1:
-            list_indexes = self._order_by_rest(list_indexes)
+            list_indexes = (
+                [list_indexes[0], *self._order_by_rest(list_indexes[1:])]
+                if int_pin is not None
+                else self._order_by_rest(list_indexes)
+            )
         # Loop over the chain positions this call may use.
         for int_position, int_index in enumerate(list_indexes):
             candidate: AIFallbackCandidate = self._candidates[int_index]
@@ -958,8 +1067,12 @@ class AiFallbackCompletions(AIBaseCompletions):
             The same result; turn and structured results gain route fields.
         """
         self._last_route_index = int_index
+        client: AIBaseCompletions | None = self._client_at(int_index)
+        note_served_route(
+            engine=self._candidates[int_index].engine,
+            model=client.model_name if client is not None else None,
+        )
         if isinstance(result, (AITurnResult, AIStructuredOutputResult)):
-            client: AIBaseCompletions | None = self._client_at(int_index)
             result.provider_engine = self._candidates[int_index].engine
             result.model_name = client.model_name if client is not None else None
         # Normal return with the (possibly stamped) result.
@@ -1026,6 +1139,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                 raises the first failure instead, with the later one as its
                 cause.
         """
+        int_start, int_pin = self._pinned_start(int_start)
         last_error: AiProviderRequestError | None = None
         int_failed_from: int = int_start
         set_failed_accounts: set[tuple[str, str | None]] = set()
@@ -1036,6 +1150,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             tuple_capabilities=tuple_capabilities,
             set_failed_accounts=set_failed_accounts,
             str_family=str_family,
+            int_pin=int_pin,
         ):
             try:
                 result: T = call(client)
@@ -1067,7 +1182,9 @@ class AiFallbackCompletions(AIBaseCompletions):
             # Early return with the first result.
             return self._stamp_route(result, int_index)
         # Normal exit: every later candidate was skipped after a failure.
-        raise self._exhausted(last_error, int_start, str_operation)
+        raise self._exhausted(
+            last_error, int_start, str_operation, bool_pinned=int_pin is not None
+        )
 
     async def _arun(
         self,
@@ -1104,6 +1221,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         str_family: str | None = None,
     ) -> T:
         """Async twin of _run_chain."""
+        int_start, int_pin = self._pinned_start(int_start)
         last_error: AiProviderRequestError | None = None
         int_failed_from: int = int_start
         set_failed_accounts: set[tuple[str, str | None]] = set()
@@ -1114,6 +1232,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             tuple_capabilities=tuple_capabilities,
             set_failed_accounts=set_failed_accounts,
             str_family=str_family,
+            int_pin=int_pin,
         ):
             try:
                 result: T = await call(client)
@@ -1145,7 +1264,9 @@ class AiFallbackCompletions(AIBaseCompletions):
             # Early return with the first result.
             return self._stamp_route(result, int_index)
         # Normal exit: every later candidate was skipped after a failure.
-        raise self._exhausted(last_error, int_start, str_operation)
+        raise self._exhausted(
+            last_error, int_start, str_operation, bool_pinned=int_pin is not None
+        )
 
     def _first_failure(
         self,
@@ -1200,6 +1321,8 @@ class AiFallbackCompletions(AIBaseCompletions):
         last_error: AiProviderRequestError | None,
         int_start: int,
         str_operation: str,
+        *,
+        bool_pinned: bool = False,
     ) -> Exception:
         """
         Builds the error to raise when the chain produced no result.
@@ -1208,14 +1331,21 @@ class AiFallbackCompletions(AIBaseCompletions):
             last_error: The last eligible failure, if any candidate ran.
             int_start: The chain position the call started from.
             str_operation: Method name, for logs.
+            bool_pinned: True when the call started on a pinned model, so
+                the whole chain followed it.
 
         Returns:
             The last error, or a request error naming an unusable start.
         """
+        list_indexes: list[int] = (
+            [int_start] + [i for i in range(self._int_configured) if i != int_start]
+            if bool_pinned
+            else list(range(int_start, self._int_configured))
+        )
         self._log_exhausted(
             str_operation,
             last_error,
-            ", ".join(candidate.label for candidate in self._candidates[int_start:]),
+            ", ".join(self._candidates[i].label for i in list_indexes),
         )
         if last_error is not None:
             # Normal return with the failure that ended the chain.
@@ -1422,7 +1552,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         """
         client: AIBaseCompletions = self.primary
         # Loop over the rest-aware order for the first buildable candidate.
-        for int_index in self._order_by_rest(list(range(len(self._candidates)))):
+        for int_index in self._order_by_rest(list(range(self._int_configured))):
             candidate_client: AIBaseCompletions | None = self._client_at(int_index)
             if candidate_client is not None:
                 client = candidate_client
@@ -1708,7 +1838,7 @@ class AiFallbackCompletions(AIBaseCompletions):
         """
         if turn.provider_engine is not None:
             # Loop over built candidates for the one the stamp names.
-            for int_index, client in self._built_clients():
+            for int_index, client in self._built_clients(bool_include_pins=True):
                 candidate: AIFallbackCandidate = self._candidates[int_index]
                 if (
                     candidate.engine == turn.provider_engine
