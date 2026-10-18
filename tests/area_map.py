@@ -184,6 +184,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_request_cost.py": ("middleware", "pricing", "completions", "core"),
     "test_prompt_result.py": ("middleware", "pricing", "completions", "core"),
     "test_model_pin.py": ("completions", "core", "engine_anthropic"),
+    "test_turn_result_envelope.py": ("middleware", "pricing", "completions", "core"),
     "test_billed_failures.py": ("middleware", "pricing", "completions", "core"),
     "test_thinking_levels.py": (
         "completions",

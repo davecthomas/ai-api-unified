@@ -24,9 +24,10 @@ Every call logs a `routed` event before it runs, and pushes route tags
 (route_id, route_tier, route_method) onto the observability context so the
 engine's own input, output, and cost events carry them.
 
-A call pinned to one model (see ai_model_pin.py) skips the classifier: it
-runs on the chain of the tier that holds the pinned model, else on the
-default chain, with route method `model_pin`, and never escalates.
+A call pinned to one model (see ai_model_pin.py) skips the classifier and
+any `route` or `route_floor` option: it runs on the chain of the tier that
+holds the pinned model, else on the default chain, with route method
+`model_pin`, and never escalates.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ from typing import Any, ClassVar, Type, TypeVar
 
 from ..ai_base import (
     AIBaseClassifier,
+    aenveloped_completions_call,
+    enveloped_completions_call,
     AIBaseCompletions,
     AIBatchJob,
     AIBatchRequestItem,
@@ -597,7 +600,14 @@ class AiRouterCompletions(AIBaseCompletions):
         str_route_id: str,
         str_floor: str | None = None,
     ) -> tuple[int | None, str, AIClassificationResult | None]:
-        """Decides which tier serves one call, then applies any floor."""
+        """
+        Decides which tier serves one call, then applies any floor. A call
+        pinned to a model skips both and runs on the pin's route.
+        """
+        pin: AIFallbackCandidate | None = current_model_pin()
+        if pin is not None:
+            # Early return: the pin decides the route; nothing is classified.
+            return self._pin_tier(pin), ROUTE_METHOD_MODEL_PIN, None
         int_index, str_method, decision = self._select_unfloored(
             str_text=str_text,
             messages=messages,
@@ -887,6 +897,10 @@ class AiRouterCompletions(AIBaseCompletions):
         str_floor: str | None = None,
     ) -> tuple[int | None, str, AIClassificationResult | None]:
         """Async twin of _select."""
+        pin: AIFallbackCandidate | None = current_model_pin()
+        if pin is not None:
+            # Early return: the pin decides the route; nothing is classified.
+            return self._pin_tier(pin), ROUTE_METHOD_MODEL_PIN, None
         int_index, str_method, decision = await self._aselect_unfloored(
             str_text=str_text,
             messages=messages,
@@ -1275,23 +1289,6 @@ class AiRouterCompletions(AIBaseCompletions):
         # Normal return with the route's pin-aware client.
         return target
 
-    def _select_or_pin(
-        self, str_text: str, str_operation: str, str_route_id: str
-    ) -> tuple[int | None, str, AIClassificationResult | None]:
-        """A pinned call's route without classifying, else the normal selection."""
-        pin: AIFallbackCandidate | None = current_model_pin()
-        if pin is not None:
-            # Early return: the pin skips the classifier.
-            return self._pin_tier(pin), ROUTE_METHOD_MODEL_PIN, None
-        # Normal return with the classified, floored selection.
-        return self._select(
-            str_text=str_text,
-            messages=None,
-            str_route=None,
-            str_operation=str_operation,
-            str_route_id=str_route_id,
-        )
-
     # ── Logging ─────────────────────────────────────────────────────────────
 
     def _log_routed(
@@ -1531,8 +1528,12 @@ class AiRouterCompletions(AIBaseCompletions):
         str_route_id: str = uuid.uuid4().hex
 
         def _routed() -> str:
-            int_index, str_method, decision = self._select_or_pin(
-                prompt, "send_prompt", str_route_id
+            int_index, str_method, decision = self._select(
+                str_text=prompt,
+                messages=None,
+                str_route=None,
+                str_operation="send_prompt",
+                str_route_id=str_route_id,
             )
             # Normal return with the serving tier's text.
             return self._run(
@@ -1568,18 +1569,13 @@ class AiRouterCompletions(AIBaseCompletions):
         str_route_id: str = uuid.uuid4().hex
 
         async def _routed() -> str:
-            if current_model_pin() is not None:
-                int_index, str_method, decision = self._select_or_pin(
-                    prompt, "asend_prompt", str_route_id
-                )
-            else:
-                int_index, str_method, decision = await self._aselect(
-                    str_text=prompt,
-                    messages=None,
-                    str_route=None,
-                    str_operation="asend_prompt",
-                    str_route_id=str_route_id,
-                )
+            int_index, str_method, decision = await self._aselect(
+                str_text=prompt,
+                messages=None,
+                str_route=None,
+                str_operation="asend_prompt",
+                str_route_id=str_route_id,
+            )
             # Normal return with the serving tier's text.
             return await self._arun(
                 "asend_prompt",
@@ -1684,6 +1680,7 @@ class AiRouterCompletions(AIBaseCompletions):
             # Early return: the stream completed on this tier.
             return
 
+    @enveloped_completions_call
     def send_structured_output(
         self,
         prompt: str | None = None,
@@ -1736,6 +1733,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 "send_structured_output", _routed, request_id=str_route_id
             )
 
+    @aenveloped_completions_call
     async def asend_structured_output(
         self,
         prompt: str | None = None,
@@ -1788,6 +1786,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 "asend_structured_output", _routed, request_id=str_route_id
             )
 
+    @enveloped_completions_call
     def send_conversation(
         self,
         system_prompt: str,
@@ -1838,6 +1837,7 @@ class AiRouterCompletions(AIBaseCompletions):
                 "send_conversation", _routed, request_id=str_route_id
             )
 
+    @aenveloped_completions_call
     async def asend_conversation(
         self,
         system_prompt: str,

@@ -3,6 +3,7 @@ from __future__ import (
 )  # Postpone evaluation of type hints to avoid circular imports and allow forward references with | None
 
 import base64
+import functools
 import json
 import inspect
 import logging
@@ -15,6 +16,7 @@ import urllib.parse
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+from contextvars import ContextVar
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -719,6 +721,15 @@ class AITurnResult(BaseModel):
         model_name: Model that served the turn, set alongside provider_engine.
         thinking: The thinking level requested and the one applied; see
             AIThinkingResolution.
+        provider: Vendor that served the turn (openai, anthropic, ...).
+        route_tier: Router tier that served it; None off a router.
+        route_method: How the route was chosen, or `model_pin` for a pinned
+            call; None off a router unless pinned.
+        model_pin: The engine:model the call was pinned to, or None.
+        cost: Every provider call the turn made, with totals; see
+            AIRequestCostReport.
+
+    The client fills provider_engine through cost on every call it serves.
     """
 
     text: str | None = None
@@ -729,6 +740,11 @@ class AITurnResult(BaseModel):
     provider_engine: str | None = None
     model_name: str | None = None
     thinking: AIThinkingResolution | None = None
+    provider: str | None = None
+    route_tier: str | None = None
+    route_method: str | None = None
+    model_pin: str | None = None
+    cost: AIRequestCostReport | None = None
 
 
 class AIStructuredOutputResult(BaseModel):
@@ -747,6 +763,15 @@ class AIStructuredOutputResult(BaseModel):
         model_name: Model that served the call, set alongside provider_engine.
         thinking: The thinking level requested and the one applied; see
             AIThinkingResolution.
+        provider: Vendor that served the call (openai, anthropic, ...).
+        route_tier: Router tier that served it; None off a router.
+        route_method: How the route was chosen, or `model_pin` for a pinned
+            call; None off a router unless pinned.
+        model_pin: The engine:model the call was pinned to, or None.
+        cost: Every provider call this call made, with totals; see
+            AIRequestCostReport.
+
+    The client fills provider_engine through cost on every call it serves.
     """
 
     data: dict[str, Any] | None = None
@@ -756,6 +781,11 @@ class AIStructuredOutputResult(BaseModel):
     provider_engine: str | None = None
     model_name: str | None = None
     thinking: AIThinkingResolution | None = None
+    provider: str | None = None
+    route_tier: str | None = None
+    route_method: str | None = None
+    model_pin: str | None = None
+    cost: AIRequestCostReport | None = None
 
 
 class AIPromptResult(BaseModel):
@@ -2904,6 +2934,110 @@ class AIStructuredPrompt(BaseModel):
             return None
 
 
+# True while an outer completions call owns the result envelope, so the
+# clients it calls (a chain's candidates, a router's tiers) leave the
+# envelope to it.
+ENVELOPE_ACTIVE: ContextVar[bool] = ContextVar(
+    "ai_api_unified_envelope_active", default=False
+)
+# Reserved provider_options key: pins one conversation or structured call
+# to a model; see completions/ai_model_pin.py.
+PROVIDER_OPTION_MODEL: str = "model"
+
+
+def _split_model_option(
+    provider_options: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Removes the reserved model key; returns (the rest, the pin or None)."""
+    if not provider_options or PROVIDER_OPTION_MODEL not in provider_options:
+        # Early return: no pin on this call.
+        return provider_options, None
+    dict_options: dict[str, Any] = dict(provider_options)
+    raw_pin: Any = dict_options.pop(PROVIDER_OPTION_MODEL)
+    str_pin: str | None = (
+        str(raw_pin) if raw_pin is not None and str(raw_pin).strip() else None
+    )
+    # Normal return with the options left for the engine and the pin.
+    return dict_options or None, str_pin
+
+
+def enveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
+    """
+    Makes a turn- or structured-result method fill its result envelope.
+
+    The outermost call removes `provider_options["model"]`, pins the call
+    when it was set, records its own ledger, and stamps provider, route,
+    pin, and cost onto the result. Calls made inside it (a chain's
+    candidates, a router's tiers) run the method unchanged.
+    """
+
+    @functools.wraps(func)
+    def _wrapper(self: "AIBaseCompletions", *args: Any, **kwargs: Any) -> Any:
+        dict_options, str_pin = _split_model_option(kwargs.get("provider_options"))
+        if "provider_options" in kwargs:
+            kwargs["provider_options"] = dict_options
+        if ENVELOPE_ACTIVE.get():
+            # Early return: an outer call owns the envelope.
+            return func(self, *args, **kwargs)
+        from ai_api_unified.completions.ai_model_pin import model_pin_scope
+
+        pin, target = self._model_pin_for_call(str_pin)
+        report_before: AIRequestCostReport | None = target.last_request_cost
+        token: Any = ENVELOPE_ACTIVE.set(True)
+        try:
+            with (
+                model_pin_scope(pin, func.__name__, config_id=self.config_id),
+                capture_request_calls(func.__name__) as capture,
+            ):
+                result: Any = (
+                    func(self, *args, **kwargs)
+                    if target is self
+                    else getattr(target, func.__name__)(*args, **kwargs)
+                )
+        finally:
+            ENVELOPE_ACTIVE.reset(token)
+        self._adopt_request_cost(target, report_before)
+        # Normal return with the stamped result.
+        return self._stamp_envelope(result, capture, pin)
+
+    return _wrapper
+
+
+def aenveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Async twin of enveloped_completions_call."""
+
+    @functools.wraps(func)
+    async def _wrapper(self: "AIBaseCompletions", *args: Any, **kwargs: Any) -> Any:
+        dict_options, str_pin = _split_model_option(kwargs.get("provider_options"))
+        if "provider_options" in kwargs:
+            kwargs["provider_options"] = dict_options
+        if ENVELOPE_ACTIVE.get():
+            # Early return: an outer call owns the envelope.
+            return await func(self, *args, **kwargs)
+        from ai_api_unified.completions.ai_model_pin import model_pin_scope
+
+        pin, target = self._model_pin_for_call(str_pin)
+        report_before: AIRequestCostReport | None = target.last_request_cost
+        token: Any = ENVELOPE_ACTIVE.set(True)
+        try:
+            with (
+                model_pin_scope(pin, func.__name__, config_id=self.config_id),
+                capture_request_calls(func.__name__) as capture,
+            ):
+                result: Any = await (
+                    func(self, *args, **kwargs)
+                    if target is self
+                    else getattr(target, func.__name__)(*args, **kwargs)
+                )
+        finally:
+            ENVELOPE_ACTIVE.reset(token)
+        self._adopt_request_cost(target, report_before)
+        # Normal return with the stamped result.
+        return self._stamp_envelope(result, capture, pin)
+
+    return _wrapper
+
+
 class AIBaseCompletions(AIBase):
     """
     Base class for generating text completions.
@@ -3860,10 +3994,11 @@ class AIBaseCompletions(AIBase):
         # Normal return after adopting the report, if there was a new one.
         return None
 
-    def _prompt_result(
-        self, str_text: str, capture: RequestCallCapture, pin: Any
-    ) -> AIPromptResult:
-        """Builds the envelope from the call's own ledger."""
+    def _served_fields(self, capture: RequestCallCapture, pin: Any) -> dict[str, Any]:
+        """
+        What the call's own ledger says about the answer: provider, engine,
+        model, route, pin, thinking, the served call's usage, and the cost.
+        """
         capture.mark_served()
         report: AIRequestCostReport = capture.build_report(REQUEST_STATUS_OK)
         served: AIRequestCostLineItem | None = next(
@@ -3905,19 +4040,60 @@ class AIBaseCompletions(AIBase):
                 cache_write_5m_tokens=served.cache_write_5m_tokens,
                 cache_write_1h_tokens=served.cache_write_1h_tokens,
             )
+        # Normal return with the fields every result envelope carries.
+        return {
+            "provider": served.provider if served is not None else None,
+            "provider_engine": str_engine,
+            "model_name": str_model,
+            "route_tier": str_tier,
+            "route_method": str_method,
+            "model_pin": pin.label if pin is not None else None,
+            "thinking": capture.thinking,
+            "usage": usage,
+            "cost": report,
+        }
+
+    def _prompt_result(
+        self, str_text: str, capture: RequestCallCapture, pin: Any
+    ) -> AIPromptResult:
+        """Builds the send_prompt_with_result envelope from the call's ledger."""
         # Normal return with the envelope.
-        return AIPromptResult(
-            text=str_text,
-            provider=served.provider if served is not None else None,
-            provider_engine=str_engine,
-            model_name=str_model,
-            route_tier=str_tier,
-            route_method=str_method,
-            model_pin=pin.label if pin is not None else None,
-            thinking=capture.thinking,
-            usage=usage,
-            cost=report,
-        )
+        return AIPromptResult(text=str_text, **self._served_fields(capture, pin))
+
+    def _stamp_envelope(
+        self, result: Any, capture: RequestCallCapture, pin: Any
+    ) -> Any:
+        """
+        Copies the call's provider, route, pin, and cost onto a turn or
+        structured result. The provider's own usage stays; engine, model,
+        and thinking are filled only where the result has none, except that
+        the ledger's thinking wins because it belongs to this call alone.
+        """
+        if not isinstance(result, (AITurnResult, AIStructuredOutputResult)):
+            # Early return: a test double or another shape carries no envelope.
+            return result
+        dict_fields: dict[str, Any] = self._served_fields(capture, pin)
+        dict_update: dict[str, Any] = {
+            "provider": dict_fields["provider"],
+            "route_tier": dict_fields["route_tier"],
+            "route_method": dict_fields["route_method"],
+            "model_pin": dict_fields["model_pin"],
+            "cost": dict_fields["cost"],
+        }
+        if dict_fields["thinking"] is not None:
+            dict_update["thinking"] = dict_fields["thinking"]
+        try:
+            if result.provider_engine is None:
+                dict_update["provider_engine"] = dict_fields["provider_engine"]
+            if result.model_name is None:
+                dict_update["model_name"] = dict_fields["model_name"]
+            stamped: Any = result.model_copy(update=dict_update)
+        except (AttributeError, TypeError):
+            # Early return: a test double standing in for the result has no
+            # fields to fill.
+            return result
+        # Normal return with the stamped copy.
+        return stamped
 
     @property
     def capabilities(self) -> AICompletionsCapabilitiesBase:
@@ -4701,6 +4877,7 @@ class AIBaseCompletions(AIBase):
         # Normal return with the normalized tool list.
         return list_tools
 
+    @enveloped_completions_call
     def send_structured_output(
         self,
         prompt: str | None = None,
@@ -4936,6 +5113,7 @@ class AIBaseCompletions(AIBase):
         """
         self._raise_completions_capability_unsupported("structured output")
 
+    @enveloped_completions_call
     def send_conversation(
         self,
         system_prompt: str,
@@ -5375,6 +5553,7 @@ class AIBaseCompletions(AIBase):
         """
         self._raise_completions_capability_unsupported("async completions")
 
+    @aenveloped_completions_call
     async def asend_structured_output(
         self,
         prompt: str | None = None,
@@ -5454,6 +5633,7 @@ class AIBaseCompletions(AIBase):
         """
         self._raise_completions_capability_unsupported("async structured output")
 
+    @aenveloped_completions_call
     async def asend_conversation(
         self,
         system_prompt: str,
