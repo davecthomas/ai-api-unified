@@ -1,6 +1,7 @@
 # src/ai_api_unified/voice/ai_voice_base.py
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -721,6 +722,70 @@ class AIVoiceBase(BaseModel, ABC):
     ) -> bytes:
         """Stream audio for *text* and return raw bytes."""
         ...
+
+    # ------------- async twins (worker thread) -------------------------- #
+
+    async def atext_to_voice(
+        self,
+        text_to_convert: str,
+        voice: AIVoiceSelectionBase | None = None,
+        audio_format: AudioFormat | None = None,
+        speaking_rate: float = 1.0,
+        use_ssml: bool = False,
+    ) -> bytes:
+        """Async twin of text_to_voice; runs on a worker thread."""
+        # Normal return with the audio.
+        return await asyncio.to_thread(
+            self.text_to_voice,
+            text_to_convert,
+            voice,
+            audio_format,
+            speaking_rate,
+            use_ssml,
+        )
+
+    async def astream_audio(
+        self, text: str, voice: AIVoiceSelectionBase | None = None
+    ) -> bytes:
+        """Async twin of stream_audio; runs on a worker thread."""
+        # Normal return with the audio.
+        return await asyncio.to_thread(self.stream_audio, text, voice)
+
+    async def aspeech_to_text(
+        self, audio_bytes: bytes, language: str | None = None
+    ) -> str:
+        """Async twin of speech_to_text; runs on a worker thread."""
+        # Normal return with the transcript.
+        return await asyncio.to_thread(self.speech_to_text, audio_bytes, language)
+
+    async def aspeech_to_text_from_file(
+        self, file_path: str | Path, language: str | None = None
+    ) -> str:
+        """Async twin of speech_to_text_from_file; runs on a worker thread."""
+        # Normal return with the transcript.
+        return await asyncio.to_thread(
+            self.speech_to_text_from_file, file_path, language
+        )
+
+    async def atext_to_voice_with_emotion_prompt(
+        self,
+        *,
+        emotion_prompt: str | None,
+        text_to_convert: str,
+        voice: AIVoiceSelectionBase,
+        audio_format: AudioFormat,
+        speaking_rate: float = 1.0,
+    ) -> bytes:
+        """Async twin of text_to_voice_with_emotion_prompt; runs on a worker thread."""
+        # Normal return with the audio.
+        return await asyncio.to_thread(
+            self.text_to_voice_with_emotion_prompt,
+            emotion_prompt=emotion_prompt,
+            text_to_convert=text_to_convert,
+            voice=voice,
+            audio_format=audio_format,
+            speaking_rate=speaking_rate,
+        )
 
     # ------------- metadata & defaults ---------------------------------- #
     def list_voices(self) -> list[AIVoiceSelectionBase]:
