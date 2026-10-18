@@ -30,6 +30,8 @@ from ai_api_unified.middleware.observability_runtime import (
     TOKEN_COUNT_SOURCE_NONE,
     execute_observed_call,
     get_observability_context,
+    push_observability_tags,
+    reset_observability_context,
     resolve_originating_caller,
 )
 from ai_api_unified.util._lazy_pydub import AudioSegment, play
@@ -263,9 +265,39 @@ class AIVoiceBase(BaseModel, ABC):
     _observability_middleware: AiApiObservabilityMiddleware | None = PrivateAttr(
         default=None
     )
+    # config_id / config_version / service the factory stamps; every call
+    # carries them as tags.
+    _dict_config_tags: dict[str, str] = PrivateAttr(default_factory=dict)
 
     # Pydantic V2 config
     model_config = {"arbitrary_types_allowed": True}
+
+    def set_config_identity(
+        self,
+        config_id: str | None,
+        config_version: str | None = None,
+        service: str | None = None,
+    ) -> None:
+        """
+        Records the configuration that built this client; every call carries
+        them as the `config_id`, `config_version`, and `service` tags.
+        """
+        dict_tags: dict[str, str] = {}
+        if service:
+            dict_tags["service"] = service
+        if config_id:
+            dict_tags["config_id"] = config_id
+        if config_version:
+            dict_tags["config_version"] = config_version
+        self._dict_config_tags = dict_tags
+        # Normal return after recording the identity.
+        return None
+
+    @property
+    def config_id(self) -> str | None:
+        """Hash of the configuration that built this client, if any."""
+        # Normal return with the stamped id.
+        return self._dict_config_tags.get("config_id")
 
     def _get_observability_middleware(self) -> AiApiObservabilityMiddleware:
         """
@@ -361,16 +393,29 @@ class AIVoiceBase(BaseModel, ABC):
         observability_middleware: AiApiObservabilityMiddleware = (
             self._get_observability_middleware()
         )
-        audio_bytes: bytes = execute_observed_call(
-            observability_middleware=observability_middleware,
-            callable_build_call_context=lambda: self._build_observability_call_context(
-                operation=operation,
-                dict_metadata=dict_input_metadata,
-                legacy_caller_id=legacy_caller_id,
-            ),
-            callable_execute=lambda: self._execute_with_typed_errors(callable_execute),
-            callable_build_result_summary=callable_build_result_summary,
-        )
+        dict_current_tags: Mapping[str, str] = get_observability_context().tags
+        dict_identity: dict[str, str] = {
+            key: value
+            for key, value in self._dict_config_tags.items()
+            if key not in dict_current_tags
+        }
+        token: Any = push_observability_tags(dict_identity) if dict_identity else None
+        try:
+            audio_bytes: bytes = execute_observed_call(
+                observability_middleware=observability_middleware,
+                callable_build_call_context=lambda: self._build_observability_call_context(
+                    operation=operation,
+                    dict_metadata=dict_input_metadata,
+                    legacy_caller_id=legacy_caller_id,
+                ),
+                callable_execute=lambda: self._execute_with_typed_errors(
+                    callable_execute
+                ),
+                callable_build_result_summary=callable_build_result_summary,
+            )
+        finally:
+            if token is not None:
+                reset_observability_context(token)
         # Normal return with the original provider byte payload after optional observability wrapping.
         return audio_bytes
 

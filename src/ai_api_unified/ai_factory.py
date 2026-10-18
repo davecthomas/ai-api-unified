@@ -80,6 +80,7 @@ from .ai_provider_registry import (
     AI_PROVIDER_CAPABILITY_EMBEDDINGS,
     AI_PROVIDER_CAPABILITY_IMAGES,
     AI_PROVIDER_CAPABILITY_VIDEOS,
+    AI_PROVIDER_CAPABILITY_VOICE,
     TypeAiProviderCapability,
     get_ai_provider_spec,
 )
@@ -88,6 +89,24 @@ from .voice.ai_voice_base import AIVoiceBase
 from .voice.ai_voice_factory import AI_VOICE_ENGINE_ENV_KEY, AIVoiceFactory
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+# The completions probe that can check a model of another capability: the
+# provider's model catalog lists embeddings, image, and video models too.
+DICT_PROBE_ENGINE_BY_CAPABILITY_ENGINE: dict[str, str] = {
+    "openai": "openai",
+    "google-gemini": "google-gemini",
+    "titan": "bedrock",
+    "bedrock": "bedrock",
+    "nova": "bedrock",
+    "nova-canvas": "bedrock",
+    "nova-reel": "bedrock",
+}
+# The models.json setting an error names for each capability's model.
+DICT_MODEL_SETTING_BY_CAPABILITY: dict[str, str] = {
+    "embeddings": "embeddings.model",
+    "images": "images.model",
+    "videos": "videos.model",
+}
 
 DEFAULT_COMPLETIONS_ENGINE: str = ""
 DEFAULT_EMBEDDING_ENGINE: str = ""
@@ -1246,6 +1265,139 @@ class AIFactory:
         )
 
     @staticmethod
+    def _finish_capability_client(
+        client: Any,
+        *,
+        env_settings: EnvSettings,
+        str_capability: str,
+        str_engine: str,
+        str_model: str,
+        dict_identity_extra: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Checks a freshly built embeddings, images, or videos client's model
+        and stamps the configuration identity on it.
+        """
+        AIFactory._check_capability_model(
+            env_settings=env_settings,
+            str_capability=str_capability,
+            str_engine=str_engine,
+            str_model=str_model,
+        )
+        AIFactory._stamp_capability_identity(
+            client,
+            env_settings=env_settings,
+            str_capability=str_capability,
+            str_engine=str_engine,
+            str_model=str_model,
+            dict_identity_extra=dict_identity_extra,
+        )
+        # Normal return after the check and the stamp.
+        return None
+
+    @staticmethod
+    def _check_capability_model(
+        *,
+        env_settings: EnvSettings,
+        str_capability: str,
+        str_engine: str,
+        str_model: str,
+    ) -> None:
+        """
+        Verifies the configured model of an embeddings, images, or videos
+        client, as the completions check verifies its primary.
+
+        The probe is the completions engine's for the same provider (OpenAI,
+        Gemini, Bedrock), memoized the same way. An engine without a probe
+        (Voyage) or the engine's default model is not checked. model_check
+        mode "off" skips the check; in every other mode a missing or
+        unreachable model raises, since a single configured model has no
+        fallback to prune to.
+
+        Raises:
+            ValueError: The provider says the model does not exist.
+            AiProviderConfigurationError: The model cannot be reached (no
+                credentials, rejected credentials, extra not installed).
+        """
+        str_mode: str = resolve_model_check_mode(
+            env_settings.get_setting(AI_MODEL_CHECK_KEY, "")
+        )
+        str_probe_engine: str | None = DICT_PROBE_ENGINE_BY_CAPABILITY_ENGINE.get(
+            str_engine
+        )
+        if (
+            str_mode == MODEL_CHECK_MODE_OFF
+            or not str_model
+            or str_probe_engine is None
+            or AiModelChecker.probe_for(str_probe_engine) is None
+        ):
+            # Early return: nothing to check, or the check is off.
+            return None
+        raw_timeout: object = env_settings.get_setting(
+            AI_MODEL_CHECK_TIMEOUT_SECONDS_KEY, ""
+        )
+        checker: AiModelChecker = (
+            AiModelChecker(float_timeout_seconds=float(str(raw_timeout)))
+            if str(raw_timeout or "").strip()
+            else AiModelChecker()
+        )
+        result: AiModelCheckResult = checker.check(
+            AIFallbackCandidate(engine=str_probe_engine, model=str_model)
+        )
+        str_setting: str = DICT_MODEL_SETTING_BY_CAPABILITY.get(
+            str_capability, f"{str_capability}.model"
+        )
+        str_label: str = model_label(str_engine, str_model)
+        if result.status is AiModelCheckStatus.MISSING:
+            raise ValueError(
+                f"The configured {str_capability} model {str_label} is not "
+                f"available ({result.detail}). Fix {str_setting} in models.json."
+            )
+        if result.status is AiModelCheckStatus.UNREACHABLE:
+            raise AiProviderConfigurationError(
+                f"The configured {str_capability} model {str_label} cannot be "
+                f"reached ({result.detail}). Fix its credentials or extra, or "
+                f"{str_setting} in models.json."
+            )
+        # Normal return: the model is available or cannot be verified.
+        return None
+
+    @staticmethod
+    def _stamp_capability_identity(
+        client: Any,
+        *,
+        env_settings: EnvSettings,
+        str_capability: str,
+        str_engine: str,
+        str_model: str,
+        dict_identity_extra: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Records the configuration that built a non-completions client, so its
+        calls and request cost reports carry `config_id`, `config_version`,
+        and `service` like completions calls do.
+        """
+        setter: Any = getattr(client, "set_config_identity", None)
+        if not callable(setter):
+            # Early return: a registry-loaded class outside the base types.
+            return None
+        str_config_id: str = compute_config_id(
+            {
+                "capability": str_capability,
+                "engine": str_engine,
+                "model": str_model,
+                **(dict_identity_extra or {}),
+            }
+        )
+        setter(
+            str_config_id,
+            AIFactory._resolve_config_version(env_settings),
+            AIFactory._resolve_service_name(env_settings),
+        )
+        # Normal return after stamping.
+        return None
+
+    @staticmethod
     def get_ai_embedding_client(
         embedding_engine: str | None = None,
         model_name: str | None = None,
@@ -1308,8 +1460,6 @@ class AIFactory:
                 model=str_model_name,
                 dimensions=int_dimensions,
             )
-            # Normal return with configured embeddings provider client.
-            return embeddings_client
         except AiProviderConfigurationError as exception:
             raise AIFactory._translate_config_exception(
                 exception,
@@ -1321,6 +1471,16 @@ class AIFactory:
             raise
         except AiProviderRuntimeError:
             raise
+        AIFactory._finish_capability_client(
+            embeddings_client,
+            env_settings=env_settings,
+            str_capability=AI_PROVIDER_CAPABILITY_EMBEDDINGS,
+            str_engine=str_engine,
+            str_model=str_model_name,
+            dict_identity_extra={"dimensions": int_dimensions},
+        )
+        # Normal return with configured embeddings provider client.
+        return embeddings_client
 
     @staticmethod
     def list_completion_models(client: AIBaseCompletions) -> list[str]:
@@ -1434,6 +1594,13 @@ class AIFactory:
             classifier_client: AIBaseClassifier = class_classifier_client(
                 **dict_client_kwargs
             )
+            AIFactory._stamp_capability_identity(
+                classifier_client,
+                env_settings=env_settings,
+                str_capability=AI_PROVIDER_CAPABILITY_CLASSIFICATION,
+                str_engine=str_engine,
+                str_model=str(dict_client_kwargs.get("model") or ""),
+            )
             # Normal return with the configured classification client.
             return classifier_client
         except AiProviderConfigurationError as exception:
@@ -1503,8 +1670,6 @@ class AIFactory:
             images_client: AIBaseImages = class_ai_images_client(
                 model=str_image_model_name
             )
-            # Normal return with configured images provider client.
-            return images_client
         except AiProviderConfigurationError as exception:
             raise AIFactory._translate_config_exception(
                 exception,
@@ -1516,6 +1681,15 @@ class AIFactory:
             raise
         except AiProviderRuntimeError:
             raise
+        AIFactory._finish_capability_client(
+            images_client,
+            env_settings=env_settings,
+            str_capability=AI_PROVIDER_CAPABILITY_IMAGES,
+            str_engine=str_image_engine,
+            str_model=str_image_model_name or "",
+        )
+        # Normal return with configured images provider client.
+        return images_client
 
     @staticmethod
     def get_ai_video_client(
@@ -1566,7 +1740,7 @@ class AIFactory:
                 ai_provider_spec,
                 AIBaseVideos,
             )
-            return class_ai_video_client(model=str_model_name)
+            video_client: AIBaseVideos = class_ai_video_client(model=str_model_name)
         except AiProviderConfigurationError as exception:
             raise AIFactory._translate_config_exception(
                 exception,
@@ -1578,6 +1752,15 @@ class AIFactory:
             raise
         except AiProviderRuntimeError:
             raise
+        AIFactory._finish_capability_client(
+            video_client,
+            env_settings=env_settings,
+            str_capability=AI_PROVIDER_CAPABILITY_VIDEOS,
+            str_engine=str_video_engine,
+            str_model=str_model_name or "",
+        )
+        # Normal return with configured video provider client.
+        return video_client
 
     @staticmethod
     def get_ai_voice_client(
@@ -1613,5 +1796,16 @@ class AIFactory:
             dict_provider_kwargs["base_url"] = base_url
         if retry_policy is not None:
             dict_provider_kwargs["retry_policy"] = retry_policy
+        voice_client: AIVoiceBase = AIVoiceFactory.create(
+            str_voice_engine, **dict_provider_kwargs
+        )
+        # Voice models are chosen per call, so only the identity is stamped.
+        AIFactory._stamp_capability_identity(
+            voice_client,
+            env_settings=env_settings,
+            str_capability=AI_PROVIDER_CAPABILITY_VOICE,
+            str_engine=str_voice_engine,
+            str_model="",
+        )
         # Normal return with the voice client resolved by the voice factory.
-        return AIVoiceFactory.create(str_voice_engine, **dict_provider_kwargs)
+        return voice_client

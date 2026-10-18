@@ -1,4 +1,4 @@
-# ai-api-unified 3.18.0
+# ai-api-unified 3.19.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -1953,6 +1953,15 @@ at startup, not in the middle of a failover.
   connection) is not cached, so the next factory call probes that model
   again.
 - `models.json` itself is reloaded when its modification time changes.
+- On `get_ai_embedding_client()`, `get_ai_images_client()`, and
+  `get_ai_video_client()`, the configured model is checked the same way,
+  with the probe of the same provider (OpenAI, Gemini, or Bedrock, which
+  also serves Titan, Nova Canvas, and Nova Reel). That model is the only
+  one the client has, so a missing model raises `ValueError` naming the
+  setting (`embeddings.model`, `images.model`, `videos.model`) and an
+  unreachable one raises `AiProviderConfigurationError`, in every mode but
+  `off`. Voyage embeddings, an engine's default model (no model set), and
+  voice are not probed.
 
 ### What it does
 
@@ -2063,6 +2072,11 @@ Both ride on every call:
 
 Tags you set on the observability context yourself win over these.
 `client.config_id` and `client.config_version` read them in code.
+
+Embeddings, images, videos, voice, and classifier clients from the factory
+carry an identity too: a `config_id` hashed from their capability, engine,
+and model (and embedding dimensions), plus the same `config_version` and
+`service`. Their calls and request cost reports carry the same tags.
 
 ### Checking your own configuration
 
