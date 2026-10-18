@@ -4,6 +4,24 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.18.0
+
+### Changed
+
+- Embeddings, images, videos, and voice raise `AiProviderRequestError` for a
+  provider failure, with `status_code`, `fallback_reason`, and
+  `account_wide` set by the same rules the completions engines use. Before,
+  they raised the SDK's exception or a `RuntimeError` wrapped around it.
+  The mapping (`ai_provider_error_mapping.py`) reads the exception's cause
+  chain, so a provider error wrapped in the client's own `RuntimeError` is
+  still found; the original stays on `__cause__`. `AiProviderRequestError`
+  subclasses `RuntimeError`, so `except RuntimeError` keeps working. A
+  caller catching an SDK exception type directly (for example
+  `openai.APIStatusError` from an images call) should catch
+  `AiProviderRequestError` instead.
+- Request cost line items for a failed media call now carry its
+  `fallback_reason`.
+
 ## 3.17.0
 
 ### Added

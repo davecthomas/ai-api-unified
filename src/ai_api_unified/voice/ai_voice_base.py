@@ -17,6 +17,7 @@ from time import sleep
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from ai_api_unified.ai_provider_exceptions import AiProviderRequestError
 from ai_api_unified.middleware.observability import (
     AiApiObservabilityMiddleware,
     get_observability_middleware,
@@ -367,11 +368,35 @@ class AIVoiceBase(BaseModel, ABC):
                 dict_metadata=dict_input_metadata,
                 legacy_caller_id=legacy_caller_id,
             ),
-            callable_execute=callable_execute,
+            callable_execute=lambda: self._execute_with_typed_errors(callable_execute),
             callable_build_result_summary=callable_build_result_summary,
         )
         # Normal return with the original provider byte payload after optional observability wrapping.
         return audio_bytes
+
+    def _execute_with_typed_errors(
+        self, callable_execute: Callable[[], bytes]
+    ) -> bytes:
+        """
+        Runs one voice provider call so an SDK failure raises
+        AiProviderRequestError with its status and fallback reason; see
+        ai_provider_error_mapping.py.
+        """
+        from ai_api_unified.ai_provider_error_mapping import map_provider_exception
+
+        try:
+            # Normal return with the provider's audio.
+            return callable_execute()
+        except AiProviderRequestError:
+            raise
+        except Exception as exception:
+            typed: AiProviderRequestError | None = map_provider_exception(
+                exception,
+                provider_engine=self._resolve_observability_provider_engine(),
+            )
+            if typed is None:
+                raise
+            raise typed from exception
 
     def _build_tts_observability_input_metadata(
         self,

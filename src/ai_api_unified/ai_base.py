@@ -36,6 +36,7 @@ from ai_api_unified.ai_completions_exceptions import (
 from ai_api_unified.ai_provider_exceptions import (
     AiProviderCapabilityUnsupportedError,
     AiProviderConfigurationError,
+    AiProviderRequestError,
 )
 from ai_api_unified.middleware.observability import (
     AiApiObservabilityMiddleware,
@@ -988,6 +989,12 @@ class AIBase(ABC):
     PROVIDER_ENGINE_VOYAGE = "voyage"
     _observability_middleware: AiApiObservabilityMiddleware | None = None
     _last_request_cost: AIRequestCostReport | None = None
+    # Capabilities whose provider errors the base maps to
+    # AiProviderRequestError; completions and classifier engines map their
+    # own, with their providers' error codes.
+    FROZENSET_MAPPED_ERROR_CAPABILITIES: ClassVar[frozenset[str]] = frozenset(
+        {"embedding", "images", "videos", "voice"}
+    )
     # config_id / config_version tags the factory stamps on every client it
     # builds; replaced, never mutated, so the class default stays empty.
     _dict_config_tags: Mapping[str, str] = MappingProxyType({})
@@ -1281,7 +1288,9 @@ class AIBase(ABC):
                     dict_metadata=dict_input_metadata,
                     legacy_caller_id=legacy_caller_id,
                 ),
-                callable_execute=callable_execute,
+                callable_execute=self._typed_provider_call(
+                    capability, callable_execute
+                ),
                 callable_build_result_summary=callable_build_result_summary,
             ),
         )
@@ -1327,12 +1336,72 @@ class AIBase(ABC):
                     dict_metadata=dict_input_metadata,
                     legacy_caller_id=legacy_caller_id,
                 ),
-                callable_execute=callable_execute,
+                callable_execute=self._atyped_provider_call(
+                    capability, callable_execute
+                ),
                 callable_build_result_summary=callable_build_result_summary,
             ),
         )
         # Normal return with the original provider result after optional observability wrapping.
         return provider_result
+
+    def _typed_provider_call(
+        self, capability: str, callable_execute: Callable[[], Any]
+    ) -> Callable[[], Any]:
+        """
+        Wraps a media provider call so an SDK failure raises
+        AiProviderRequestError with its status and fallback reason; see
+        ai_provider_error_mapping.py. Completions calls are returned as is.
+        """
+        if capability not in self.FROZENSET_MAPPED_ERROR_CAPABILITIES:
+            # Early return: the engine maps its own errors.
+            return callable_execute
+
+        def _run() -> Any:
+            try:
+                # Normal return with the provider's result.
+                return callable_execute()
+            except AiProviderRequestError:
+                raise
+            except Exception as exception:
+                self._raise_mapped_provider_error(exception)
+                raise
+
+        # Normal return with the mapping wrapper.
+        return _run
+
+    def _atyped_provider_call(
+        self, capability: str, callable_execute: Callable[[], Any]
+    ) -> Callable[[], Any]:
+        """Async twin of _typed_provider_call."""
+        if capability not in self.FROZENSET_MAPPED_ERROR_CAPABILITIES:
+            # Early return: the engine maps its own errors.
+            return callable_execute
+
+        async def _run() -> Any:
+            try:
+                # Normal return with the provider's result.
+                return await callable_execute()
+            except AiProviderRequestError:
+                raise
+            except Exception as exception:
+                self._raise_mapped_provider_error(exception)
+                raise
+
+        # Normal return with the mapping wrapper.
+        return _run
+
+    def _raise_mapped_provider_error(self, exception: Exception) -> None:
+        """Raises the typed form of a provider failure, when one exists."""
+        from ai_api_unified.ai_provider_error_mapping import map_provider_exception
+
+        typed: AiProviderRequestError | None = map_provider_exception(
+            exception, provider_engine=self._resolve_observability_provider_engine()
+        )
+        if typed is not None:
+            raise typed from exception
+        # Normal return: not a provider failure; the caller re-raises it.
+        return None
 
     def get_org_info(self) -> AIProviderOrgInfoBase:
         """
