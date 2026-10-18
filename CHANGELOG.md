@@ -4,6 +4,29 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.17.0
+
+### Added
+
+- Conversation and structured results carry the full envelope:
+  `AITurnResult` and `AIStructuredOutputResult` gain `provider`,
+  `route_tier`, `route_method`, `model_pin`, and `cost` (the call's own
+  `AIRequestCostReport`), and `provider_engine` and `model_name` are now
+  filled on every call, not only when a fallback chain served it.
+  `thinking` comes from the call's own ledger, so concurrent calls on one
+  client no longer read each other's level.
+- Per-call model pins on `send_conversation`, `send_structured_output`,
+  and their async twins through the reserved `provider_options["model"]`,
+  with the same rules as `send_prompt_with_result(model=...)`. A pin also
+  overrides the router's `route` and `route_floor` options.
+
+### Changed
+
+- `provider_options["model"]` is now a reserved key and never reaches the
+  provider request. A caller that used it to swap the SDK's model directly
+  now gets a pinned call, which is metered and logged under the model that
+  answered.
+
 ## 3.16.0
 
 ### Added

@@ -1,4 +1,4 @@
-# ai-api-unified 3.16.0
+# ai-api-unified 3.17.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -280,6 +280,13 @@ result.request_id, result.config_id        # correlate with logs and cost events
 Every field describes this call alone, even inside a caller's
 `request_cost_scope()` or when several calls run at once on one client.
 `asend_prompt_with_result` is the async twin.
+
+Conversation turns and structured results carry the same fields:
+`AITurnResult` and `AIStructuredOutputResult` from `send_conversation`,
+`send_structured_output`, and their async twins have `provider`,
+`provider_engine`, `model_name`, `route_tier`, `route_method`, `model_pin`,
+`thinking`, `usage`, and `cost` (the call's `AIRequestCostReport`, so
+`turn.cost.total_usd` is what the turn cost).
 
 ### Completions with automatic fallback
 
@@ -1859,16 +1866,23 @@ preview.classifier_usd                             # what classifying cost
 ### Pinning a model for one call
 
 `model=` on `send_prompt_with_result` (and its async twin) names the model
-for one call:
+for one call; on `send_conversation` and `send_structured_output` (and
+their async twins) the reserved `provider_options["model"]` does the same:
 
 ```python
 result = client.send_prompt_with_result(prompt, model="claude:claude-opus-5-5")
 result.model_pin                           # "claude:claude-opus-5-5"
 result.route_method                        # "model_pin"
+
+turn = client.send_conversation(
+    system_prompt, messages, provider_options={"model": "openai:gpt-5.4"}
+)
 ```
 
-The call skips routing (no classifier, no tier pick) and keeps everything
-else: fallback, metering, logging, and redaction.
+The call skips routing (no classifier, no tier pick, and no `route` or
+`route_floor` option) and keeps everything else: fallback, metering,
+logging, and redaction. The `model` key is removed before the request
+reaches the provider.
 
 - Name the model as `engine:model`, or as a bare model id that the
   configuration already uses. Bedrock ids keep their colons

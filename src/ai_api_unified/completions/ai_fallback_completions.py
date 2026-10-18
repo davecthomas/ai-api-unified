@@ -60,6 +60,8 @@ from pydantic import BaseModel, ConfigDict
 
 from ..ai_base import (
     AIBaseCompletions,
+    aenveloped_completions_call,
+    enveloped_completions_call,
     AIBatchJob,
     AIBatchRequestItem,
     AIBatchResultItem,
@@ -1602,6 +1604,7 @@ class AiFallbackCompletions(AIBaseCompletions):
             ),
         )
 
+    @enveloped_completions_call
     def send_structured_output(
         self,
         prompt: str | None = None,
@@ -1645,6 +1648,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                 str_family=str_family,
             )
 
+    @aenveloped_completions_call
     async def asend_structured_output(
         self,
         prompt: str | None = None,
@@ -1685,6 +1689,7 @@ class AiFallbackCompletions(AIBaseCompletions):
 
     # ── Conversations ───────────────────────────────────────────────────────
 
+    @enveloped_completions_call
     def send_conversation(
         self,
         system_prompt: str,
@@ -1726,6 +1731,7 @@ class AiFallbackCompletions(AIBaseCompletions):
                 str_family=str_family,
             )
 
+    @aenveloped_completions_call
     async def asend_conversation(
         self,
         system_prompt: str,
