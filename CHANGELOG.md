@@ -4,6 +4,25 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.25.0
+
+### Added
+
+- Guardrail backends for four more providers' moderation services:
+  `mistral_moderation` (Mistral `/v1/moderations`), `azure_content_safety`
+  (Content Safety `text:analyze`, and Prompt Shields for
+  `prompt_injection`), `bedrock_guardrails` (`ApplyGuardrail` against a
+  guardrail in the account, with `PROMPT_ATTACK` for `prompt_injection`),
+  and `google_moderation` (Cloud Natural Language `moderateText`). Each
+  maps its scale to 0 to 1 and honors its harm categories by default.
+  `backend: "auto"` now takes the first configured provider before the
+  classifier; with none of the new settings present it resolves exactly
+  as in 3.24.0. Provider settings live under `settings.backends`; keys
+  are `MISTRAL_API_KEY`, `AZURE_CONTENT_SAFETY_KEY` (and
+  `AZURE_CONTENT_SAFETY_ENDPOINT`), and `GOOGLE_CLOUD_LANGUAGE_API_KEY`.
+  `prompt_injection` accepts `classifier`, `azure_content_safety`, and
+  `bedrock_guardrails` only.
+
 ## 3.24.0
 
 ### Added

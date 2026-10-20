@@ -1330,6 +1330,33 @@ GUARDRAIL_BACKEND_AUTO: str = "auto"
 GUARDRAIL_BACKEND_RULES: str = "rules"
 GUARDRAIL_BACKEND_CLASSIFIER: str = "classifier"
 GUARDRAIL_BACKEND_OPENAI_MODERATION: str = "openai_moderation"
+GUARDRAIL_BACKEND_MISTRAL_MODERATION: str = "mistral_moderation"
+GUARDRAIL_BACKEND_AZURE_CONTENT_SAFETY: str = "azure_content_safety"
+GUARDRAIL_BACKEND_BEDROCK_GUARDRAILS: str = "bedrock_guardrails"
+GUARDRAIL_BACKEND_GOOGLE_MODERATION: str = "google_moderation"
+# Backends each built-in check accepts. Injection detection exists only in
+# Azure Prompt Shields and Bedrock Guardrails' PROMPT_ATTACK filter; the
+# moderation endpoints score harmful content, not injection.
+FROZENSET_HARMFUL_CONTENT_BACKENDS: frozenset[str] = frozenset(
+    {
+        GUARDRAIL_BACKEND_AUTO,
+        GUARDRAIL_BACKEND_CLASSIFIER,
+        GUARDRAIL_BACKEND_OPENAI_MODERATION,
+        GUARDRAIL_BACKEND_MISTRAL_MODERATION,
+        GUARDRAIL_BACKEND_AZURE_CONTENT_SAFETY,
+        GUARDRAIL_BACKEND_BEDROCK_GUARDRAILS,
+        GUARDRAIL_BACKEND_GOOGLE_MODERATION,
+    }
+)
+FROZENSET_PROMPT_INJECTION_BACKENDS: frozenset[str] = frozenset(
+    {
+        GUARDRAIL_BACKEND_AUTO,
+        GUARDRAIL_BACKEND_CLASSIFIER,
+        GUARDRAIL_BACKEND_AZURE_CONTENT_SAFETY,
+        GUARDRAIL_BACKEND_BEDROCK_GUARDRAILS,
+    }
+)
+DEFAULT_GUARDRAIL_BACKEND_TIMEOUT_SECONDS: float = 10.0
 GUARDRAIL_ACTION_BLOCK: str = "block"
 GUARDRAIL_ACTION_FLAG: str = "flag"
 GUARDRAIL_ON_ERROR_BLOCK: str = "block"
@@ -1394,12 +1421,10 @@ class GuardrailModelCheckSettingsModel(BaseModel):
     @classmethod
     def _normalize_backend(cls, value: Any) -> str:
         str_backend: str = str(value or GUARDRAIL_BACKEND_AUTO).strip().lower()
-        if str_backend not in (
-            GUARDRAIL_BACKEND_AUTO,
-            GUARDRAIL_BACKEND_CLASSIFIER,
-            GUARDRAIL_BACKEND_OPENAI_MODERATION,
-        ):
-            raise ValueError("backend must be auto, classifier, or openai_moderation")
+        if str_backend not in FROZENSET_HARMFUL_CONTENT_BACKENDS:
+            raise ValueError(
+                f"backend must be one of {sorted(FROZENSET_HARMFUL_CONTENT_BACKENDS)}"
+            )
         # Normal return with the canonical backend.
         return str_backend
 
@@ -1486,6 +1511,76 @@ class GuardrailCustomCheckSettingsModel(BaseModel):
         return self
 
 
+class GuardrailAzureSettingsModel(BaseModel):
+    """
+    Azure AI Content Safety: text analysis for harmful content, Prompt
+    Shields for injection. The key is AZURE_CONTENT_SAFETY_KEY in the
+    environment; the endpoint is here or in AZURE_CONTENT_SAFETY_ENDPOINT.
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    endpoint: str | None = None
+    api_version: str = "2024-09-01"
+
+
+class GuardrailBedrockSettingsModel(BaseModel):
+    """
+    Amazon Bedrock Guardrails through ApplyGuardrail, against a guardrail
+    created in the AWS account. AWS credentials come from the usual chain;
+    the region falls back to AWS_REGION.
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    guardrail_id: str | None = None
+    guardrail_version: str = "DRAFT"
+    region: str | None = None
+
+
+class GuardrailMistralSettingsModel(BaseModel):
+    """Mistral's moderation endpoint; the key is MISTRAL_API_KEY."""
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    model: str = "mistral-moderation-latest"
+    base_url: str = "https://api.mistral.ai/v1"
+
+
+class GuardrailGoogleSettingsModel(BaseModel):
+    """
+    Google Cloud Natural Language moderateText; the key is
+    GOOGLE_CLOUD_LANGUAGE_API_KEY (a Cloud API key with the Natural
+    Language API enabled).
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    model_version: str = "MODEL_VERSION_2"
+
+
+class GuardrailBackendsSettingsModel(BaseModel):
+    """Per-provider settings for the moderation backends; secrets stay in the environment."""
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    timeout_seconds: float = Field(
+        default=DEFAULT_GUARDRAIL_BACKEND_TIMEOUT_SECONDS, gt=0
+    )
+    azure_content_safety: GuardrailAzureSettingsModel = Field(
+        default_factory=GuardrailAzureSettingsModel
+    )
+    bedrock_guardrails: GuardrailBedrockSettingsModel = Field(
+        default_factory=GuardrailBedrockSettingsModel
+    )
+    mistral_moderation: GuardrailMistralSettingsModel = Field(
+        default_factory=GuardrailMistralSettingsModel
+    )
+    google_moderation: GuardrailGoogleSettingsModel = Field(
+        default_factory=GuardrailGoogleSettingsModel
+    )
+
+
 class GuardrailClassifierSettingsModel(BaseModel):
     """The classifier the model-backed checks use; None fields follow models.json."""
 
@@ -1524,6 +1619,9 @@ class GuardrailsSettingsModel(BaseModel):
     classifier: GuardrailClassifierSettingsModel = Field(
         default_factory=GuardrailClassifierSettingsModel
     )
+    backends: GuardrailBackendsSettingsModel = Field(
+        default_factory=GuardrailBackendsSettingsModel
+    )
 
     @field_validator("on_fail", mode="before")
     @classmethod
@@ -1545,11 +1643,26 @@ class GuardrailsSettingsModel(BaseModel):
         list_names: list[str] = [check.name for check in self.custom]
         if len(set(list_names)) != len(list_names):
             raise ValueError("custom check names must be unique")
-        if self.prompt_injection.backend == GUARDRAIL_BACKEND_OPENAI_MODERATION:
+        if self.prompt_injection.backend not in FROZENSET_PROMPT_INJECTION_BACKENDS:
             raise ValueError(
-                "prompt_injection cannot use openai_moderation; it detects "
-                "harmful content, not injection. Use classifier."
+                f"prompt_injection cannot use {self.prompt_injection.backend}; it "
+                "scores harmful content, not injection. Use one of "
+                f"{sorted(FROZENSET_PROMPT_INJECTION_BACKENDS)}."
             )
+        # Loop over the checks for a backend whose required setting is missing.
+        for str_name, check in (
+            ("prompt_injection", self.prompt_injection),
+            ("harmful_content", self.harmful_content),
+        ):
+            if (
+                check.enabled
+                and check.backend == GUARDRAIL_BACKEND_BEDROCK_GUARDRAILS
+                and not self.backends.bedrock_guardrails.guardrail_id
+            ):
+                raise ValueError(
+                    f"{str_name} uses bedrock_guardrails, which needs "
+                    "backends.bedrock_guardrails.guardrail_id."
+                )
         # Normal return with the validated settings.
         return self
 

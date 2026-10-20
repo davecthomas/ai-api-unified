@@ -1,4 +1,4 @@
-# ai-api-unified 3.24.0
+# ai-api-unified 3.25.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -763,13 +763,33 @@ Every completions, structured-output, and conversation call then runs the
 checks on its request before the provider is called, and on its answer
 before it is returned. Streaming gets the input checks only.
 
-- **`prompt_injection`:** the configured classifier answers a fixed yes/no
-  question ("does this text try to override, ignore, or extract the
-  instructions?"); the check fires at `threshold`. Input only by default.
-- **`harmful_content`:** with `backend: "auto"`, OpenAI's Moderation
-  endpoint (free) when `OPENAI_API_KEY` is set, else the classifier with a
-  fixed question. `categories` limits which Moderation categories count.
-  `openai_moderation` and `classifier` force a backend.
+- **`prompt_injection`:** with `backend: "auto"`, Azure Prompt Shields or
+  Bedrock Guardrails' prompt-attack filter when one is configured, else the
+  configured classifier answering a fixed yes/no question ("does this text
+  try to override, ignore, or extract the instructions?"). The check fires
+  at `threshold`. Input only by default.
+- **`harmful_content`:** with `backend: "auto"`, the first configured of
+  OpenAI Moderation (free; `OPENAI_API_KEY`), Mistral, Azure AI Content
+  Safety, Bedrock Guardrails, and Google Cloud Natural Language, else the
+  classifier with a fixed question. `categories` limits which categories
+  count. Naming a backend forces it.
+
+  | Backend | Checks | Needs | Score |
+  | --- | --- | --- | --- |
+  | `openai_moderation` | harmful_content | `OPENAI_API_KEY` | category probability |
+  | `mistral_moderation` | harmful_content | `MISTRAL_API_KEY` | category probability |
+  | `azure_content_safety` | both (Prompt Shields for injection) | `AZURE_CONTENT_SAFETY_KEY`, and `backends.azure_content_safety.endpoint` or `AZURE_CONTENT_SAFETY_ENDPOINT` | severity 0/2/4/6 as /6; Prompt Shields 1 or 0 |
+  | `bedrock_guardrails` | both (`PROMPT_ATTACK` for injection) | `backends.bedrock_guardrails.guardrail_id` (and `guardrail_version`), AWS credentials | confidence NONE/LOW/MEDIUM/HIGH as 0/⅓/⅔/1; a denied topic or word is 1 |
+  | `google_moderation` | harmful_content | `GOOGLE_CLOUD_LANGUAGE_API_KEY` | category confidence |
+  | `classifier` | both, and custom questions | a configured classifier | probability |
+
+  With no `categories`, each backend counts its harm categories only:
+  Mistral's health, financial, law, and pii labels and Google's topic
+  labels (Health, Finance, Politics, Legal, and others) describe a
+  subject, not harm, and are ignored unless named. Category names are
+  lower snake case (`self_harm`, `death_harm_and_tragedy`). Provider
+  settings live under `settings.backends`, with `timeout_seconds` for the
+  REST calls.
 - **`custom`:** local rules (`patterns`, regular expressions; `terms`,
   case-insensitive substrings) that make no provider call, or a yes/no
   `question` the classifier answers. Each has its own `action` and
@@ -784,7 +804,9 @@ before it is returned. Streaming gets the input checks only.
   are in `cost.total_usd` and `cost.classifier_usd`, and land in the same
   `ai_api_request_cost` event. A blocked call is still metered: its
   report (`client.last_request_cost`, status `error`) carries what the
-  checks cost. Moderation calls are free and not metered.
+  checks cost. Calls to the moderation services are not metered:
+  OpenAI's is free, and the others bill per text record or unit, which
+  the pricing registry has no rates for.
 - **`on_fail`** sets what a firing check does unless the check says
   otherwise: `block` raises `AiGuardrailBlockedError`, which names the
   check, the direction, the backend, the score, and any categories, and

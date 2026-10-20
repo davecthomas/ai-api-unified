@@ -10,12 +10,15 @@ cannot be checked while its chunks are already with the caller.
 
 Checks:
 
-- `prompt_injection`: a model-backed yes/no question ("does this text try
-  to override or extract the instructions?") answered by the configured
-  classifier. Input only by default.
-- `harmful_content`: OpenAI's Moderation endpoint (free) when an OpenAI key
-  is present, else the classifier with a fixed question. Backend `auto`
-  picks; `openai_moderation` and `classifier` force one.
+- `prompt_injection`: Azure Prompt Shields or Bedrock Guardrails' prompt
+  attack filter when configured (`auto`), else a yes/no question ("does
+  this text try to override or extract the instructions?") answered by the
+  configured classifier. Input only by default.
+- `harmful_content`: a provider moderation service, else the classifier
+  with a fixed question. Backend `auto` takes the first configured one of
+  OpenAI Moderation (free; an OpenAI key), Mistral, Azure AI Content
+  Safety, Bedrock Guardrails, and Google Cloud Natural Language (see
+  moderation_backends.py); naming a backend forces it.
 - custom checks: local rules (regular expressions, terms) that need no
   provider call, or a yes/no `question` the classifier answers.
 
@@ -149,11 +152,14 @@ def get_guardrails_settings() -> GuardrailsSettingsModel | None:
 def reset_guardrails() -> None:
     """Forgets the settings and the built backends (tests, or a reload)."""
     global _SETTINGS, _BOOL_RESOLVED, _CLASSIFIER, _MODERATION_CLIENT
+    from .moderation_backends import reset_moderation_backends
+
     with _LOCK:
         _SETTINGS = None
         _BOOL_RESOLVED = False
         _CLASSIFIER = None
         _MODERATION_CLIENT = None
+    reset_moderation_backends()
 
 
 def set_guardrail_classifier(classifier: Any) -> None:
@@ -220,14 +226,56 @@ def _moderation_client() -> Any:
     return _MODERATION_CLIENT
 
 
-def resolve_backend(str_check: str, check: GuardrailModelCheckSettingsModel) -> str:
-    """The backend a built-in check runs on, with `auto` decided."""
+# The order `auto` tries provider backends in, per check, before the
+# classifier. OpenAI Moderation is free, so it leads for harmful content;
+# a backend joins only once it is configured (a key, an endpoint, a
+# guardrail id), so `auto` never reaches a service nobody set up.
+TUPLE_AUTO_HARMFUL_CONTENT: tuple[str, ...] = (
+    GUARDRAIL_BACKEND_OPENAI_MODERATION,
+    "mistral_moderation",
+    "azure_content_safety",
+    "bedrock_guardrails",
+    "google_moderation",
+)
+TUPLE_AUTO_PROMPT_INJECTION: tuple[str, ...] = (
+    "azure_content_safety",
+    "bedrock_guardrails",
+)
+
+
+def resolve_backend(
+    str_check: str,
+    check: GuardrailModelCheckSettingsModel,
+    settings: GuardrailsSettingsModel | None = None,
+) -> str:
+    """
+    The backend a built-in check runs on, with `auto` decided: the first
+    configured provider backend in the check's auto order, else the
+    classifier.
+    """
     if check.backend != GUARDRAIL_BACKEND_AUTO:
         # Early return with the configured backend.
         return check.backend
-    if str_check == GUARDRAIL_CHECK_HARMFUL_CONTENT and _openai_key_present():
-        # Early return: Moderation is free when a key is present.
-        return GUARDRAIL_BACKEND_OPENAI_MODERATION
+    from .moderation_backends import available
+
+    resolved: GuardrailsSettingsModel = (
+        settings or get_guardrails_settings() or GuardrailsSettingsModel()
+    )
+    tuple_order: tuple[str, ...] = (
+        TUPLE_AUTO_HARMFUL_CONTENT
+        if str_check == GUARDRAIL_CHECK_HARMFUL_CONTENT
+        else TUPLE_AUTO_PROMPT_INJECTION
+    )
+    # Loop over the auto order for the first backend that is configured.
+    for str_backend in tuple_order:
+        if str_backend == GUARDRAIL_BACKEND_OPENAI_MODERATION:
+            if _openai_key_present():
+                # Early return: Moderation is free when a key is present.
+                return str_backend
+            continue
+        if available(str_backend, resolved):
+            # Early return with the configured provider backend.
+            return str_backend
     # Normal return: the classifier judges.
     return GUARDRAIL_BACKEND_CLASSIFIER
 
@@ -488,8 +536,30 @@ def _run_model_check(
     str_direction: str,
     list_texts: list[str],
 ) -> GuardrailFinding | None:
-    str_backend: str = resolve_backend(str_check, check)
+    str_backend: str = resolve_backend(str_check, check, settings)
     str_text: str = "\n\n".join(list_texts)
+    if str_backend not in (
+        GUARDRAIL_BACKEND_OPENAI_MODERATION,
+        GUARDRAIL_BACKEND_CLASSIFIER,
+    ):
+        from .moderation_backends import run_backend
+
+        float_score, tuple_fired = run_backend(
+            str_backend, str_check, check, settings, str_direction, str_text
+        )
+        if tuple_fired:
+            # Early return with the provider's finding.
+            return _finding(
+                settings,
+                str_check,
+                str_direction,
+                str_backend,
+                check.action,
+                float_score,
+                tuple_fired,
+            )
+        # Early return: clean.
+        return None
     if str_backend == GUARDRAIL_BACKEND_OPENAI_MODERATION:
         float_top, tuple_categories = _run_moderation(check, str_text)
         if tuple_categories:
@@ -592,7 +662,7 @@ def run_checks(
         ):
             continue
         str_backend: str = (
-            resolve_backend(str_check, check)
+            resolve_backend(str_check, check, settings)
             if isinstance(check, GuardrailModelCheckSettingsModel)
             else (
                 GUARDRAIL_BACKEND_RULES
