@@ -167,6 +167,44 @@ class AiProviderCapabilityUnsupportedError(AiProviderError):
     """
 
 
+class AiGuardrailBlockedError(AiProviderRuntimeError):
+    """
+    Raised when a guardrail check blocks a request or an answer.
+
+    Not an AiProviderRequestError: a blocked call is a policy decision, not a
+    provider failure, so a fallback chain or router never moves it to
+    another model. The record names the check, never the content it found.
+
+    Attributes:
+        check: The check that fired (prompt_injection, harmful_content, or a
+            custom check's name).
+        direction: "input" (the request) or "output" (the answer).
+        backend: What made the decision (rules, classifier, openai_moderation).
+        score: The backend's score or probability, when it reports one.
+        categories: Category labels the backend reported, when any.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        check: str,
+        direction: str,
+        backend: str,
+        score: float | None = None,
+        categories: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.check: str = check
+        self.direction: str = direction
+        self.backend: str = backend
+        self.score: float | None = score
+        self.categories: tuple[str, ...] = categories
+        # A guardrail decision is final; nothing about it says another
+        # model would answer differently.
+        self.fallback_reason: AiFallbackReason | None = None
+
+
 class AiProviderRequestError(AiProviderRuntimeError):
     """
     Raised when a provider API request fails with an HTTP-level error.

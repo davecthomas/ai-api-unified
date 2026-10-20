@@ -15,6 +15,7 @@
           "name": {
             "type": "string",
             "enum": [
+              "guardrails",
               "observability",
               "pii_redaction",
               "response_cache"
@@ -29,6 +30,22 @@
           }
         },
         "allOf": [
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "guardrails"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "settings": {
+                  "$ref": "#/$defs/GuardrailsSettingsModel"
+                }
+              }
+            }
+          },
           {
             "if": {
               "properties": {
@@ -298,6 +315,166 @@
         }
       },
       "title": "ResponseCacheSettingsModel",
+      "type": "object"
+    },
+    "GuardrailClassifierSettingsModel": {
+      "additionalProperties": false,
+      "description": "The classifier the model-backed checks use; None fields follow models.json.",
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        }
+      },
+      "title": "GuardrailClassifierSettingsModel",
+      "type": "object"
+    },
+    "GuardrailCustomCheckSettingsModel": {
+      "additionalProperties": false,
+      "description": "A custom policy: local rules (no provider call), or a yes/no question\nthe classifier answers.\n\nAttributes:\n    name: The check's name, as records report it. Letters, digits,\n        underscores.\n    patterns: Regular expressions; any match fires the check.\n    terms: Case-insensitive substrings; any match fires the check.\n    question: A yes/no condition for the classifier, for policies rules\n        cannot express (\"Does this text give medical advice?\").\n    threshold: For `question`: probability at or above which it fires.\n    action: `block` or `flag`; None inherits the file-wide `on_fail`.\n    direction: Which side the check reads; default both.",
+      "properties": {
+        "name": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "patterns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Patterns",
+          "type": "array"
+        },
+        "terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Terms",
+          "type": "array"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Question"
+        },
+        "threshold": {
+          "default": 0.8,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Threshold",
+          "type": "number"
+        },
+        "action": {
+          "default": null,
+          "title": "Action"
+        },
+        "direction": {
+          "default": "input_output",
+          "title": "Direction"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "GuardrailCustomCheckSettingsModel",
+      "type": "object"
+    },
+    "GuardrailModelCheckSettingsModel": {
+      "additionalProperties": false,
+      "description": "A model-backed check: prompt_injection or harmful_content.\n\nAttributes:\n    enabled: False turns the check off.\n    backend: `auto` (OpenAI Moderation when OPENAI_API_KEY is set, else\n        the classifier), `classifier`, or `openai_moderation`.\n        prompt_injection accepts only `classifier` (and `auto`, which\n        resolves to it): Moderation does not detect injection.\n    threshold: Probability or score at or above which the check fires.\n    action: `block` or `flag`; None inherits the file-wide `on_fail`.\n    direction: Which side the check reads; default both.\n    categories: harmful_content only: Moderation category names to\n        honor; empty means every category the endpoint reports.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "backend": {
+          "default": "auto",
+          "title": "Backend"
+        },
+        "threshold": {
+          "default": 0.8,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Threshold",
+          "type": "number"
+        },
+        "action": {
+          "default": null,
+          "title": "Action"
+        },
+        "direction": {
+          "default": "input_output",
+          "title": "Direction"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
+        }
+      },
+      "title": "GuardrailModelCheckSettingsModel",
+      "type": "object"
+    },
+    "GuardrailsSettingsModel": {
+      "additionalProperties": false,
+      "description": "The `guardrails` middleware: checks on requests and answers.\n\nAttributes:\n    on_fail: What a firing check does unless it says otherwise: `block`\n        raises AiGuardrailBlockedError; `flag` lets the call through and\n        names the check on the result and in the record.\n    on_error: What happens when a check itself fails (a backend outage):\n        `block` refuses the call, `allow` lets it through with a warning.\n    prompt_injection, harmful_content: The built-in model-backed checks.\n    custom: Policies of your own.\n    classifier: Which classifier the model-backed checks use.",
+      "properties": {
+        "on_fail": {
+          "default": "block",
+          "title": "On Fail"
+        },
+        "on_error": {
+          "default": "block",
+          "title": "On Error"
+        },
+        "prompt_injection": {
+          "$ref": "#/$defs/GuardrailModelCheckSettingsModel"
+        },
+        "harmful_content": {
+          "$ref": "#/$defs/GuardrailModelCheckSettingsModel"
+        },
+        "custom": {
+          "items": {
+            "$ref": "#/$defs/GuardrailCustomCheckSettingsModel"
+          },
+          "title": "Custom",
+          "type": "array"
+        },
+        "classifier": {
+          "$ref": "#/$defs/GuardrailClassifierSettingsModel"
+        }
+      },
+      "title": "GuardrailsSettingsModel",
       "type": "object"
     }
   }

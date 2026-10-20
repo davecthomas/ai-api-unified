@@ -301,6 +301,7 @@ def _isolate_from_developer_wrappers(
     # reorder the next test's chain.
     from ai_api_unified.completions.ai_fallback_cooldown import AiCandidateCooldowns
     from ai_api_unified.middleware.cache_store import set_cache_store
+    from ai_api_unified.middleware.guardrails import reset_guardrails
     from ai_api_unified.middleware.response_cache import reset_response_cache
 
     AiCandidateCooldowns.reset()
@@ -308,6 +309,7 @@ def _isolate_from_developer_wrappers(
     # entries in a process-wide store; neither may leak between tests.
     set_cache_store(None)
     reset_response_cache()
+    reset_guardrails()
     if request.node.get_closest_marker("nonmock") is None:
         from ai_api_unified.util.ai_model_checker import (
             AiModelChecker,
