@@ -70,3 +70,17 @@ AWS_SESSION_TOKEN=
 ELEVEN_LABS_API_KEY=
 # Azure speech; its region is providers.azure_speech.region in models.json.
 MICROSOFT_COGNITIVE_SERVICES_API_KEY=
+
+
+########################################################################
+#   GUARDRAIL MODERATION SERVICES (only for the guardrails middleware)
+########################################################################
+# OpenAI Moderation uses OPENAI_API_KEY above. Each service below is used
+# only when its key is set (guardrails backend "auto") or named.
+# MISTRAL_API_KEY=
+# AZURE_CONTENT_SAFETY_KEY=
+# AZURE_CONTENT_SAFETY_ENDPOINT=https://my-resource.cognitiveservices.azure.com
+# A Google Cloud API key with the Natural Language API enabled.
+# GOOGLE_CLOUD_LANGUAGE_API_KEY=
+# Bedrock Guardrails uses the AWS credentials above and a guardrail id in
+# models.json (settings.backends.bedrock_guardrails.guardrail_id).

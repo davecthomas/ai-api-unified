@@ -1290,6 +1290,94 @@
       "title": "ResponseCacheSettingsModel",
       "type": "object"
     },
+    "GuardrailAzureSettingsModel": {
+      "additionalProperties": false,
+      "description": "Azure AI Content Safety: text analysis for harmful content, Prompt\nShields for injection. The key is AZURE_CONTENT_SAFETY_KEY in the\nenvironment; the endpoint is here or in AZURE_CONTENT_SAFETY_ENDPOINT.",
+      "properties": {
+        "endpoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint"
+        },
+        "api_version": {
+          "default": "2024-09-01",
+          "title": "Api Version",
+          "type": "string"
+        }
+      },
+      "title": "GuardrailAzureSettingsModel",
+      "type": "object"
+    },
+    "GuardrailBackendsSettingsModel": {
+      "additionalProperties": false,
+      "description": "Per-provider settings for the moderation backends; secrets stay in the environment.",
+      "properties": {
+        "timeout_seconds": {
+          "default": 10.0,
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "azure_content_safety": {
+          "$ref": "#/$defs/GuardrailAzureSettingsModel"
+        },
+        "bedrock_guardrails": {
+          "$ref": "#/$defs/GuardrailBedrockSettingsModel"
+        },
+        "mistral_moderation": {
+          "$ref": "#/$defs/GuardrailMistralSettingsModel"
+        },
+        "google_moderation": {
+          "$ref": "#/$defs/GuardrailGoogleSettingsModel"
+        }
+      },
+      "title": "GuardrailBackendsSettingsModel",
+      "type": "object"
+    },
+    "GuardrailBedrockSettingsModel": {
+      "additionalProperties": false,
+      "description": "Amazon Bedrock Guardrails through ApplyGuardrail, against a guardrail\ncreated in the AWS account. AWS credentials come from the usual chain;\nthe region falls back to AWS_REGION.",
+      "properties": {
+        "guardrail_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Guardrail Id"
+        },
+        "guardrail_version": {
+          "default": "DRAFT",
+          "title": "Guardrail Version",
+          "type": "string"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        }
+      },
+      "title": "GuardrailBedrockSettingsModel",
+      "type": "object"
+    },
     "GuardrailClassifierSettingsModel": {
       "additionalProperties": false,
       "description": "The classifier the model-backed checks use; None fields follow models.json.",
@@ -1379,6 +1467,37 @@
       "title": "GuardrailCustomCheckSettingsModel",
       "type": "object"
     },
+    "GuardrailGoogleSettingsModel": {
+      "additionalProperties": false,
+      "description": "Google Cloud Natural Language moderateText; the key is\nGOOGLE_CLOUD_LANGUAGE_API_KEY (a Cloud API key with the Natural\nLanguage API enabled).",
+      "properties": {
+        "model_version": {
+          "default": "MODEL_VERSION_2",
+          "title": "Model Version",
+          "type": "string"
+        }
+      },
+      "title": "GuardrailGoogleSettingsModel",
+      "type": "object"
+    },
+    "GuardrailMistralSettingsModel": {
+      "additionalProperties": false,
+      "description": "Mistral's moderation endpoint; the key is MISTRAL_API_KEY.",
+      "properties": {
+        "model": {
+          "default": "mistral-moderation-latest",
+          "title": "Model",
+          "type": "string"
+        },
+        "base_url": {
+          "default": "https://api.mistral.ai/v1",
+          "title": "Base Url",
+          "type": "string"
+        }
+      },
+      "title": "GuardrailMistralSettingsModel",
+      "type": "object"
+    },
     "GuardrailModelCheckSettingsModel": {
       "additionalProperties": false,
       "description": "A model-backed check: prompt_injection or harmful_content.\n\nAttributes:\n    enabled: False turns the check off.\n    backend: `auto` (OpenAI Moderation when OPENAI_API_KEY is set, else\n        the classifier), `classifier`, or `openai_moderation`.\n        prompt_injection accepts only `classifier` (and `auto`, which\n        resolves to it): Moderation does not detect injection.\n    threshold: Probability or score at or above which the check fires.\n    action: `block` or `flag`; None inherits the file-wide `on_fail`.\n    direction: Which side the check reads; default both.\n    categories: harmful_content only: Moderation category names to\n        honor; empty means every category the endpoint reports.",
@@ -1445,6 +1564,9 @@
         },
         "classifier": {
           "$ref": "#/$defs/GuardrailClassifierSettingsModel"
+        },
+        "backends": {
+          "$ref": "#/$defs/GuardrailBackendsSettingsModel"
         }
       },
       "title": "GuardrailsSettingsModel",

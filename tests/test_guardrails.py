@@ -93,10 +93,13 @@ def guardrails_on(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setenv("AI_MODELS_CONFIG", json.dumps({"middleware": [entry]}))
         for str_key, str_value in dict_env.items():
             monkeypatch.setenv(str_key, str_value)
-        # A developer's .env may hold an OpenAI key; the test decides.
+        # A developer's .env may hold provider keys; the test decides.
         monkeypatch.setattr(
             gr, "_openai_key_present", lambda: "OPENAI_API_KEY" in dict_env
         )
+        from ai_api_unified.middleware import moderation_backends as mb
+
+        monkeypatch.setattr(mb, "_setting", lambda k: dict_env.get(k, ""))
         from ai_api_unified.ai_models_config import clear_models_config_cache
 
         clear_models_config_cache()
