@@ -96,7 +96,10 @@ from .thinking import (
 )
 from .middleware.cache_store import CacheStore, InMemoryCacheStore, set_cache_store
 from .middleware.middleware_config import ResponseCacheSettingsModel
-from .ai_provider_exceptions import AiGuardrailBlockedError
+from .ai_provider_exceptions import (
+    AiGuardrailBlockedError,
+    AiProviderConfigurationValueError,
+)
 from .middleware.guardrails import reset_guardrails, set_guardrail_classifier
 from .middleware.middleware_config import GuardrailsSettingsModel
 from .middleware.response_cache import (
@@ -173,6 +176,7 @@ __all__: list[str] = [
     "AIProviderOrgInfoCapability",
     "AIPromptResult",
     "AiGuardrailBlockedError",
+    "AiProviderConfigurationValueError",
     "CacheStore",
     "GuardrailsSettingsModel",
     "reset_guardrails",

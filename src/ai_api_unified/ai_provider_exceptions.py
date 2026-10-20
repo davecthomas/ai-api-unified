@@ -153,6 +153,16 @@ class AiProviderConfigurationError(AiProviderError):
     """
 
 
+class AiProviderConfigurationValueError(AiProviderConfigurationError, ValueError):
+    """
+    A configuration problem found while building a provider client (a
+    retired model, a missing credential, an invalid base URL), raised by the
+    factory with the provider's own message. Also a ValueError, the type
+    the factory has always raised on this path, so existing handlers keep
+    working.
+    """
+
+
 class AiProviderRuntimeError(AiProviderError):
     """
     Raised when provider loading fails due to runtime issues unrelated to

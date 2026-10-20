@@ -4,6 +4,25 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.26.0
+
+### Fixed
+
+- The factory no longer reports a provider's configuration error as an
+  unsupported engine (#47). A retired model, a missing key, or an invalid
+  base URL raised while a completions, embeddings, classifier, images, or
+  video client was being built used to surface as `Unsupported
+  <CAPABILITY> engine: '<engine>'`, hiding the real cause and the
+  replacement model the registry names. It now raises the provider's own
+  message, with the capability and engine added. A genuinely unknown
+  engine keeps the old message.
+
+### Added
+
+- `AiProviderConfigurationValueError`: the error for that case. It
+  subclasses both `AiProviderConfigurationError` and `ValueError`, so an
+  existing `except ValueError` keeps catching it.
+
 ## 3.25.0
 
 ### Added
