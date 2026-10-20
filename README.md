@@ -802,6 +802,17 @@ provider-side prompt caching below, which still applies on a miss.
   that fails is a miss, never a failed call. Fallback cooldowns use the
   same store, so a shared store also shares a benched model across
   processes.
+- **Looking at the cache:** it lives in the process that owns it, so the
+  view is in-process. `response_cache_stats()` returns whether it is on,
+  the store, the live entry count, and hits, misses, and `usd_saved`
+  since the process started, in total and per operation.
+  `response_cache_entries()` lists the live entries, most recently used
+  first: key, operation, engine, model, stored time, seconds left, what
+  one hit saves, and size, never the prompt or the answer.
+  `response_cache_clear()` (or `clear("embeddings")`) removes them.
+  Hits log one INFO line (`CACHE HIT`, with `ai_cache_event`, `usd_saved`,
+  `caller_id`); misses log at DEBUG. `scripts/try_response_cache.py`
+  shows all of this live against your configured provider.
 
 ### Prompt caching
 

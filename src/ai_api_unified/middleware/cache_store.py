@@ -119,6 +119,21 @@ class InMemoryCacheStore:
         with self._lock:
             self._entries.clear()
 
+    def scan(self, str_prefix: str = "") -> list[tuple[str, float, bytes]]:
+        """
+        Live entries under a prefix as (key, seconds until expiry, value),
+        most recently used last. Optional on a store; the response cache's
+        entries listing uses it when present.
+        """
+        float_now: float = self.callable_now()
+        with self._lock:
+            # Normal return with a snapshot of the live entries.
+            return [
+                (str_key, float_expires - float_now, value)
+                for str_key, (float_expires, value) in self._entries.items()
+                if str_key.startswith(str_prefix) and float_expires > float_now
+            ]
+
     def __len__(self) -> int:
         # Normal return with the entry count, expired entries included.
         return len(self._entries)

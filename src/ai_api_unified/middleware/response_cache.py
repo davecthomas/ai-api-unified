@@ -56,7 +56,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .cache_store import store_get, store_set
+from .cache_store import get_cache_store, store_delete, store_get, store_set
 from .middleware_config import (
     CACHE_OPERATION_COMPLETIONS,
     CACHE_OPERATION_CONVERSATION,
@@ -155,11 +155,15 @@ def get_response_cache_settings() -> ResponseCacheSettingsModel | None:
 
 
 def reset_response_cache() -> None:
-    """Forgets the resolved settings so the next call re-reads configuration."""
+    """
+    Forgets the resolved settings so the next call re-reads configuration,
+    and zeroes the counters.
+    """
     global _SETTINGS, _BOOL_RESOLVED
     with _LOCK:
         _SETTINGS = None
         _BOOL_RESOLVED = False
+    reset_response_cache_counters()
 
 
 def parse_cache_mode(value: Any) -> str | None:
@@ -328,7 +332,9 @@ def build_cache_key(
 # ── Stored values ─────────────────────────────────────────────────────────
 
 
-def _serialize_result(result: Any, usd: Decimal | None) -> bytes | None:
+def _serialize_result(
+    result: Any, usd: Decimal | None, dict_meta: dict[str, Any] | None = None
+) -> bytes | None:
     """The stored form of a result, or None when it cannot be stored."""
     dict_entry: dict[str, Any]
     if isinstance(result, BaseModel):
@@ -343,6 +349,7 @@ def _serialize_result(result: Any, usd: Decimal | None) -> bytes | None:
         # Early return: an unknown shape is not stored.
         return None
     dict_entry["usd"] = str(usd) if usd is not None else None
+    dict_entry["meta"] = dict_meta or {}
     try:
         # Normal return with the JSON bytes.
         return json.dumps(dict_entry, separators=(",", ":")).encode("utf-8")
@@ -464,6 +471,123 @@ def _mark_hit(result: Any, report: AIRequestCostReport) -> Any:
     return result
 
 
+# ── Counters and inspection ───────────────────────────────────────────────
+
+
+_COUNTERS_LOCK: threading.Lock = threading.Lock()
+_DICT_COUNTERS: dict[str, dict[str, Any]] = {}
+
+
+def _count(str_operation: str, str_field: str, usd: Decimal | None) -> None:
+    """Adds one hit or miss (and the saved cost) to the process counters."""
+    with _COUNTERS_LOCK:
+        dict_op: dict[str, Any] = _DICT_COUNTERS.setdefault(
+            str_operation, {"hits": 0, "misses": 0, "usd_saved": Decimal("0")}
+        )
+        dict_op[str_field] += 1
+        if usd is not None:
+            dict_op["usd_saved"] += usd
+    # Normal return after counting.
+    return None
+
+
+def response_cache_stats() -> dict[str, Any]:
+    """
+    The cache right now, for this process: whether it is on, the store,
+    the live entry count when the store can say, and hits, misses, and
+    the cost saved since the process started, in total and per operation.
+    """
+    settings: ResponseCacheSettingsModel | None = get_response_cache_settings()
+    store: Any = get_cache_store()
+    scan: Any = getattr(store, "scan", None)
+    int_entries: int | None = len(scan(KEY_PREFIX)) if callable(scan) else None
+    with _COUNTERS_LOCK:
+        dict_by_op: dict[str, dict[str, Any]] = {
+            k: dict(v) for k, v in sorted(_DICT_COUNTERS.items())
+        }
+    # Normal return with the snapshot.
+    return {
+        "enabled": settings is not None,
+        "store": type(store).__name__,
+        "entries": int_entries,
+        "hits": sum(v["hits"] for v in dict_by_op.values()),
+        "misses": sum(v["misses"] for v in dict_by_op.values()),
+        "usd_saved": sum((v["usd_saved"] for v in dict_by_op.values()), Decimal("0")),
+        "by_operation": dict_by_op,
+    }
+
+
+def response_cache_entries(limit: int = 100) -> list[dict[str, Any]]:
+    """
+    Metadata for the live entries, most recently used first: the key, the
+    operation, engine and model that answered, when it was stored, seconds
+    left, what one hit saves, and the stored size. Never the request or
+    the answer. Empty when the store cannot list (no `scan`).
+    """
+    scan: Any = getattr(get_cache_store(), "scan", None)
+    if not callable(scan):
+        # Early return: this store cannot enumerate.
+        return []
+    list_entries: list[dict[str, Any]] = []
+    # Loop over the live entries, newest use first.
+    for str_key, float_left, value in reversed(scan(KEY_PREFIX)):
+        dict_meta: dict[str, Any] = {}
+        usd: str | None = None
+        try:
+            dict_raw: Any = json.loads(value.decode("utf-8"))
+            dict_meta = dict_raw.get("meta") or {}
+            usd = dict_raw.get("usd")
+        except Exception:
+            pass
+        list_entries.append(
+            {
+                "key": str_key,
+                "operation": dict_meta.get("operation"),
+                "engine": dict_meta.get("engine"),
+                "model": dict_meta.get("model"),
+                "created_at": dict_meta.get("created_at"),
+                "expires_in_seconds": round(float_left, 1),
+                "usd": Decimal(usd) if usd is not None else None,
+                "bytes": len(value),
+            }
+        )
+        if len(list_entries) >= limit:
+            break
+    # Normal return with the listing.
+    return list_entries
+
+
+def response_cache_clear(str_operation: str | None = None) -> int:
+    """
+    Removes the live entries, or only one operation's, and returns how many.
+    Counters are kept. Zero when the store cannot enumerate.
+    """
+    scan: Any = getattr(get_cache_store(), "scan", None)
+    if not callable(scan):
+        # Early return: nothing to list, so nothing removed.
+        return 0
+    int_removed: int = 0
+    # Loop over the live entries, removing the matching ones.
+    for str_key, _, value in scan(KEY_PREFIX):
+        if str_operation is not None:
+            try:
+                dict_meta: Any = json.loads(value.decode("utf-8")).get("meta") or {}
+                if dict_meta.get("operation") != str_operation:
+                    continue
+            except Exception:
+                continue
+        store_delete(str_key)
+        int_removed += 1
+    # Normal return with the count.
+    return int_removed
+
+
+def reset_response_cache_counters() -> None:
+    """Zeroes the hit and miss counters (tests)."""
+    with _COUNTERS_LOCK:
+        _DICT_COUNTERS.clear()
+
+
 # ── The decision ──────────────────────────────────────────────────────────
 
 
@@ -555,6 +679,7 @@ def lookup(client: Any, plan: _Plan) -> tuple[bool, Any]:
         # Early return: unreadable, so a miss.
         return False, None
     result, usd_saved = loaded
+    _count(plan.str_operation, "hits", usd_saved)
     report: AIRequestCostReport = _emit_hit(
         client, plan.str_operation, plan.str_key, usd_saved
     )
@@ -567,7 +692,17 @@ def store(plan: _Plan, result: Any, capture: RequestCallCapture) -> None:
     capture.mark_served()
     report: AIRequestCostReport = capture.build_report(REQUEST_STATUS_OK)
     usd: Decimal | None = report.total_usd if report.calls else None
-    value: bytes | None = _serialize_result(result, usd)
+    _count(plan.str_operation, "misses", None)
+    value: bytes | None = _serialize_result(
+        result,
+        usd,
+        {
+            "operation": plan.str_operation,
+            "model": report.served_by_model,
+            "engine": report.served_by_engine,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     if value is None:
         _LOGGER.debug(
             "response_cache_not_stored operation=%s reason=unserializable",

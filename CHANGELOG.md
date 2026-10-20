@@ -18,6 +18,10 @@ version lives in `pyproject.toml` (see the README release section).
   `off`, and `bypass`. Result envelopes and `AIClassificationResult` gain
   `cache_hit` and `usd_saved`; a hit emits an `ai_api_request_cost` event
   with the same fields and a zero total.
+- Inspection: `response_cache_stats()`, `response_cache_entries()`, and
+  `response_cache_clear()` show the cache from inside the process
+  (counters, live entries as metadata only, never content).
+  `scripts/try_response_cache.py` demonstrates the cache live.
 - `CacheStore`: the three-method store (`get`, `set` with a TTL, `delete`)
   behind the response cache and the fallback cooldowns, with the in-memory
   `InMemoryCacheStore` (LRU, TTL, thread-safe) as the default.

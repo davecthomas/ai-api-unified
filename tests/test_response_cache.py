@@ -389,6 +389,40 @@ class TestFailsOpen:
         assert engine.calls.count("send_prompt") == 2
 
 
+class TestInspection:
+    def test_stats_and_entries_describe_the_cache_without_content(
+        self, cache_on: Any
+    ) -> None:
+        from ai_api_unified import (
+            response_cache_clear,
+            response_cache_entries,
+            response_cache_stats,
+        )
+
+        cache_on()
+        engine = _PricedEngine("p")
+        engine.send_prompt("a secret prompt")
+        engine.send_prompt("a secret prompt")
+        engine.send_prompt("another")
+        stats = response_cache_stats()
+        assert stats["enabled"] and stats["store"] == "InMemoryCacheStore"
+        assert stats["entries"] == 2 and stats["hits"] == 1 and stats["misses"] == 2
+        assert stats["usd_saved"] == GPT_COST
+        assert stats["by_operation"]["completions"]["hits"] == 1
+        entries = response_cache_entries()
+        assert len(entries) == 2
+        first = entries[0]
+        assert first["operation"] == "completions" and first["model"] == "gpt-5.4"
+        assert first["usd"] == GPT_COST and first["expires_in_seconds"] > 0
+        assert "secret" not in json.dumps(entries, default=str)
+        assert response_cache_clear("embeddings") == 0
+        assert response_cache_clear() == 2 and response_cache_stats()["entries"] == 0
+        # Counters survive a clear; a reset zeroes them.
+        assert response_cache_stats()["hits"] == 1
+        reset_response_cache()
+        assert response_cache_stats()["hits"] == 0
+
+
 class TestCooldownsShareTheStore:
     def test_benches_live_in_the_cache_store(self) -> None:
         from ai_api_unified.completions.ai_fallback_cooldown import AiCandidateCooldowns
