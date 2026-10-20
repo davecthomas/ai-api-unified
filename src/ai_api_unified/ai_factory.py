@@ -26,6 +26,7 @@ from .ai_provider_exceptions import (
     AiFallbackReason,
     AiProviderCapabilityUnsupportedError,
     AiProviderConfigurationError,
+    AiProviderConfigurationValueError,
     AiProviderDependencyUnavailableError,
     AiProviderRuntimeError,
 )
@@ -302,6 +303,37 @@ class AIFactory:
         return str_engine_normalized
 
     @staticmethod
+    def _lookup_provider_spec(str_capability: str, str_engine: str) -> AiProviderSpec:
+        """
+        The registry entry for a capability and engine; a miss raises the
+        legacy unsupported-engine ValueError.
+        """
+        try:
+            # Normal return with the registered spec.
+            return get_ai_provider_spec(str_capability, str_engine)
+        except AiProviderConfigurationError as exception:
+            raise AIFactory._translate_config_exception(
+                exception, str_capability, str_engine
+            ) from exception
+
+    @staticmethod
+    def _construction_config_error(
+        exception: AiProviderConfigurationError, str_capability: str, str_engine: str
+    ) -> AiProviderConfigurationValueError:
+        """
+        The error for a configuration problem a provider class raised while
+        it was built (a retired model, a missing key, a bad base URL). Its
+        own message is kept, naming what to fix, and the engine is added for
+        context. It is still a ValueError, as this path always raised, and
+        also an AiProviderConfigurationError.
+        """
+        # Normal return with the provider's message and the engine.
+        return AiProviderConfigurationValueError(
+            f"{exception} (building the {str_capability} client for engine "
+            f"{str_engine!r})"
+        )
+
+    @staticmethod
     def _translate_config_exception(
         exception: AiProviderConfigurationError,
         str_capability: str,
@@ -309,6 +341,9 @@ class AIFactory:
     ) -> ValueError:
         """
         Converts registry configuration misses into legacy ValueError behavior.
+        Only lookups go through it (_lookup_provider_spec and the engine
+        checks); an error from building a client keeps its own message
+        (_construction_config_error).
 
         Args:
             exception: Original provider configuration exception.
@@ -1229,7 +1264,7 @@ class AIFactory:
         try:
             # Resolve provider metadata first so engine-to-module mapping is centralized
             # in the registry and does not require hardcoded imports in the factory.
-            ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+            ai_provider_spec: AiProviderSpec = AIFactory._lookup_provider_spec(
                 AI_PROVIDER_CAPABILITY_COMPLETIONS, str_engine
             )
             # Lazy-load and validate the provider class at runtime. This is the core
@@ -1255,10 +1290,8 @@ class AIFactory:
             # Normal return with the configured completions provider client.
             return completions_client
         except AiProviderConfigurationError as exception:
-            raise AIFactory._translate_config_exception(
-                exception,
-                AI_PROVIDER_CAPABILITY_COMPLETIONS,
-                str_engine,
+            raise AIFactory._construction_config_error(
+                exception, AI_PROVIDER_CAPABILITY_COMPLETIONS, str_engine
             ) from exception
         except AiProviderDependencyUnavailableError as exception:
             _LOGGER.warning(str(exception))
@@ -1473,7 +1506,7 @@ class AIFactory:
         try:
             # Resolve provider metadata first so engine-to-module mapping is centralized
             # in the registry and does not require hardcoded imports in the factory.
-            ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+            ai_provider_spec: AiProviderSpec = AIFactory._lookup_provider_spec(
                 AI_PROVIDER_CAPABILITY_EMBEDDINGS, str_engine
             )
             # Lazy-load and validate the provider class at runtime. This is the core
@@ -1489,10 +1522,8 @@ class AIFactory:
                 dimensions=int_dimensions,
             )
         except AiProviderConfigurationError as exception:
-            raise AIFactory._translate_config_exception(
-                exception,
-                AI_PROVIDER_CAPABILITY_EMBEDDINGS,
-                str_engine,
+            raise AIFactory._construction_config_error(
+                exception, AI_PROVIDER_CAPABILITY_EMBEDDINGS, str_engine
             ) from exception
         except AiProviderDependencyUnavailableError as exception:
             _LOGGER.warning(str(exception))
@@ -1606,7 +1637,7 @@ class AIFactory:
             else str(env_settings.get_setting(CLASSIFIER_MODEL_NAME_KEY, "") or "")
         )
         try:
-            ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+            ai_provider_spec: AiProviderSpec = AIFactory._lookup_provider_spec(
                 AI_PROVIDER_CAPABILITY_CLASSIFICATION, str_engine
             )
             class_classifier_client: type[AIBaseClassifier] = load_ai_provider_class(
@@ -1632,10 +1663,8 @@ class AIFactory:
             # Normal return with the configured classification client.
             return classifier_client
         except AiProviderConfigurationError as exception:
-            raise AIFactory._translate_config_exception(
-                exception,
-                AI_PROVIDER_CAPABILITY_CLASSIFICATION,
-                str_engine,
+            raise AIFactory._construction_config_error(
+                exception, AI_PROVIDER_CAPABILITY_CLASSIFICATION, str_engine
             ) from exception
         except AiProviderDependencyUnavailableError as exception:
             _LOGGER.warning(str(exception))
@@ -1684,7 +1713,7 @@ class AIFactory:
         try:
             # Resolve provider metadata first so engine-to-module mapping is centralized
             # in the registry and does not require hardcoded imports in the factory.
-            ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+            ai_provider_spec: AiProviderSpec = AIFactory._lookup_provider_spec(
                 AI_PROVIDER_CAPABILITY_IMAGES, str_image_engine
             )
             # Lazy-load and validate the provider class at runtime. This is the core
@@ -1699,10 +1728,8 @@ class AIFactory:
                 model=str_image_model_name
             )
         except AiProviderConfigurationError as exception:
-            raise AIFactory._translate_config_exception(
-                exception,
-                AI_PROVIDER_CAPABILITY_IMAGES,
-                str_image_engine,
+            raise AIFactory._construction_config_error(
+                exception, AI_PROVIDER_CAPABILITY_IMAGES, str_image_engine
             ) from exception
         except AiProviderDependencyUnavailableError as exception:
             _LOGGER.warning(str(exception))
@@ -1760,7 +1787,7 @@ class AIFactory:
             "video model",
         )
         try:
-            ai_provider_spec: AiProviderSpec = get_ai_provider_spec(
+            ai_provider_spec: AiProviderSpec = AIFactory._lookup_provider_spec(
                 AI_PROVIDER_CAPABILITY_VIDEOS,
                 str_video_engine,
             )
@@ -1770,10 +1797,8 @@ class AIFactory:
             )
             video_client: AIBaseVideos = class_ai_video_client(model=str_model_name)
         except AiProviderConfigurationError as exception:
-            raise AIFactory._translate_config_exception(
-                exception,
-                AI_PROVIDER_CAPABILITY_VIDEOS,
-                str_video_engine,
+            raise AIFactory._construction_config_error(
+                exception, AI_PROVIDER_CAPABILITY_VIDEOS, str_video_engine
             ) from exception
         except AiProviderDependencyUnavailableError as exception:
             _LOGGER.warning(str(exception))
