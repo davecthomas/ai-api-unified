@@ -800,10 +800,12 @@ before it is returned. Streaming gets the input checks only.
   They never carry the text the check read.
 - A response-cache hit skips the output checks: the stored answer was
   checked when it was stored. Input checks run on every call.
-- **Try it live:** `poetry run python scripts/try_guardrails.py` sends a
-  clean prompt, an injection attempt, a harmful request, and one that
-  trips a custom term, first with `on_fail: flag` and then with
-  `block`, against your configured providers, and prints which check
+- **Try it:** `poetry run python scripts/try_safety_checks.py` prints
+  what it would send and which backend each check would use; add `--live`
+  to call your configured providers. It sends a clean prompt, an injection
+  attempt, and one that trips a custom term with `on_fail: flag` and then
+  `block`, and a mild threat only with `block`, so that one stops at the
+  check and never reaches the answering model. It prints which check
   fired, its backend and score, and what each call cost.
 
 ### Response caching
