@@ -15,6 +15,7 @@ ENABLED_KEY: str = "enabled"
 SETTINGS_KEY: str = "settings"
 PII_REDACTION: str = "pii_redaction"
 OBSERVABILITY: str = "observability"
+RESPONSE_CACHE: str = "response_cache"
 INPUT_ONLY: str = "input_only"
 EN_LANGUAGE: str = "en"
 REDACTED_LABEL: str = "REDACTED"
@@ -1220,6 +1221,99 @@ class ObservabilitySettingsModel(BaseModel):
         return DEFAULT_OBSERVABILITY_TOKEN_COUNT_MODE
 
 
+# Operations the response cache knows, and their default TTLs in seconds.
+# Embeddings and classifications are deterministic for a model, so they keep
+# for a day; generated text keeps for an hour.
+CACHE_OPERATION_COMPLETIONS: str = "completions"
+CACHE_OPERATION_STRUCTURED_OUTPUT: str = "structured_output"
+CACHE_OPERATION_CONVERSATION: str = "conversation"
+CACHE_OPERATION_EMBEDDINGS: str = "embeddings"
+CACHE_OPERATION_CLASSIFICATION: str = "classification"
+DICT_DEFAULT_CACHE_TTL_SECONDS: dict[str, int] = {
+    CACHE_OPERATION_COMPLETIONS: 3600,
+    CACHE_OPERATION_STRUCTURED_OUTPUT: 3600,
+    CACHE_OPERATION_CONVERSATION: 3600,
+    CACHE_OPERATION_EMBEDDINGS: 86400,
+    CACHE_OPERATION_CLASSIFICATION: 86400,
+}
+DEFAULT_CACHE_MAX_ENTRIES: int = 10_000
+
+
+class ResponseCacheOperationSettingsModel(BaseModel):
+    """
+    One operation's cache settings.
+
+    Attributes:
+        enabled: False turns the cache off for this operation.
+        ttl_seconds: How long a stored answer stays valid; None uses the
+            operation's default.
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    ttl_seconds: int | None = Field(default=None, ge=1)
+
+
+class ResponseCacheSettingsModel(BaseModel):
+    """
+    The `response_cache` middleware: stored answers for identical requests.
+
+    Attributes:
+        max_entries: Entries the default in-memory store keeps before it
+            evicts the least recently used. A store the application supplies
+            manages its own size.
+        ttl_seconds: Default validity for every operation, overriding the
+            per-operation defaults; None keeps them.
+        operations: Per-operation overrides, keyed by completions,
+            structured_output, conversation, embeddings, or classification.
+            An operation absent here is on with its default TTL.
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    max_entries: int = Field(default=DEFAULT_CACHE_MAX_ENTRIES, ge=1)
+    ttl_seconds: int | None = Field(default=None, ge=1)
+    operations: dict[str, ResponseCacheOperationSettingsModel] = Field(
+        default_factory=dict
+    )
+
+    @field_validator("operations", mode="before")
+    @classmethod
+    def _check_operation_names(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            # Early return: pydantic reports the type error.
+            return value
+        set_unknown: set[str] = set(value) - set(DICT_DEFAULT_CACHE_TTL_SECONDS)
+        if set_unknown:
+            raise ValueError(
+                f"unknown response_cache operations {sorted(set_unknown)}; expected "
+                f"{sorted(DICT_DEFAULT_CACHE_TTL_SECONDS)}"
+            )
+        # Normal return with the mapping as given.
+        return value
+
+    def ttl_for(self, str_operation: str) -> int | None:
+        """
+        Seconds a stored answer for this operation stays valid, or None when
+        the operation is not cached.
+        """
+        entry: ResponseCacheOperationSettingsModel | None = self.operations.get(
+            str_operation
+        )
+        if entry is not None and not entry.enabled:
+            # Early return: turned off for this operation.
+            return None
+        if entry is not None and entry.ttl_seconds is not None:
+            # Early return with the operation's own TTL.
+            return entry.ttl_seconds
+        if self.ttl_seconds is not None:
+            # Early return with the file-wide TTL.
+            return self.ttl_seconds
+        # Normal return with the operation's default, or None for an unknown one.
+        return DICT_DEFAULT_CACHE_TTL_SECONDS.get(str_operation)
+
+
 class MiddlewareConfig:
     """
     Parses and serves typed middleware configuration data.
@@ -1477,9 +1571,40 @@ class MiddlewareConfig:
             # Early return because invalid settings disable the component.
             return None
 
+    def get_response_cache_settings(self) -> ResponseCacheSettingsModel | None:
+        """
+        Typed response-cache settings when the component is enabled, else
+        None. An enabled entry with no settings caches every operation with
+        the defaults; invalid settings disable the component with an error.
+        """
+        entry: MiddlewareEntryModel | None = self._get_component_entry(RESPONSE_CACHE)
+        if entry is None:
+            # Early return: not configured or disabled.
+            return None
+        settings: Any = entry.settings
+        if settings is None:
+            # Normal return with the defaults.
+            return ResponseCacheSettingsModel()
+        if not isinstance(settings, dict):
+            logger.warning(MIDDLEWARE_EMPTY_SETTINGS_DISABLED_MESSAGE, RESPONSE_CACHE)
+            # Early return: not a mapping.
+            return None
+        try:
+            # Normal return with validated settings.
+            return ResponseCacheSettingsModel.model_validate(settings)
+        except ValidationError as exception:
+            logger.error("response_cache settings are invalid: %s", exception)
+            # Early return: invalid settings disable the component.
+            return None
+
     def get_middleware_settings(
         self, name: str
-    ) -> PiiRedactionSettingsModel | ObservabilitySettingsModel | None:
+    ) -> (
+        PiiRedactionSettingsModel
+        | ObservabilitySettingsModel
+        | ResponseCacheSettingsModel
+        | None
+    ):
         """
         Retrieves typed settings for supported middleware components.
 
@@ -1497,6 +1622,9 @@ class MiddlewareConfig:
         if name == OBSERVABILITY:
             # Normal return for typed observability middleware settings.
             return self.get_observability_settings()
+        if name == RESPONSE_CACHE:
+            # Normal return for typed response-cache settings.
+            return self.get_response_cache_settings()
         logger.debug(UNSUPPORTED_TYPED_MIDDLEWARE_DEBUG_MESSAGE, name)
         # Early return because the requested middleware has no typed settings model.
         return None

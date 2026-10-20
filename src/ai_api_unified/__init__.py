@@ -94,6 +94,15 @@ from .thinking import (
     AIThinkingLevel,
     AIThinkingResolution,
 )
+from .middleware.cache_store import CacheStore, InMemoryCacheStore, set_cache_store
+from .middleware.middleware_config import ResponseCacheSettingsModel
+from .middleware.response_cache import (
+    cache_mode,
+    reset_response_cache,
+    response_cache_clear,
+    response_cache_entries,
+    response_cache_stats,
+)
 from .middleware.request_cost import (
     AIRequestCostLineItem,
     AIRequestCostReport,
@@ -160,6 +169,15 @@ __all__: list[str] = [
     "AIProviderOrgInfoBase",
     "AIProviderOrgInfoCapability",
     "AIPromptResult",
+    "CacheStore",
+    "InMemoryCacheStore",
+    "ResponseCacheSettingsModel",
+    "cache_mode",
+    "reset_response_cache",
+    "response_cache_clear",
+    "response_cache_entries",
+    "response_cache_stats",
+    "set_cache_store",
     "AIRequestCostLineItem",
     "AIRequestCostReport",
     "AIStructuredOutputResult",

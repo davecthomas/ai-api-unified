@@ -323,6 +323,9 @@ class AICompletionsPromptParamsBase(AIIncludedMediaParamsBase, ABC):
     # Per-call thinking level; None uses the client's configured level. See
     # AIThinkingLevel and AIBaseCompletions.thinking_level.
     thinking: AIThinkingLevel | None = None
+    # Per-call response-cache option: "on", "off", or "bypass"; None follows
+    # configuration. See middleware/response_cache.py.
+    cache: str | None = None
 
 
 class AIBatchStatus(str, Enum):
@@ -758,6 +761,9 @@ class AITurnResult(BaseModel):
     route_method: str | None = None
     model_pin: str | None = None
     cost: AIRequestCostReport | None = None
+    # True when the response cache answered; usd_saved is the original cost.
+    cache_hit: bool = False
+    usd_saved: Decimal | None = None
 
 
 class AIStructuredOutputResult(BaseModel):
@@ -799,6 +805,9 @@ class AIStructuredOutputResult(BaseModel):
     route_method: str | None = None
     model_pin: str | None = None
     cost: AIRequestCostReport | None = None
+    # True when the response cache answered; usd_saved is the original cost.
+    cache_hit: bool = False
+    usd_saved: Decimal | None = None
 
 
 class AIPromptResult(BaseModel):
@@ -842,6 +851,9 @@ class AIPromptResult(BaseModel):
     thinking: AIThinkingResolution | None = None
     usage: AITokenUsage = Field(default_factory=AITokenUsage)
     cost: AIRequestCostReport
+    # True when the response cache answered; usd_saved is the original cost.
+    cache_hit: bool = False
+    usd_saved: Decimal | None = None
 
     @property
     def total_usd(self) -> Decimal:
@@ -1007,6 +1019,16 @@ class AIBase(ABC):
     FROZENSET_MAPPED_ERROR_CAPABILITIES: ClassVar[frozenset[str]] = frozenset(
         {"embedding", "images", "videos", "voice"}
     )
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Every engine, chain, and router defines its own send_prompt and
+        # generate_embeddings; the response cache wraps them here so none
+        # has to remember to. See middleware/response_cache.py.
+        from ai_api_unified.middleware.response_cache import wrap_cacheable_methods
+
+        wrap_cacheable_methods(cls)
+
     # config_id / config_version tags the factory stamps on every client it
     # builds; replaced, never mutated, so the class default stays empty.
     _dict_config_tags: Mapping[str, str] = MappingProxyType({})
@@ -2361,6 +2383,14 @@ def truncate_classification_text(str_text: str, int_max_chars: int | None) -> st
     return f"{str_text[:int_head]}\n...\n{str_tail}"
 
 
+def cached_classification(func: Callable[..., Any]) -> Callable[..., Any]:
+    """The response cache on a classifier template method."""
+    from ai_api_unified.middleware.response_cache import cached_call
+
+    # Normal return with the wrapped method.
+    return cached_call("classification")(func)
+
+
 class AIClassifierCapabilitiesBase(BaseModel):
     """
     Capability descriptor for a classification engine.
@@ -2438,6 +2468,8 @@ class AIClassificationResult(BaseModel):
         provider_engine: Engine token that served the call.
         model_name: Model that served the call.
         latency_ms: Wall-clock duration of the provider call.
+        cache_hit: True when the response cache answered.
+        usd_saved: On a hit, what the original call cost.
     """
 
     question_type: Literal["choice", "predicate", "score"]
@@ -2453,6 +2485,8 @@ class AIClassificationResult(BaseModel):
     provider_engine: str | None = None
     model_name: str | None = None
     latency_ms: float = 0.0
+    cache_hit: bool = False
+    usd_saved: Decimal | None = None
 
 
 class AIBaseClassifier(AIBase):
@@ -2486,6 +2520,7 @@ class AIBaseClassifier(AIBase):
 
     # ── Public template methods ─────────────────────────────────────────────
 
+    @cached_classification
     def classify_choice(
         self,
         text: str,
@@ -2527,6 +2562,7 @@ class AIBaseClassifier(AIBase):
             ),
         )
 
+    @cached_classification
     def classify_predicate(
         self,
         text: str,
@@ -2567,6 +2603,7 @@ class AIBaseClassifier(AIBase):
             ),
         )
 
+    @cached_classification
     def classify_score(
         self,
         text: str,
@@ -2609,6 +2646,7 @@ class AIBaseClassifier(AIBase):
             ),
         )
 
+    @cached_classification
     async def aclassify_choice(
         self,
         text: str,
@@ -2640,6 +2678,7 @@ class AIBaseClassifier(AIBase):
             ),
         )
 
+    @cached_classification
     async def aclassify_predicate(
         self,
         text: str,
@@ -2671,6 +2710,7 @@ class AIBaseClassifier(AIBase):
             ),
         )
 
+    @cached_classification
     async def aclassify_score(
         self,
         text: str,
@@ -3091,17 +3131,27 @@ ENVELOPE_ACTIVE: ContextVar[bool] = ContextVar(
 # Reserved provider_options key: pins one conversation or structured call
 # to a model; see completions/ai_model_pin.py.
 PROVIDER_OPTION_MODEL: str = "model"
+# Reserved provider_options key: the response-cache option; see
+# middleware/response_cache.py.
+PROVIDER_OPTION_CACHE: str = "cache"
 
 
 def _split_model_option(
     provider_options: dict[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    """Removes the reserved model key; returns (the rest, the pin or None)."""
-    if not provider_options or PROVIDER_OPTION_MODEL not in provider_options:
-        # Early return: no pin on this call.
+    """
+    Removes the reserved model and cache keys; returns (the rest, the pin
+    or None). The cache option is read before this runs.
+    """
+    if not provider_options or not (
+        PROVIDER_OPTION_MODEL in provider_options
+        or PROVIDER_OPTION_CACHE in provider_options
+    ):
+        # Early return: no reserved key on this call.
         return provider_options, None
     dict_options: dict[str, Any] = dict(provider_options)
-    raw_pin: Any = dict_options.pop(PROVIDER_OPTION_MODEL)
+    raw_pin: Any = dict_options.pop(PROVIDER_OPTION_MODEL, None)
+    dict_options.pop(PROVIDER_OPTION_CACHE, None)
     str_pin: str | None = (
         str(raw_pin) if raw_pin is not None and str(raw_pin).strip() else None
     )
@@ -3109,30 +3159,65 @@ def _split_model_option(
     return dict_options or None, str_pin
 
 
+def _envelope_wrapper_parts(
+    self: "AIBaseCompletions",
+    func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[Any, Any, "AIBaseCompletions", dict[str, Any]]:
+    """
+    The outermost envelope call's setup: the cache plan (read before the
+    reserved keys go), the stripped kwargs, the pin, and its target.
+    """
+    from ai_api_unified.middleware import response_cache as rc
+
+    plan: Any = rc.plan_for(
+        self,
+        rc.DICT_ENVELOPE_OPERATIONS[func.__name__],
+        func.__name__,
+        rc._bound_args(func, (self, *args), kwargs),
+    )
+    dict_options, str_pin = _split_model_option(kwargs.get("provider_options"))
+    if "provider_options" in kwargs:
+        kwargs["provider_options"] = dict_options
+    pin, target = self._model_pin_for_call(str_pin)
+    # Normal return with the parts.
+    return plan, pin, target, kwargs
+
+
 def enveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Makes a turn- or structured-result method fill its result envelope.
 
-    The outermost call removes `provider_options["model"]`, pins the call
-    when it was set, records its own ledger, and stamps provider, route,
-    pin, and cost onto the result. Calls made inside it (a chain's
-    candidates, a router's tiers) run the method unchanged.
+    The outermost call reads the cache option and removes the reserved
+    `provider_options` keys (`model`, `cache`), answers from the response
+    cache when it can, otherwise pins the call when a pin was set, records
+    its own ledger, stamps provider, route, pin, and cost onto the result,
+    and stores it. Calls made inside it (a chain's candidates, a router's
+    tiers) run the method unchanged.
     """
 
     @functools.wraps(func)
     def _wrapper(self: "AIBaseCompletions", *args: Any, **kwargs: Any) -> Any:
-        dict_options, str_pin = _split_model_option(kwargs.get("provider_options"))
-        if "provider_options" in kwargs:
-            kwargs["provider_options"] = dict_options
         if ENVELOPE_ACTIVE.get():
+            dict_options, _ = _split_model_option(kwargs.get("provider_options"))
+            if "provider_options" in kwargs:
+                kwargs["provider_options"] = dict_options
             # Early return: an outer call owns the envelope.
             return func(self, *args, **kwargs)
         from ai_api_unified.completions.ai_model_pin import model_pin_scope
+        from ai_api_unified.middleware import response_cache as rc
 
-        pin, target = self._model_pin_for_call(str_pin)
+        plan, pin, target, kwargs = _envelope_wrapper_parts(self, func, args, kwargs)
         report_before: AIRequestCostReport | None = target.last_request_cost
         token: Any = ENVELOPE_ACTIVE.set(True)
+        token_cache: Any = rc.RESPONSE_CACHE_ACTIVE.set(True)
         try:
+            if plan is not None:
+                bool_hit, hit = rc.lookup(self, plan)
+                if bool_hit:
+                    # Early return with the stored result.
+                    return hit
             with (
                 model_pin_scope(pin, func.__name__, config_id=self.config_id),
                 capture_request_calls(func.__name__) as capture,
@@ -3143,10 +3228,14 @@ def enveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
                     else getattr(target, func.__name__)(*args, **kwargs)
                 )
         finally:
+            rc.RESPONSE_CACHE_ACTIVE.reset(token_cache)
             ENVELOPE_ACTIVE.reset(token)
         self._adopt_request_cost(target, report_before)
+        stamped: Any = self._stamp_envelope(result, capture, pin)
+        if plan is not None:
+            rc.store(plan, stamped, capture)
         # Normal return with the stamped result.
-        return self._stamp_envelope(result, capture, pin)
+        return stamped
 
     return _wrapper
 
@@ -3156,18 +3245,25 @@ def aenveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(func)
     async def _wrapper(self: "AIBaseCompletions", *args: Any, **kwargs: Any) -> Any:
-        dict_options, str_pin = _split_model_option(kwargs.get("provider_options"))
-        if "provider_options" in kwargs:
-            kwargs["provider_options"] = dict_options
         if ENVELOPE_ACTIVE.get():
+            dict_options, _ = _split_model_option(kwargs.get("provider_options"))
+            if "provider_options" in kwargs:
+                kwargs["provider_options"] = dict_options
             # Early return: an outer call owns the envelope.
             return await func(self, *args, **kwargs)
         from ai_api_unified.completions.ai_model_pin import model_pin_scope
+        from ai_api_unified.middleware import response_cache as rc
 
-        pin, target = self._model_pin_for_call(str_pin)
+        plan, pin, target, kwargs = _envelope_wrapper_parts(self, func, args, kwargs)
         report_before: AIRequestCostReport | None = target.last_request_cost
         token: Any = ENVELOPE_ACTIVE.set(True)
+        token_cache: Any = rc.RESPONSE_CACHE_ACTIVE.set(True)
         try:
+            if plan is not None:
+                bool_hit, hit = rc.lookup(self, plan)
+                if bool_hit:
+                    # Early return with the stored result.
+                    return hit
             with (
                 model_pin_scope(pin, func.__name__, config_id=self.config_id),
                 capture_request_calls(func.__name__) as capture,
@@ -3178,10 +3274,14 @@ def aenveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
                     else getattr(target, func.__name__)(*args, **kwargs)
                 )
         finally:
+            rc.RESPONSE_CACHE_ACTIVE.reset(token_cache)
             ENVELOPE_ACTIVE.reset(token)
         self._adopt_request_cost(target, report_before)
+        stamped: Any = self._stamp_envelope(result, capture, pin)
+        if plan is not None:
+            rc.store(plan, stamped, capture)
         # Normal return with the stamped result.
-        return self._stamp_envelope(result, capture, pin)
+        return stamped
 
     return _wrapper
 

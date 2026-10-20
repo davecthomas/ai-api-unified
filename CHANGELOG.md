@@ -4,6 +4,39 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.23.0
+
+### Added
+
+- Response cache: the `response_cache` middleware entry returns a stored
+  answer to an identical request without reaching the router, classifier,
+  or provider. Covers completions, structured output, conversations,
+  embeddings, and classifications, each with its own TTL
+  (`settings.operations`), never streaming, media, batches, or voice. Off
+  unless configured. Per call: `provider_options["cache"]`,
+  `other_params.cache`, or the `cache_mode()` context manager, with `on`,
+  `off`, and `bypass`. Result envelopes and `AIClassificationResult` gain
+  `cache_hit` and `usd_saved`; a hit emits an `ai_api_request_cost` event
+  with the same fields and a zero total.
+- Inspection: `response_cache_stats()`, `response_cache_entries()`, and
+  `response_cache_clear()` show the cache from inside the process
+  (counters, live entries as metadata only, never content).
+  `scripts/try_response_cache.py` demonstrates the cache live.
+- `CacheStore`: the three-method store (`get`, `set` with a TTL, `delete`)
+  behind the response cache and the fallback cooldowns, with the in-memory
+  `InMemoryCacheStore` (LRU, TTL, thread-safe) as the default.
+  `AIFactory.set_cache_store(...)` swaps in an application's own store for
+  the whole process; a failing store is a miss, never an error.
+
+### Changed
+
+- Fallback cooldowns keep their benches in the cache store instead of a
+  private dict. Behavior is unchanged with the default store; with a shared
+  store, one process's bench applies to all.
+- `provider_options["cache"]` is now a reserved key and never reaches the
+  provider. `AIRequestCostReport` gains `cache_hit` and `usd_saved`, also on
+  the `ai_api_request_cost` event.
+
 ## 3.22.0
 
 ### Added

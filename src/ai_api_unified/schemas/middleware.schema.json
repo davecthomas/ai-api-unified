@@ -16,7 +16,8 @@
             "type": "string",
             "enum": [
               "observability",
-              "pii_redaction"
+              "pii_redaction",
+              "response_cache"
             ]
           },
           "enabled": {
@@ -56,6 +57,22 @@
               "properties": {
                 "settings": {
                   "$ref": "#/$defs/PiiRedactionSettingsModel"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "response_cache"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "settings": {
+                  "$ref": "#/$defs/ResponseCacheSettingsModel"
                 }
               }
             }
@@ -225,6 +242,62 @@
         }
       },
       "title": "ObservabilitySettingsModel",
+      "type": "object"
+    },
+    "ResponseCacheOperationSettingsModel": {
+      "additionalProperties": false,
+      "description": "One operation's cache settings.\n\nAttributes:\n    enabled: False turns the cache off for this operation.\n    ttl_seconds: How long a stored answer stays valid; None uses the\n        operation's default.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "ttl_seconds": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ttl Seconds"
+        }
+      },
+      "title": "ResponseCacheOperationSettingsModel",
+      "type": "object"
+    },
+    "ResponseCacheSettingsModel": {
+      "additionalProperties": false,
+      "description": "The `response_cache` middleware: stored answers for identical requests.\n\nAttributes:\n    max_entries: Entries the default in-memory store keeps before it\n        evicts the least recently used. A store the application supplies\n        manages its own size.\n    ttl_seconds: Default validity for every operation, overriding the\n        per-operation defaults; None keeps them.\n    operations: Per-operation overrides, keyed by completions,\n        structured_output, conversation, embeddings, or classification.\n        An operation absent here is on with its default TTL.",
+      "properties": {
+        "max_entries": {
+          "default": 10000,
+          "minimum": 1,
+          "title": "Max Entries",
+          "type": "integer"
+        },
+        "ttl_seconds": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ttl Seconds"
+        },
+        "operations": {
+          "title": "Operations"
+        }
+      },
+      "title": "ResponseCacheSettingsModel",
       "type": "object"
     }
   }

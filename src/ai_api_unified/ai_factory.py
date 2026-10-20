@@ -738,6 +738,20 @@ class AIFactory:
         # Normal return with the pruned config.
         return pruned
 
+    @staticmethod
+    def set_cache_store(store: Any) -> None:
+        """
+        Replaces the process-wide cache store behind the response cache and
+        the fallback cooldowns: any object with get(key), set(key, value,
+        ttl_seconds), and delete(key); None restores the in-memory default.
+        See middleware/cache_store.py.
+        """
+        from .middleware.cache_store import set_cache_store
+
+        set_cache_store(store)
+        # Normal return after swapping the store.
+        return None
+
     @classmethod
     def last_model_check_report(cls) -> list[AiModelCheckResult]:
         """Results of the most recent configured-model check, in check order."""
