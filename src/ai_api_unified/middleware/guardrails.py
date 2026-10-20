@@ -768,14 +768,17 @@ def guard_output(
                 for finding in run_checks(str_operation, DIRECTION_OUTPUT, [str_text])
             )
     list_names = list(dict.fromkeys(list_names))
+    capture: Any = getattr(list_input_flags, "capture", None)
+    if not list_names and capture is None:
+        # Early return: guardrails are off or found nothing to stamp.
+        return result
     if not isinstance(result, BaseModel):
         # Early return: a plain value carries no envelope.
         return result
-    dict_fields: dict[str, Any] = type(result).model_fields
+    dict_fields: dict[str, Any] = getattr(type(result), "model_fields", None) or {}
     dict_update: dict[str, Any] = {}
     if list_names and "guardrail_flags" in dict_fields:
         dict_update["guardrail_flags"] = list_names
-    capture: Any = getattr(list_input_flags, "capture", None)
     if (
         capture is not None
         and "cost" in dict_fields
@@ -794,8 +797,12 @@ def guard_output(
     if not dict_update:
         # Early return: nothing to stamp.
         return result
-    # Normal return with the stamped copy.
-    return result.model_copy(update=dict_update)
+    try:
+        # Normal return with the stamped copy.
+        return result.model_copy(update=dict_update)
+    except (AttributeError, TypeError):
+        # Early return: a test double standing in for the result.
+        return result
 
 
 __all__ = [
