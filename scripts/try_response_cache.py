@@ -44,7 +44,9 @@ def main() -> int:
         pass
 
     client = AIFactory.get_ai_completions_client()
-    str_prompt: str = "Name one prime number between 10 and 20. Answer with the number only."
+    str_prompt: str = (
+        "Name one prime number between 10 and 20. Answer with the number only."
+    )
 
     def _show(str_label: str, result) -> None:
         print(
