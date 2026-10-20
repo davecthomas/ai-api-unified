@@ -1,4 +1,4 @@
-# ai-api-unified 3.22.0
+# ai-api-unified 3.23.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -744,6 +744,64 @@ unchanged.
 ```python
 turn = await client.asend_conversation("system", messages, tools=tools)
 ```
+
+### Response caching
+
+Off unless configured. One entry in the `middleware` list turns it on:
+
+```json
+{"name": "response_cache", "enabled": true,
+ "settings": {"max_entries": 10000,
+              "operations": {"completions": {"ttl_seconds": 3600},
+                             "embeddings": {"ttl_seconds": 86400},
+                             "conversation": {"enabled": false}}}}
+```
+
+An identical request then returns the stored answer without reaching the
+router, its classifier, or the provider. This is separate from the
+provider-side prompt caching below, which still applies on a miss.
+
+- **What is cached:** completions (`send_prompt` and
+  `send_prompt_with_result`), structured output, conversations,
+  embeddings, and classifications. Every operation is on inside an enabled
+  cache; `operations.<name>.enabled: false` turns one off. Defaults: a day
+  for embeddings and classifications, an hour for generated text;
+  `ttl_seconds` at the top sets one TTL for all. Never cached: streaming,
+  calls with media attachments, batches, voice.
+- **The key** is the client (engine, model, thinking level, `config_id`)
+  plus a hash of everything that determines the answer: the prompt or
+  messages (surrounding whitespace trimmed), system prompt, tools, schema,
+  token budget, and provider options, temperature included. Not in it:
+  the caller, session, and tenant tags, request ids, prompt-cache hints,
+  and the purpose hint. A stored answer was a valid answer to that exact
+  request, so it is served again whatever the temperature was.
+- **Per call:** `provider_options={"cache": "off"}` on conversations and
+  structured output, `other_params.cache` on prompts, or
+  `with cache_mode("off"):` around any call. `"on"` (the default) reads
+  and writes, `"off"` neither reads nor writes (a call that wants a fresh
+  answer each time), `"bypass"` skips the lookup and refreshes the entry.
+  The option never reaches the provider.
+- **What a hit reports:** every result envelope (`AIPromptResult`,
+  `AITurnResult`, `AIStructuredOutputResult`, `AIClassificationResult`)
+  carries `cache_hit` and, on a hit, `usd_saved` with the original call's
+  cost; `cost.total_usd` is 0. The hit also emits one `ai_api_request_cost`
+  event with `cache_hit: true` and `usd_saved`, under the caller's tags,
+  and becomes `client.last_request_cost`.
+- **The store** is in memory and per process by default: an LRU dict with
+  a TTL per entry, `max_entries` deep, shipped with the library. Several
+  processes each keep their own, so two workers can both miss once; the
+  TTL bounds the waste. To share one cache, hand the library any object
+  with `get(key) -> bytes | None`, `set(key, value, ttl_seconds)`, and
+  `delete(key)`:
+
+  ```python
+  AIFactory.set_cache_store(MyRedisStore())   # None restores the default
+  ```
+
+  The library never imports a client for an external store, and a store
+  that fails is a miss, never a failed call. Fallback cooldowns use the
+  same store, so a shared store also shares a benched model across
+  processes.
 
 ### Prompt caching
 

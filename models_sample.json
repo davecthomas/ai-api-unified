@@ -65,7 +65,11 @@
      "settings": {"direction": "input_output", "capabilities": ["completions", "embeddings", "images", "tts"],
                   "log_level": "INFO", "token_count_mode": "provider_or_estimate"}},
     {"name": "pii_redaction", "enabled": false,
-     "settings": {"direction": "input_only"}}
+     "settings": {"direction": "input_only"}},
+    {"name": "response_cache", "enabled": false,
+     "settings": {"max_entries": 10000,
+                  "operations": {"embeddings": {"ttl_seconds": 86400},
+                                 "completions": {"ttl_seconds": 3600}}}}
   ],
 
   "strict_deprecations": false,

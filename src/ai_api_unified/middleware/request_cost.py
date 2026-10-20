@@ -198,6 +198,10 @@ class AIRequestCostReport(BaseModel):
         unpriced_calls: Billed calls on a model with no registry pricing, so
             `total_usd` understates the request by their cost.
         calls: Every line item, in call order.
+        cache_hit: True when the response cache answered and no provider
+            was called; the totals are then zero.
+        usd_saved: On a hit, what the original call cost; None when it was
+            unpriced.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -222,6 +226,8 @@ class AIRequestCostReport(BaseModel):
     failed_calls: int = 0
     unpriced_calls: int = 0
     calls: list[AIRequestCostLineItem] = Field(default_factory=list)
+    cache_hit: bool = False
+    usd_saved: Decimal | None = None
 
     @property
     def service(self) -> str | None:
@@ -277,6 +283,8 @@ class AIRequestCostReport(BaseModel):
             "failed_calls": self.failed_calls,
             "unpriced_calls": self.unpriced_calls,
             "calls": [item.to_event_fields() for item in self.calls],
+            "cache_hit": self.cache_hit,
+            "usd_saved": str(self.usd_saved) if self.usd_saved is not None else None,
         }
         # Loop over caller tags so request events correlate like per-call ones.
         for str_key, str_value in self.tags.items():

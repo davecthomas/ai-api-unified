@@ -300,8 +300,14 @@ def _isolate_from_developer_wrappers(
     # Cooldowns are process-wide; one test's benched candidate must not
     # reorder the next test's chain.
     from ai_api_unified.completions.ai_fallback_cooldown import AiCandidateCooldowns
+    from ai_api_unified.middleware.cache_store import set_cache_store
+    from ai_api_unified.middleware.response_cache import reset_response_cache
 
     AiCandidateCooldowns.reset()
+    # The response cache resolves its settings once per process and keeps
+    # entries in a process-wide store; neither may leak between tests.
+    set_cache_store(None)
+    reset_response_cache()
     if request.node.get_closest_marker("nonmock") is None:
         from ai_api_unified.util.ai_model_checker import (
             AiModelChecker,

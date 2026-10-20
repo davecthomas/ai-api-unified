@@ -24,13 +24,18 @@ Rules:
   dropped.
 - A candidate that serves a call is cleared at once.
 
-The registry is per process and shared by every chain and router tier, so a
-model benched by one chain is benched for all of them. Nothing is stored
-outside the process.
+The benches live in the library's cache store (middleware/cache_store.py):
+in memory and per process by default, shared by every chain and router
+tier, so a model benched by one chain is benched for all of them. An
+application that hands the library a shared store (AIFactory.set_cache_store)
+shares benches across its processes too: one worker's rate-limit hit then
+benches the model for every worker. The store is treated as unreliable: a
+store failure means no bench, never a failed call.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -41,6 +46,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..ai_provider_exceptions import AiFallbackReason
+from ..middleware.cache_store import store_delete, store_get, store_set
 
 _LOGGER: logging.Logger = logging.getLogger(
     "ai_api_unified.completions.ai_fallback_completions"
@@ -67,6 +73,13 @@ DEFAULT_COOLDOWN_SECONDS: float = 30.0
 
 TypeCandidateKey = tuple[str, str, str | None]
 TypeAccountKey = tuple[str, str | None]
+
+# Store key prefixes; see middleware/cache_store.py for the namespace rule.
+KEY_PREFIX_CANDIDATE: str = "cd:v1:cand"
+KEY_PREFIX_ACCOUNT: str = "cd:v1:acct"
+# A bench stays in the store this much longer than it lasts, so the clear
+# that follows a served call still finds it and can log the recovery.
+FLOAT_STORE_GRACE_SECONDS: float = 60.0
 
 
 class AIFallbackCooldownPolicy(BaseModel):
@@ -150,20 +163,34 @@ class _Rest:
 
 
 class AiCandidateCooldowns:
-    """Process-wide benches, keyed by candidate and by account."""
+    """Benches in the cache store, keyed by candidate and by account."""
 
-    _DICT_CANDIDATES: ClassVar[dict[TypeCandidateKey, _Rest]] = {}
-    _DICT_ACCOUNTS: ClassVar[dict[TypeAccountKey, _Rest]] = {}
     _LOCK: ClassVar[threading.Lock] = threading.Lock()
+    # Keys this process has written, so reset() can remove them from a store
+    # that cannot enumerate.
+    _SET_KEYS: ClassVar[set[str]] = set()
     # Clock; tests replace it.
     callable_now: ClassVar[Callable[[], float]] = time.monotonic
 
+    @staticmethod
+    def _candidate_key(str_engine: str, str_model: str, base_url: str | None) -> str:
+        # Normal return with the candidate's store key.
+        return f"{KEY_PREFIX_CANDIDATE}:{str_engine}|{str_model}|{base_url or ''}"
+
+    @staticmethod
+    def _account_key(str_engine: str, base_url: str | None) -> str:
+        # Normal return with the account's store key.
+        return f"{KEY_PREFIX_ACCOUNT}:{str_engine}|{base_url or ''}"
+
     @classmethod
     def reset(cls) -> None:
-        """Ends every cooldown (tests, or a deliberate reset)."""
+        """Ends every cooldown this process set (tests, or a deliberate reset)."""
         with cls._LOCK:
-            cls._DICT_CANDIDATES.clear()
-            cls._DICT_ACCOUNTS.clear()
+            set_keys: set[str] = set(cls._SET_KEYS)
+            cls._SET_KEYS.clear()
+        # Loop over the keys written here and remove each from the store.
+        for str_key in set_keys:
+            store_delete(str_key)
 
     @staticmethod
     def _fingerprint(str_engine: str) -> str:
@@ -172,6 +199,40 @@ class AiCandidateCooldowns:
 
         # Normal return with the engine's credential fingerprint.
         return AiModelChecker._credential_fingerprint(str_engine)
+
+    @staticmethod
+    def _encode(rest: _Rest) -> bytes:
+        # Normal return with the bench as JSON bytes.
+        return json.dumps(
+            {
+                "until": rest.float_until,
+                "reason": rest.reason.value,
+                "fp": rest.str_fingerprint,
+            }
+        ).encode("utf-8")
+
+    @staticmethod
+    def _decode(value: bytes | None) -> _Rest | None:
+        if value is None:
+            # Early return: nothing stored.
+            return None
+        try:
+            dict_value: Any = json.loads(value.decode("utf-8"))
+            # Normal return with the bench.
+            return _Rest(
+                float_until=float(dict_value["until"]),
+                reason=AiFallbackReason(str(dict_value["reason"])),
+                str_fingerprint=str(dict_value["fp"]),
+            )
+        except Exception:
+            # Early return: a foreign or corrupt entry is no bench.
+            return None
+
+    @classmethod
+    def _write(cls, str_key: str, rest: _Rest, float_seconds: float) -> None:
+        with cls._LOCK:
+            cls._SET_KEYS.add(str_key)
+        store_set(str_key, cls._encode(rest), float_seconds + FLOAT_STORE_GRACE_SECONDS)
 
     @classmethod
     def bench(
@@ -194,11 +255,15 @@ class AiCandidateCooldowns:
             reason=reason,
             str_fingerprint=cls._fingerprint(str_engine),
         )
-        with cls._LOCK:
-            if bool_account_wide:
-                cls._DICT_ACCOUNTS[(str_engine, base_url)] = rest
-            else:
-                cls._DICT_CANDIDATES[(str_engine, str_model, base_url)] = rest
+        cls._write(
+            (
+                cls._account_key(str_engine, base_url)
+                if bool_account_wide
+                else cls._candidate_key(str_engine, str_model, base_url)
+            ),
+            rest,
+            float_seconds,
+        )
         _LOGGER.warning(
             "FALLBACK candidate %s rests for %.0fs after %s%s; calls start at the "
             "next candidate until then.",
@@ -223,26 +288,20 @@ class AiCandidateCooldowns:
         The bench covering one candidate, or None.
 
         A bench taken with other credentials is dropped here. An expired one
-        stays until the candidate serves a call (clear logs the recovery) or
-        fails again (bench replaces it).
+        stays until the candidate serves a call (clear logs the recovery),
+        fails again (bench replaces it), or the store's grace period ends.
         """
-        if not cls._DICT_CANDIDATES and not cls._DICT_ACCOUNTS:
-            # Early return: nothing is resting.
-            return None
-        tuple_keys: tuple[tuple[dict[Any, _Rest], Any], ...] = (
-            (cls._DICT_CANDIDATES, (str_engine, str_model, base_url)),
-            (cls._DICT_ACCOUNTS, (str_engine, base_url)),
-        )
         found: _Rest | None = None
         # Loop over the candidate's own bench and its account's.
-        for dict_rests, key in tuple_keys:
-            rest: _Rest | None = dict_rests.get(key)
+        for str_key in (
+            cls._candidate_key(str_engine, str_model, base_url),
+            cls._account_key(str_engine, base_url),
+        ):
+            rest: _Rest | None = cls._decode(store_get(str_key))
             if rest is None:
                 continue
             if rest.str_fingerprint != cls._fingerprint(str_engine):
-                with cls._LOCK:
-                    if dict_rests.get(key) is rest:
-                        del dict_rests[key]
+                store_delete(str_key)
                 continue
             if rest.float_until <= cls.callable_now():
                 # Expired: the candidate is back in its place.
@@ -257,17 +316,16 @@ class AiCandidateCooldowns:
         cls, *, str_engine: str, str_model: str, base_url: str | None, str_label: str
     ) -> None:
         """Ends a candidate's bench after it served a call."""
-        if not cls._DICT_CANDIDATES and not cls._DICT_ACCOUNTS:
-            # Early return: nothing is resting.
-            return
-        with cls._LOCK:
-            removed_candidate: _Rest | None = cls._DICT_CANDIDATES.pop(
-                (str_engine, str_model, base_url), None
-            )
-            removed_account: _Rest | None = cls._DICT_ACCOUNTS.pop(
-                (str_engine, base_url), None
-            )
-        if removed_candidate is not None or removed_account is not None:
+        bool_removed: bool = False
+        # Loop over the candidate's own bench and its account's.
+        for str_key in (
+            cls._candidate_key(str_engine, str_model, base_url),
+            cls._account_key(str_engine, base_url),
+        ):
+            if store_get(str_key) is not None:
+                store_delete(str_key)
+                bool_removed = True
+        if bool_removed:
             _LOGGER.info(
                 "FALLBACK candidate %s served a call; its cooldown is over.",
                 str_label,
