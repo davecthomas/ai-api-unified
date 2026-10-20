@@ -4,6 +4,24 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.24.0
+
+### Added
+
+- Guardrails: the `guardrails` middleware entry checks requests and answers
+  on completions, structured-output, and conversation calls (input only on
+  streams). `prompt_injection` and `harmful_content` are model-backed:
+  OpenAI Moderation (free) for harmful content when `OPENAI_API_KEY` is
+  set, else the configured classifier with a fixed question. `custom`
+  checks are local rules (`patterns`, `terms`) or a classifier `question`.
+  A firing check blocks (`AiGuardrailBlockedError`, never failed over) or
+  flags (`guardrail_flags` on result envelopes and
+  `client.last_guardrail_flags`, a `guardrail_flags` tag on the provider
+  call, one log line). `on_error` decides whether a check that cannot run
+  blocks or allows. Records name the check, never the content.
+- `AiGuardrailBlockedError`, `GuardrailsSettingsModel`, `reset_guardrails`,
+  `set_guardrail_classifier`.
+
 ## 3.23.0
 
 ### Added

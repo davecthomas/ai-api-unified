@@ -178,6 +178,9 @@ class AiRouterCompletions(AIBaseCompletions):
     # Reserved provider option: a tier name the call may not route or
     # escalate above.
     PROVIDER_OPTION_ROUTE_CEILING: ClassVar[str] = "route_ceiling"
+    # Streams open on a tier's chain and then its candidate; see
+    # middleware/response_cache.py.
+    BOOL_ROUTES_CALLS: ClassVar[bool] = True
 
     def __init__(
         self,

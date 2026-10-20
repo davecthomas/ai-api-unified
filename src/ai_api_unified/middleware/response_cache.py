@@ -57,6 +57,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from .cache_store import get_cache_store, store_delete, store_get, store_set
+from .guardrails import guard_input, guard_output
 from .middleware_config import (
     CACHE_OPERATION_COMPLETIONS,
     CACHE_OPERATION_CONVERSATION,
@@ -114,6 +115,10 @@ DICT_ENVELOPE_OPERATIONS: dict[str, str] = {
     "asend_structured_output": CACHE_OPERATION_STRUCTURED_OUTPUT,
 }
 _WRAPPED_MARKER: str = "_ai_response_cache_wrapped"
+# Streaming is never cached, but its input is guarded; wrapped on engines
+# only (a chain or router sets BOOL_ROUTES_CALLS), since the chain calls
+# each candidate's stream and that one is guarded there.
+STREAMING_METHOD: str = "send_prompt_streaming"
 
 # True while an outer public call owns the cache decision.
 RESPONSE_CACHE_ACTIVE: ContextVar[bool] = ContextVar(
@@ -741,6 +746,43 @@ def _bound_args(
     return dict_args
 
 
+def _note_flags(client: Any, list_flags: list[str]) -> None:
+    """Keeps the call's input flags on the client for text-only results."""
+    try:
+        client._last_guardrail_flags = list(list_flags)
+    except Exception:
+        pass
+    # Normal return after noting.
+    return None
+
+
+def _stamp_flags(client: Any, result: Any) -> Any:
+    """Keeps a stamped envelope's flags on the client too, for last_guardrail_flags."""
+    list_flags: Any = getattr(result, "guardrail_flags", None)
+    if isinstance(list_flags, list):
+        _note_flags(client, list_flags)
+    # Normal return with the result unchanged.
+    return result
+
+
+def guarded_stream(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Runs the input checks before a streaming call opens; output is unchecked."""
+    if getattr(func, _WRAPPED_MARKER, False):
+        # Early return: already wrapped.
+        return func
+
+    @functools.wraps(func)
+    def _wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        dict_args: dict[str, Any] = _bound_args(func, (self, *args), kwargs)
+        with guard_input(func.__name__, dict_args, self) as list_flags:
+            _note_flags(self, list_flags)
+            # Normal return with the provider's stream, opened under the flags.
+            return func(self, *args, **kwargs)
+
+    setattr(_wrapper, _WRAPPED_MARKER, True)
+    return _wrapper
+
+
 def cached_call(
     str_operation: str,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -764,24 +806,38 @@ def cached_call(
                     return await func(self, *args, **kwargs)
                 token: Token[bool] = RESPONSE_CACHE_ACTIVE.set(True)
                 try:
-                    plan: _Plan | None = plan_for(
-                        self,
-                        str_operation,
-                        str_method,
-                        _bound_args(func, (self, *args), kwargs),
-                    )
-                    if plan is None:
-                        # Early return: not cached.
-                        return await func(self, *args, **kwargs)
-                    bool_hit, hit = lookup(self, plan)
-                    if bool_hit:
-                        # Early return with the stored result.
-                        return hit
-                    with capture_request_calls(str_method) as capture:
-                        result: Any = await func(self, *args, **kwargs)
+                    dict_args: dict[str, Any] = _bound_args(func, (self, *args), kwargs)
+                    with guard_input(str_method, dict_args, self) as list_flags:
+                        _note_flags(self, list_flags)
+                        plan: _Plan | None = plan_for(
+                            self, str_operation, str_method, dict_args
+                        )
+                        if plan is None:
+                            # Early return: not cached, but guarded.
+                            return _stamp_flags(
+                                self,
+                                guard_output(
+                                    str_method,
+                                    await func(self, *args, **kwargs),
+                                    list_flags,
+                                ),
+                            )
+                        bool_hit, hit = lookup(self, plan)
+                        if bool_hit:
+                            # Early return with the stored result; its answer
+                            # was checked when it was stored.
+                            return _stamp_flags(
+                                self,
+                                guard_output(
+                                    str_method, hit, list_flags, bool_check=False
+                                ),
+                            )
+                        with capture_request_calls(str_method) as capture:
+                            result: Any = await func(self, *args, **kwargs)
+                        result = guard_output(str_method, result, list_flags)
                     store(plan, result, capture)
                     # Normal return with the live result.
-                    return result
+                    return _stamp_flags(self, result)
                 finally:
                     RESPONSE_CACHE_ACTIVE.reset(token)
 
@@ -795,24 +851,34 @@ def cached_call(
                 return func(self, *args, **kwargs)
             token: Token[bool] = RESPONSE_CACHE_ACTIVE.set(True)
             try:
-                plan: _Plan | None = plan_for(
-                    self,
-                    str_operation,
-                    str_method,
-                    _bound_args(func, (self, *args), kwargs),
-                )
-                if plan is None:
-                    # Early return: not cached.
-                    return func(self, *args, **kwargs)
-                bool_hit, hit = lookup(self, plan)
-                if bool_hit:
-                    # Early return with the stored result.
-                    return hit
-                with capture_request_calls(str_method) as capture:
-                    result: Any = func(self, *args, **kwargs)
+                dict_args: dict[str, Any] = _bound_args(func, (self, *args), kwargs)
+                with guard_input(str_method, dict_args, self) as list_flags:
+                    _note_flags(self, list_flags)
+                    plan: _Plan | None = plan_for(
+                        self, str_operation, str_method, dict_args
+                    )
+                    if plan is None:
+                        # Early return: not cached, but guarded.
+                        return _stamp_flags(
+                            self,
+                            guard_output(
+                                str_method, func(self, *args, **kwargs), list_flags
+                            ),
+                        )
+                    bool_hit, hit = lookup(self, plan)
+                    if bool_hit:
+                        # Early return with the stored result; its answer was
+                        # checked when it was stored.
+                        return _stamp_flags(
+                            self,
+                            guard_output(str_method, hit, list_flags, bool_check=False),
+                        )
+                    with capture_request_calls(str_method) as capture:
+                        result: Any = func(self, *args, **kwargs)
+                    result = guard_output(str_method, result, list_flags)
                 store(plan, result, capture)
                 # Normal return with the live result.
-                return result
+                return _stamp_flags(self, result)
             finally:
                 RESPONSE_CACHE_ACTIVE.reset(token)
 
@@ -838,5 +904,12 @@ def wrap_cacheable_methods(cls: type) -> None:
         ):
             continue
         setattr(cls, str_name, cached_call(str_operation)(func))
+    func_stream: Any = cls.__dict__.get(STREAMING_METHOD)
+    if (
+        func_stream is not None
+        and callable(func_stream)
+        and not cls.__dict__.get("BOOL_ROUTES_CALLS", False)
+    ):
+        setattr(cls, STREAMING_METHOD, guarded_stream(func_stream))
     # Normal return after wrapping.
     return None

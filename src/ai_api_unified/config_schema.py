@@ -182,7 +182,9 @@ def _middleware_defs_and_entry() -> tuple[dict[str, Any], dict[str, Any]]:
     from .middleware.middleware_config import (
         OBSERVABILITY,
         PII_REDACTION,
+        GUARDRAILS,
         RESPONSE_CACHE,
+        GuardrailsSettingsModel,
         ObservabilitySettingsModel,
         PiiRedactionSettingsModel,
         ResponseCacheSettingsModel,
@@ -195,6 +197,7 @@ def _middleware_defs_and_entry() -> tuple[dict[str, Any], dict[str, Any]]:
         (PII_REDACTION, PiiRedactionSettingsModel),
         (OBSERVABILITY, ObservabilitySettingsModel),
         (RESPONSE_CACHE, ResponseCacheSettingsModel),
+        (GUARDRAILS, GuardrailsSettingsModel),
     ):
         dict_model: dict[str, Any] = model.model_json_schema(
             by_alias=True, mode="validation", ref_template="#/$defs/{model}"
@@ -308,6 +311,7 @@ def _middleware_errors(list_middleware: Any) -> list[str]:
     from .middleware.middleware_config import (
         MiddlewareConfigurationModel,
         ObservabilitySettingsModel,
+        GuardrailsSettingsModel,
         PiiRedactionSettingsModel,
         ResponseCacheSettingsModel,
     )
@@ -323,6 +327,7 @@ def _middleware_errors(list_middleware: Any) -> list[str]:
         "pii_redaction": PiiRedactionSettingsModel,
         "observability": ObservabilitySettingsModel,
         "response_cache": ResponseCacheSettingsModel,
+        "guardrails": GuardrailsSettingsModel,
     }
     list_errors: list[str] = []
     # Loop over entries so each block is checked by its own model.

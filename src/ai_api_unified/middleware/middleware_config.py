@@ -3,7 +3,14 @@ import os
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from ai_api_unified.util.env_settings import EnvSettings
 
@@ -16,6 +23,7 @@ SETTINGS_KEY: str = "settings"
 PII_REDACTION: str = "pii_redaction"
 OBSERVABILITY: str = "observability"
 RESPONSE_CACHE: str = "response_cache"
+GUARDRAILS: str = "guardrails"
 INPUT_ONLY: str = "input_only"
 EN_LANGUAGE: str = "en"
 REDACTED_LABEL: str = "REDACTED"
@@ -1314,6 +1322,238 @@ class ResponseCacheSettingsModel(BaseModel):
         return DICT_DEFAULT_CACHE_TTL_SECONDS.get(str_operation)
 
 
+# Guardrail checks the library ships, their backends, and what a failing
+# check does.
+GUARDRAIL_CHECK_PROMPT_INJECTION: str = "prompt_injection"
+GUARDRAIL_CHECK_HARMFUL_CONTENT: str = "harmful_content"
+GUARDRAIL_BACKEND_AUTO: str = "auto"
+GUARDRAIL_BACKEND_RULES: str = "rules"
+GUARDRAIL_BACKEND_CLASSIFIER: str = "classifier"
+GUARDRAIL_BACKEND_OPENAI_MODERATION: str = "openai_moderation"
+GUARDRAIL_ACTION_BLOCK: str = "block"
+GUARDRAIL_ACTION_FLAG: str = "flag"
+GUARDRAIL_ON_ERROR_BLOCK: str = "block"
+GUARDRAIL_ON_ERROR_ALLOW: str = "allow"
+FROZENSET_GUARDRAIL_ACTIONS: frozenset[str] = frozenset(
+    {GUARDRAIL_ACTION_BLOCK, GUARDRAIL_ACTION_FLAG}
+)
+FROZENSET_GUARDRAIL_DIRECTIONS: frozenset[str] = frozenset(
+    {INPUT_ONLY, DIRECTION_OUTPUT_ONLY, DIRECTION_INPUT_OUTPUT}
+)
+DEFAULT_GUARDRAIL_THRESHOLD: float = 0.8
+
+
+def _normalize_guardrail_direction(value: Any) -> str:
+    str_direction: str = str(value or DIRECTION_INPUT_OUTPUT).strip().lower()
+    if str_direction not in FROZENSET_GUARDRAIL_DIRECTIONS:
+        raise ValueError(
+            f"direction must be one of {sorted(FROZENSET_GUARDRAIL_DIRECTIONS)}"
+        )
+    # Normal return with the canonical direction.
+    return str_direction
+
+
+def _normalize_guardrail_action(value: Any) -> str | None:
+    if value is None:
+        # Early return: inherit the file-wide action.
+        return None
+    str_action: str = str(value).strip().lower()
+    if str_action not in FROZENSET_GUARDRAIL_ACTIONS:
+        raise ValueError(f"action must be one of {sorted(FROZENSET_GUARDRAIL_ACTIONS)}")
+    # Normal return with the canonical action.
+    return str_action
+
+
+class GuardrailModelCheckSettingsModel(BaseModel):
+    """
+    A model-backed check: prompt_injection or harmful_content.
+
+    Attributes:
+        enabled: False turns the check off.
+        backend: `auto` (OpenAI Moderation when OPENAI_API_KEY is set, else
+            the classifier), `classifier`, or `openai_moderation`.
+            prompt_injection accepts only `classifier` (and `auto`, which
+            resolves to it): Moderation does not detect injection.
+        threshold: Probability or score at or above which the check fires.
+        action: `block` or `flag`; None inherits the file-wide `on_fail`.
+        direction: Which side the check reads; default both.
+        categories: harmful_content only: Moderation category names to
+            honor; empty means every category the endpoint reports.
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    backend: str = GUARDRAIL_BACKEND_AUTO
+    threshold: float = Field(default=DEFAULT_GUARDRAIL_THRESHOLD, ge=0.0, le=1.0)
+    action: str | None = None
+    direction: str = DIRECTION_INPUT_OUTPUT
+    categories: list[str] = Field(default_factory=list)
+
+    @field_validator("backend", mode="before")
+    @classmethod
+    def _normalize_backend(cls, value: Any) -> str:
+        str_backend: str = str(value or GUARDRAIL_BACKEND_AUTO).strip().lower()
+        if str_backend not in (
+            GUARDRAIL_BACKEND_AUTO,
+            GUARDRAIL_BACKEND_CLASSIFIER,
+            GUARDRAIL_BACKEND_OPENAI_MODERATION,
+        ):
+            raise ValueError("backend must be auto, classifier, or openai_moderation")
+        # Normal return with the canonical backend.
+        return str_backend
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _check_action(cls, value: Any) -> str | None:
+        # Normal return with the canonical action, or None.
+        return _normalize_guardrail_action(value)
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def _check_direction(cls, value: Any) -> str:
+        # Normal return with the canonical direction.
+        return _normalize_guardrail_direction(value)
+
+
+class GuardrailCustomCheckSettingsModel(BaseModel):
+    """
+    A custom policy: local rules (no provider call), or a yes/no question
+    the classifier answers.
+
+    Attributes:
+        name: The check's name, as records report it. Letters, digits,
+            underscores.
+        patterns: Regular expressions; any match fires the check.
+        terms: Case-insensitive substrings; any match fires the check.
+        question: A yes/no condition for the classifier, for policies rules
+            cannot express ("Does this text give medical advice?").
+        threshold: For `question`: probability at or above which it fires.
+        action: `block` or `flag`; None inherits the file-wide `on_fail`.
+        direction: Which side the check reads; default both.
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
+    patterns: list[str] = Field(default_factory=list)
+    terms: list[str] = Field(default_factory=list)
+    question: str | None = None
+    threshold: float = Field(default=DEFAULT_GUARDRAIL_THRESHOLD, ge=0.0, le=1.0)
+    action: str | None = None
+    direction: str = DIRECTION_INPUT_OUTPUT
+
+    @field_validator("patterns")
+    @classmethod
+    def _compile_patterns(cls, value: list[str]) -> list[str]:
+        import re as _re
+
+        # Loop over the patterns so a bad one fails at load, not at the call.
+        for str_pattern in value:
+            try:
+                _re.compile(str_pattern)
+            except _re.error as exception:
+                raise ValueError(f"pattern {str_pattern!r}: {exception}") from exception
+        # Normal return with the patterns as given.
+        return value
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _check_action(cls, value: Any) -> str | None:
+        # Normal return with the canonical action, or None.
+        return _normalize_guardrail_action(value)
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def _check_direction(cls, value: Any) -> str:
+        # Normal return with the canonical direction.
+        return _normalize_guardrail_direction(value)
+
+    @model_validator(mode="after")
+    def _needs_a_rule(self) -> "GuardrailCustomCheckSettingsModel":
+        if not self.patterns and not self.terms and not self.question:
+            raise ValueError(
+                f"custom check {self.name!r} needs patterns, terms, or a question"
+            )
+        if self.name in (
+            GUARDRAIL_CHECK_PROMPT_INJECTION,
+            GUARDRAIL_CHECK_HARMFUL_CONTENT,
+        ):
+            raise ValueError(
+                f"custom check name {self.name!r} is reserved for a built-in check"
+            )
+        # Normal return with the validated check.
+        return self
+
+
+class GuardrailClassifierSettingsModel(BaseModel):
+    """The classifier the model-backed checks use; None fields follow models.json."""
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    engine: str | None = None
+    model: str | None = None
+
+
+class GuardrailsSettingsModel(BaseModel):
+    """
+    The `guardrails` middleware: checks on requests and answers.
+
+    Attributes:
+        on_fail: What a firing check does unless it says otherwise: `block`
+            raises AiGuardrailBlockedError; `flag` lets the call through and
+            names the check on the result and in the record.
+        on_error: What happens when a check itself fails (a backend outage):
+            `block` refuses the call, `allow` lets it through with a warning.
+        prompt_injection, harmful_content: The built-in model-backed checks.
+        custom: Policies of your own.
+        classifier: Which classifier the model-backed checks use.
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    on_fail: str = GUARDRAIL_ACTION_BLOCK
+    on_error: str = GUARDRAIL_ON_ERROR_BLOCK
+    prompt_injection: GuardrailModelCheckSettingsModel = Field(
+        default_factory=lambda: GuardrailModelCheckSettingsModel(direction=INPUT_ONLY)
+    )
+    harmful_content: GuardrailModelCheckSettingsModel = Field(
+        default_factory=GuardrailModelCheckSettingsModel
+    )
+    custom: list[GuardrailCustomCheckSettingsModel] = Field(default_factory=list)
+    classifier: GuardrailClassifierSettingsModel = Field(
+        default_factory=GuardrailClassifierSettingsModel
+    )
+
+    @field_validator("on_fail", mode="before")
+    @classmethod
+    def _check_on_fail(cls, value: Any) -> str:
+        # Normal return with the canonical action (block when unset).
+        return _normalize_guardrail_action(value) or GUARDRAIL_ACTION_BLOCK
+
+    @field_validator("on_error", mode="before")
+    @classmethod
+    def _check_on_error(cls, value: Any) -> str:
+        str_value: str = str(value or GUARDRAIL_ON_ERROR_BLOCK).strip().lower()
+        if str_value not in (GUARDRAIL_ON_ERROR_BLOCK, GUARDRAIL_ON_ERROR_ALLOW):
+            raise ValueError("on_error must be block or allow")
+        # Normal return with the canonical value.
+        return str_value
+
+    @model_validator(mode="after")
+    def _unique_custom_names(self) -> "GuardrailsSettingsModel":
+        list_names: list[str] = [check.name for check in self.custom]
+        if len(set(list_names)) != len(list_names):
+            raise ValueError("custom check names must be unique")
+        if self.prompt_injection.backend == GUARDRAIL_BACKEND_OPENAI_MODERATION:
+            raise ValueError(
+                "prompt_injection cannot use openai_moderation; it detects "
+                "harmful content, not injection. Use classifier."
+            )
+        # Normal return with the validated settings.
+        return self
+
+
 class MiddlewareConfig:
     """
     Parses and serves typed middleware configuration data.
@@ -1597,12 +1837,39 @@ class MiddlewareConfig:
             # Early return: invalid settings disable the component.
             return None
 
+    def get_guardrails_settings(self) -> GuardrailsSettingsModel | None:
+        """
+        Typed guardrails settings when the component is enabled, else None.
+        An enabled entry with no settings runs the two built-in checks with
+        the defaults; invalid settings disable the component with an error.
+        """
+        entry: MiddlewareEntryModel | None = self._get_component_entry(GUARDRAILS)
+        if entry is None:
+            # Early return: not configured or disabled.
+            return None
+        settings: Any = entry.settings
+        if settings is None:
+            # Normal return with the defaults.
+            return GuardrailsSettingsModel()
+        if not isinstance(settings, dict):
+            logger.warning(MIDDLEWARE_EMPTY_SETTINGS_DISABLED_MESSAGE, GUARDRAILS)
+            # Early return: not a mapping.
+            return None
+        try:
+            # Normal return with validated settings.
+            return GuardrailsSettingsModel.model_validate(settings)
+        except ValidationError as exception:
+            logger.error("guardrails settings are invalid: %s", exception)
+            # Early return: invalid settings disable the component.
+            return None
+
     def get_middleware_settings(
         self, name: str
     ) -> (
         PiiRedactionSettingsModel
         | ObservabilitySettingsModel
         | ResponseCacheSettingsModel
+        | GuardrailsSettingsModel
         | None
     ):
         """
@@ -1625,6 +1892,9 @@ class MiddlewareConfig:
         if name == RESPONSE_CACHE:
             # Normal return for typed response-cache settings.
             return self.get_response_cache_settings()
+        if name == GUARDRAILS:
+            # Normal return for typed guardrails settings.
+            return self.get_guardrails_settings()
         logger.debug(UNSUPPORTED_TYPED_MIDDLEWARE_DEBUG_MESSAGE, name)
         # Early return because the requested middleware has no typed settings model.
         return None

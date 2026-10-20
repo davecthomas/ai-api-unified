@@ -70,6 +70,7 @@ from ai_api_unified.middleware.observability_runtime import (
     reset_observability_context,
     resolve_originating_caller,
 )
+from ai_api_unified.middleware.guardrails import guard_input, guard_output
 from ai_api_unified.middleware.request_cost import (
     REQUEST_STATUS_OK,
     AIRequestCostLineItem,
@@ -764,6 +765,8 @@ class AITurnResult(BaseModel):
     # True when the response cache answered; usd_saved is the original cost.
     cache_hit: bool = False
     usd_saved: Decimal | None = None
+    # Guardrail checks that flagged this call (input or output), by name.
+    guardrail_flags: list[str] = Field(default_factory=list)
 
 
 class AIStructuredOutputResult(BaseModel):
@@ -808,6 +811,8 @@ class AIStructuredOutputResult(BaseModel):
     # True when the response cache answered; usd_saved is the original cost.
     cache_hit: bool = False
     usd_saved: Decimal | None = None
+    # Guardrail checks that flagged this call (input or output), by name.
+    guardrail_flags: list[str] = Field(default_factory=list)
 
 
 class AIPromptResult(BaseModel):
@@ -854,6 +859,8 @@ class AIPromptResult(BaseModel):
     # True when the response cache answered; usd_saved is the original cost.
     cache_hit: bool = False
     usd_saved: Decimal | None = None
+    # Guardrail checks that flagged this call (input or output), by name.
+    guardrail_flags: list[str] = Field(default_factory=list)
 
     @property
     def total_usd(self) -> Decimal:
@@ -3164,25 +3171,23 @@ def _envelope_wrapper_parts(
     func: Callable[..., Any],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-) -> tuple[Any, Any, "AIBaseCompletions", dict[str, Any]]:
+) -> tuple[Any, Any, "AIBaseCompletions", dict[str, Any], dict[str, Any]]:
     """
     The outermost envelope call's setup: the cache plan (read before the
     reserved keys go), the stripped kwargs, the pin, and its target.
     """
     from ai_api_unified.middleware import response_cache as rc
 
+    dict_args: dict[str, Any] = rc._bound_args(func, (self, *args), kwargs)
     plan: Any = rc.plan_for(
-        self,
-        rc.DICT_ENVELOPE_OPERATIONS[func.__name__],
-        func.__name__,
-        rc._bound_args(func, (self, *args), kwargs),
+        self, rc.DICT_ENVELOPE_OPERATIONS[func.__name__], func.__name__, dict_args
     )
     dict_options, str_pin = _split_model_option(kwargs.get("provider_options"))
     if "provider_options" in kwargs:
         kwargs["provider_options"] = dict_options
     pin, target = self._model_pin_for_call(str_pin)
     # Normal return with the parts.
-    return plan, pin, target, kwargs
+    return plan, pin, target, kwargs, dict_args
 
 
 def enveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -3208,34 +3213,47 @@ def enveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
         from ai_api_unified.completions.ai_model_pin import model_pin_scope
         from ai_api_unified.middleware import response_cache as rc
 
-        plan, pin, target, kwargs = _envelope_wrapper_parts(self, func, args, kwargs)
+        plan, pin, target, kwargs, dict_args = _envelope_wrapper_parts(
+            self, func, args, kwargs
+        )
         report_before: AIRequestCostReport | None = target.last_request_cost
         token: Any = ENVELOPE_ACTIVE.set(True)
         token_cache: Any = rc.RESPONSE_CACHE_ACTIVE.set(True)
         try:
-            if plan is not None:
-                bool_hit, hit = rc.lookup(self, plan)
-                if bool_hit:
-                    # Early return with the stored result.
-                    return hit
-            with (
-                model_pin_scope(pin, func.__name__, config_id=self.config_id),
-                capture_request_calls(func.__name__) as capture,
-            ):
-                result: Any = (
-                    func(self, *args, **kwargs)
-                    if target is self
-                    else getattr(target, func.__name__)(*args, **kwargs)
+            with guard_input(func.__name__, dict_args, self) as list_flags:
+                if plan is not None:
+                    bool_hit, hit = rc.lookup(self, plan)
+                    if bool_hit:
+                        # Early return with the stored result; its answer was
+                        # checked when it was stored.
+                        return rc._stamp_flags(
+                            self,
+                            guard_output(
+                                func.__name__, hit, list_flags, bool_check=False
+                            ),
+                        )
+                with (
+                    model_pin_scope(pin, func.__name__, config_id=self.config_id),
+                    capture_request_calls(func.__name__) as capture,
+                ):
+                    result: Any = (
+                        func(self, *args, **kwargs)
+                        if target is self
+                        else getattr(target, func.__name__)(*args, **kwargs)
+                    )
+                stamped: Any = guard_output(
+                    func.__name__,
+                    self._stamp_envelope(result, capture, pin),
+                    list_flags,
                 )
         finally:
             rc.RESPONSE_CACHE_ACTIVE.reset(token_cache)
             ENVELOPE_ACTIVE.reset(token)
         self._adopt_request_cost(target, report_before)
-        stamped: Any = self._stamp_envelope(result, capture, pin)
         if plan is not None:
             rc.store(plan, stamped, capture)
         # Normal return with the stamped result.
-        return stamped
+        return rc._stamp_flags(self, stamped)
 
     return _wrapper
 
@@ -3254,34 +3272,47 @@ def aenveloped_completions_call(func: Callable[..., Any]) -> Callable[..., Any]:
         from ai_api_unified.completions.ai_model_pin import model_pin_scope
         from ai_api_unified.middleware import response_cache as rc
 
-        plan, pin, target, kwargs = _envelope_wrapper_parts(self, func, args, kwargs)
+        plan, pin, target, kwargs, dict_args = _envelope_wrapper_parts(
+            self, func, args, kwargs
+        )
         report_before: AIRequestCostReport | None = target.last_request_cost
         token: Any = ENVELOPE_ACTIVE.set(True)
         token_cache: Any = rc.RESPONSE_CACHE_ACTIVE.set(True)
         try:
-            if plan is not None:
-                bool_hit, hit = rc.lookup(self, plan)
-                if bool_hit:
-                    # Early return with the stored result.
-                    return hit
-            with (
-                model_pin_scope(pin, func.__name__, config_id=self.config_id),
-                capture_request_calls(func.__name__) as capture,
-            ):
-                result: Any = await (
-                    func(self, *args, **kwargs)
-                    if target is self
-                    else getattr(target, func.__name__)(*args, **kwargs)
+            with guard_input(func.__name__, dict_args, self) as list_flags:
+                if plan is not None:
+                    bool_hit, hit = rc.lookup(self, plan)
+                    if bool_hit:
+                        # Early return with the stored result; its answer was
+                        # checked when it was stored.
+                        return rc._stamp_flags(
+                            self,
+                            guard_output(
+                                func.__name__, hit, list_flags, bool_check=False
+                            ),
+                        )
+                with (
+                    model_pin_scope(pin, func.__name__, config_id=self.config_id),
+                    capture_request_calls(func.__name__) as capture,
+                ):
+                    result: Any = await (
+                        func(self, *args, **kwargs)
+                        if target is self
+                        else getattr(target, func.__name__)(*args, **kwargs)
+                    )
+                stamped: Any = guard_output(
+                    func.__name__,
+                    self._stamp_envelope(result, capture, pin),
+                    list_flags,
                 )
         finally:
             rc.RESPONSE_CACHE_ACTIVE.reset(token_cache)
             ENVELOPE_ACTIVE.reset(token)
         self._adopt_request_cost(target, report_before)
-        stamped: Any = self._stamp_envelope(result, capture, pin)
         if plan is not None:
             rc.store(plan, stamped, capture)
         # Normal return with the stamped result.
-        return stamped
+        return rc._stamp_flags(self, stamped)
 
     return _wrapper
 
@@ -3327,6 +3358,9 @@ class AIBaseCompletions(AIBase):
     _pin_fallback_on: frozenset[Any] | None = None
     _pin_cooldown: Any = None
     _pin_chain: "AIBaseCompletions | None" = None
+    # Guardrail checks the last call flagged, for text-only results; see
+    # middleware/guardrails.py.
+    _last_guardrail_flags: list[str] = []
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -3359,6 +3393,12 @@ class AIBaseCompletions(AIBase):
         self._thinking_level = parse_thinking_level(value)
         # Normal return after storing the level (None re-reads configuration).
         return None
+
+    @property
+    def last_guardrail_flags(self) -> list[str]:
+        """Guardrail checks the last call on this client flagged, by name."""
+        # Normal return with a copy of the flags.
+        return list(self._last_guardrail_flags)
 
     @property
     def last_thinking(self) -> AIThinkingResolution | None:

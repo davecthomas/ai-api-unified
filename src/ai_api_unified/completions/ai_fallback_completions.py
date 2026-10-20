@@ -358,6 +358,9 @@ class AiFallbackCompletions(AIBaseCompletions):
     # Reserved per-call provider_options key; "none" keeps the call on its
     # starting candidate. Stripped before the options reach an engine.
     PROVIDER_OPTION_FALLBACK: ClassVar[str] = "fallback"
+    # Streams open on a candidate, whose own stream guard runs; see
+    # middleware/response_cache.py.
+    BOOL_ROUTES_CALLS: ClassVar[bool] = True
 
     # Marker for candidates whose construction failed; never retried.
     _UNBUILDABLE: ClassVar[object] = object()
