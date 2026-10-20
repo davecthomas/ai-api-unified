@@ -100,6 +100,8 @@ FROZENSET_EXCLUDED_OPTIONS: frozenset[str] = frozenset({CACHE_OPTION, "purpose"}
 DICT_WRAPPED_METHOD_OPERATIONS: dict[str, str] = {
     "send_prompt": CACHE_OPERATION_COMPLETIONS,
     "asend_prompt": CACHE_OPERATION_COMPLETIONS,
+    "send_prompt_with_result": CACHE_OPERATION_COMPLETIONS,
+    "asend_prompt_with_result": CACHE_OPERATION_COMPLETIONS,
     "generate_embeddings": CACHE_OPERATION_EMBEDDINGS,
     "generate_embeddings_batch": CACHE_OPERATION_EMBEDDINGS,
     "agenerate_embeddings": CACHE_OPERATION_EMBEDDINGS,
@@ -279,6 +281,21 @@ def _safe_call(obj: Any, str_name: str) -> Any:
         return None
 
 
+def _sync_method_name(str_method: str) -> str:
+    """The sync name of a method, so an async twin shares its entries."""
+    if str_method.startswith("a") and str_method[1:] in (
+        *DICT_WRAPPED_METHOD_OPERATIONS,
+        *DICT_ENVELOPE_OPERATIONS,
+        "classify_choice",
+        "classify_predicate",
+        "classify_score",
+    ):
+        # Early return with the twin's name.
+        return str_method[1:]
+    # Normal return: already the sync name.
+    return str_method
+
+
 def build_cache_key(
     client: Any, str_operation: str, str_method: str, dict_args: dict[str, Any]
 ) -> str:
@@ -295,7 +312,7 @@ def build_cache_key(
         }
     dict_payload: dict[str, Any] = {
         "operation": str_operation,
-        "method": str_method.lstrip("a") if str_method.startswith("a") else str_method,
+        "method": _sync_method_name(str_method),
         "client": _client_identity(client),
         "args": _canonical(
             {k: v for k, v in dict_args.items() if k not in FROZENSET_EXCLUDED_ARGS}

@@ -203,6 +203,23 @@ class TestHitsAndMisses:
         assert report.usd_saved == GPT_COST
         assert any(r.message.startswith("CACHE HIT") for r in caplog.records)
 
+    def test_send_prompt_with_result_hit_carries_the_original_envelope(
+        self, cache_on: Any
+    ) -> None:
+        cache_on()
+        chain = _chain(
+            _PricedEngine("p", fail=_err(R.UNAVAILABLE, 529)), _PricedEngine("f")
+        )
+        first = chain.send_prompt_with_result("hi")
+        second = chain.send_prompt_with_result("hi")
+        assert not first.cache_hit and second.cache_hit
+        assert second.text == first.text == "f:ok"
+        assert second.model_name == first.model_name
+        assert second.usd_saved == first.cost.total_usd == GPT_COST
+        assert second.cost.total_usd == 0
+        # The async twin shares the entry.
+        assert asyncio.run(chain.asend_prompt_with_result("hi")).cache_hit
+
     def test_different_prompt_misses(self, cache_on: Any) -> None:
         cache_on()
         engine = _PricedEngine("p")
