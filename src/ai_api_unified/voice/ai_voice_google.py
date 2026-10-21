@@ -3,8 +3,9 @@
 This module uses the Google Cloud Text-to-Speech API for text-to-speech synthesis.
 Authentication defaults to ``GOOGLE_AUTH_METHOD=api_key`` using
 ``GOOGLE_GEMINI_API_KEY``. Service-account / ADC flows remain available by
-setting ``GOOGLE_AUTH_METHOD=service_account`` and the usual Google credential
-environment variables. All voice synthesis requests use standard TTS input
+setting ``GOOGLE_AUTH_METHOD=service_account``; the key file named by
+``GOOGLE_APPLICATION_CREDENTIALS`` (in ``.env`` or exported) is used when set,
+otherwise Application Default Credentials. All voice synthesis requests use standard TTS input
 (text).
 
 Reference: https://cloud.google.com/text-to-speech/docs
@@ -191,7 +192,9 @@ class AIVoiceGoogle(AIVoiceBase, AIGoogleBase):
             return texttospeech.TextToSpeechClient(
                 client_options=ClientOptions(api_key=self._get_google_api_key())
             )
-        return texttospeech.TextToSpeechClient()
+        return texttospeech.TextToSpeechClient(
+            credentials=self._load_service_account_credentials(self._get_env_settings())
+        )
 
     def _create_stt_client(self) -> speech.SpeechClient:
         """
@@ -201,7 +204,9 @@ class AIVoiceGoogle(AIVoiceBase, AIGoogleBase):
             return speech.SpeechClient(
                 client_options=ClientOptions(api_key=self._get_google_api_key())
             )
-        return speech.SpeechClient()
+        return speech.SpeechClient(
+            credentials=self._load_service_account_credentials(self._get_env_settings())
+        )
 
     def _build_output_formats(self) -> list[AudioFormat]:
         list_formats: list[AudioFormat] = [
