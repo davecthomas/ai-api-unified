@@ -1192,7 +1192,8 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
                     int_status, str(candidate)
                 )
                 raise AiProviderRequestError(
-                    f"Google Gemini request failed: {candidate}",
+                    f"Google Gemini request failed: {candidate}"
+                    f"{self._vertex_location_hint(int_status)}",
                     status_code=int_status,
                     provider_engine=self.PROVIDER_ENGINE_TOKEN,
                     fallback_reason=reason,

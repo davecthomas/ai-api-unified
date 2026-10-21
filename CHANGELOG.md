@@ -4,6 +4,25 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.27.0
+
+### Changed
+
+- The Vertex location defaults to `global` instead of `us-central1` when
+  `providers.google.location` (`GOOGLE_LOCATION`) is unset (#45). Vertex
+  serves the Gemini 3.x models, including the engine default
+  `gemini-3.7-flash` and the default image model `gemini-3.1-flash-image`,
+  only from the global location; `us-central1` answered 404 on
+  `generateContent` for every one of them while `models.get` answered 200,
+  so the zero-config Vertex path failed out of the box. An explicit
+  location is kept as configured. API-key auth is unaffected.
+
+### Fixed
+
+- A 404 from Vertex in a regional location now says that the location does
+  not serve the model and names the setting to change, in both the
+  `RuntimeError` and the typed `AiProviderRequestError`.
+
 ## 3.26.1
 
 ### Fixed
