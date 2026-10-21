@@ -2646,6 +2646,9 @@ Optional service-account mode:
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service_account.json
 ```
 
+The key path may sit in `.env`; the library loads the file itself, so it
+does not need to be exported.
+
 This auth policy applies across Google completions, embeddings, images, videos, and voice.
 
 ##### Google auth modes per capability
