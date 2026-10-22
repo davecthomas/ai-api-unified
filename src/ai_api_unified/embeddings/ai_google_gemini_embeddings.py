@@ -16,7 +16,7 @@ Environment Variables:
         GOOGLE_AUTH_METHOD: api_key | service_account
         GOOGLE_APPLICATION_CREDENTIALS: Path to service account JSON credentials.
         GOOGLE_PROJECT_ID: Google Cloud project ID used for Vertex AI requests.
-        GOOGLE_LOCATION: (optional) Vertex AI region, defaults to us-central1.
+        GOOGLE_LOCATION: (optional) Vertex AI location, defaults to global.
 
     Model/runtime tuning:
         EMBEDDING_MODEL_NAME: (optional) Override default model 'gemini-embedding-001'.

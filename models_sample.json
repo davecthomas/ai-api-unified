@@ -54,7 +54,7 @@
   "providers": {
     "openai":            {"base_url": null, "user": null},
     "anthropic":         {"base_url": null, "admin_base_url": null, "user": null},
-    "google":            {"auth_method": "api_key", "project_id": null, "location": "us-central1", "base_url": null},
+    "google":            {"auth_method": "api_key", "project_id": null, "location": "global", "base_url": null},
     "aws":               {"region": "us-east-1"},
     "openai_compatible": {"base_url": null, "structured_output": "json_schema", "context_window": null},
     "azure_speech":      {"region": "eastus"}

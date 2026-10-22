@@ -1,4 +1,4 @@
-# ai-api-unified 3.26.1
+# ai-api-unified 3.27.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -2639,8 +2639,13 @@ Default auth mode: `providers.google.auth_method` set to `api_key`.
 Optional service-account mode:
 
 ```json
-"providers": {"google": {"auth_method": "service_account", "project_id": "<gcp-project-id>", "location": "us-central1"}}
+"providers": {"google": {"auth_method": "service_account", "project_id": "<gcp-project-id>", "location": "global"}}
 ```
+
+`location` defaults to `global`. Vertex serves the Gemini 3.x models (and
+the 3.x image model) only from the global location; a regional location such
+as `us-central1` answers 404 for them, and the error says so. Set a region
+only when you need one and use a model that region serves.
 
 ```dotenv
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service_account.json

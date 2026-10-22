@@ -31,6 +31,12 @@ from ai_api_unified.util.env_settings import EnvSettings
 GOOGLE_BASE_URL_OVERRIDE_SETTING: str = "GOOGLE_GEMINI_BASE_URL_OVERRIDE"
 GOOGLE_CREDENTIALS_FILE_SETTING: str = "GOOGLE_APPLICATION_CREDENTIALS"
 GOOGLE_CLOUD_PLATFORM_SCOPE: str = "https://www.googleapis.com/auth/cloud-platform"
+# Vertex location when GOOGLE_LOCATION is unset. Gemini 3.x models (and the
+# 3.x image model) are served only from the global endpoint; a regional
+# location such as us-central1 answers 404 on generateContent for them
+# while models.get still answers 200 (probed 2026-10-21, issue #45).
+GOOGLE_LOCATION_GLOBAL: str = "global"
+DEFAULT_GOOGLE_LOCATION: str = GOOGLE_LOCATION_GLOBAL
 
 T = TypeVar("T")
 
@@ -206,6 +212,34 @@ class AIGoogleBase:
         # Normal return with the key file's credentials.
         return credentials
 
+    def _vertex_location_hint(self, status_code: int | None) -> str:
+        """
+        Advice appended to a 404 from Vertex in a regional location, where
+        the model exists but is not served; empty otherwise.
+        """
+        if status_code != 404:
+            # Early return: only a missing model gets the hint.
+            return ""
+        env_settings: EnvSettings = EnvSettings()
+        if (
+            self._resolve_google_auth_method(env_settings)
+            == self.GOOGLE_AUTH_METHOD_API_KEY
+        ):
+            # Early return: the Gemini API has no locations.
+            return ""
+        str_location: str = str(
+            env_settings.get_setting("GOOGLE_LOCATION", None) or DEFAULT_GOOGLE_LOCATION
+        ).strip()
+        if str_location.lower() == GOOGLE_LOCATION_GLOBAL:
+            # Early return: already on the global endpoint.
+            return ""
+        # Normal return with the advice.
+        return (
+            f" Vertex location {str_location!r} does not serve this model; "
+            "Gemini 3.x models are served only from the global location. Set "
+            "providers.google.location (GOOGLE_LOCATION) to 'global'."
+        )
+
     def _resolve_google_auth_method(
         self,
         env_settings: EnvSettings,
@@ -297,8 +331,9 @@ class AIGoogleBase:
                 )
             else:
                 project_id: str = env_settings.get_setting("GOOGLE_PROJECT_ID", "")
-                location: str = env_settings.get_setting(
-                    "GOOGLE_LOCATION", "us-central1"
+                location: str = (
+                    env_settings.get_setting("GOOGLE_LOCATION", None)
+                    or DEFAULT_GOOGLE_LOCATION
                 )
                 client = genai.Client(
                     vertexai=True,
@@ -651,12 +686,13 @@ class AIGoogleBase:
                     ) from gemini_error
 
                 message_text_gemini: str = str(gemini_error)
+                str_hint: str = self._vertex_location_hint(status_code)
                 if _cannot_recover(status_code, message_text_gemini):
                     # Early exit: quota or model gone, so backoff is wasted.
                     # Wrapped like the non-retryable branch below, so the
                     # public exception type does not change.
                     raise RuntimeError(
-                        f"Google Gemini error{f' ({status_code})' if status_code is not None else ''}: {gemini_error}"
+                        f"Google Gemini error{f' ({status_code})' if status_code is not None else ''}: {gemini_error}{str_hint}"
                     ) from gemini_error
                 if (
                     status_code in self.retryable_http_status_codes
@@ -670,12 +706,13 @@ class AIGoogleBase:
                     continue
 
                 _LOGGER.error(
-                    "Non-retryable Google Gemini error%s: %s",
+                    "Non-retryable Google Gemini error%s: %s%s",
                     f" ({status_code})" if status_code is not None else "",
                     gemini_error,
+                    str_hint,
                 )
                 raise RuntimeError(
-                    f"Google Gemini error{f' ({status_code})' if status_code is not None else ''}: {gemini_error}"
+                    f"Google Gemini error{f' ({status_code})' if status_code is not None else ''}: {gemini_error}{str_hint}"
                 ) from gemini_error
 
             except gerr.APIError as gemini_api_error:

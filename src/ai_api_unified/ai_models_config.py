@@ -260,7 +260,8 @@ class AIGoogleProviderSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     auth_method: Literal["api_key", "service_account"] | None = None
-    # Vertex AI project and region, for service-account auth.
+    # Vertex AI project and location, for service-account auth. The location
+    # defaults to "global", the only one serving Gemini 3.x models.
     project_id: str | None = None
     location: str | None = None
     base_url: str | None = None
