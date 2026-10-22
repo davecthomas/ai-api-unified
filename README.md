@@ -1,4 +1,4 @@
-# ai-api-unified 3.26.0
+# ai-api-unified 3.26.1
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -2645,6 +2645,9 @@ Optional service-account mode:
 ```dotenv
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service_account.json
 ```
+
+The key path may sit in `.env`; the library loads the file itself, so it
+does not need to be exported.
 
 This auth policy applies across Google completions, embeddings, images, videos, and voice.
 

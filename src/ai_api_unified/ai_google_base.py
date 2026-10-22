@@ -23,11 +23,14 @@ from google.genai import pagers
 
 from ai_api_unified.ai_provider_exceptions import (
     AiFallbackReason,
+    AiProviderConfigurationValueError,
     classify_fallback_reason_by_status,
 )
 from ai_api_unified.util.env_settings import EnvSettings
 
 GOOGLE_BASE_URL_OVERRIDE_SETTING: str = "GOOGLE_GEMINI_BASE_URL_OVERRIDE"
+GOOGLE_CREDENTIALS_FILE_SETTING: str = "GOOGLE_APPLICATION_CREDENTIALS"
+GOOGLE_CLOUD_PLATFORM_SCOPE: str = "https://www.googleapis.com/auth/cloud-platform"
 
 T = TypeVar("T")
 
@@ -171,6 +174,38 @@ class AIGoogleBase:
     GOOGLE_AUTH_METHOD_API_KEY: ClassVar[str] = "api_key"
     GOOGLE_AUTH_METHOD_SERVICE_ACCOUNT: ClassVar[str] = "service_account"
 
+    def _load_service_account_credentials(self, env_settings: EnvSettings) -> Any:
+        """
+        Credentials from the key file GOOGLE_APPLICATION_CREDENTIALS names,
+        read through EnvSettings so a path set in `.env` works
+        the same as an exported one. None when unset, so the Google client
+        falls back to Application Default Credentials.
+
+        Raises:
+            AiProviderConfigurationValueError: The path is set but the file is
+                missing or is not a service account key.
+        """
+        str_path: str = str(
+            env_settings.get_setting(GOOGLE_CREDENTIALS_FILE_SETTING, "") or ""
+        ).strip()
+        if not str_path:
+            # Early return: no key file, so the client uses ADC.
+            return None
+        from google.oauth2 import service_account
+
+        try:
+            credentials: Any = service_account.Credentials.from_service_account_file(
+                str_path, scopes=[GOOGLE_CLOUD_PLATFORM_SCOPE]
+            )
+        except (OSError, ValueError, KeyError) as error:
+            raise AiProviderConfigurationValueError(
+                f"{GOOGLE_CREDENTIALS_FILE_SETTING}={str_path} could not be loaded "
+                f"as a service account key ({error.__class__.__name__}). Point it "
+                "at the JSON key file downloaded for the service account."
+            ) from error
+        # Normal return with the key file's credentials.
+        return credentials
+
     def _resolve_google_auth_method(
         self,
         env_settings: EnvSettings,
@@ -237,6 +272,11 @@ class AIGoogleBase:
             str_env_key=GOOGLE_BASE_URL_OVERRIDE_SETTING,
             str_explicit=base_url,
         )
+        credentials: Any = (
+            None
+            if auth_method == self.GOOGLE_AUTH_METHOD_API_KEY
+            else self._load_service_account_credentials(env_settings)
+        )
         dict_client_kwargs: dict[str, Any] = {}
         if str_base_url:
             dict_client_kwargs["http_options"] = genai.types.HttpOptions(
@@ -264,6 +304,7 @@ class AIGoogleBase:
                     vertexai=True,
                     project=project_id,
                     location=location,
+                    credentials=credentials,
                     **dict_client_kwargs,
                 )
 

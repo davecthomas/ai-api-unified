@@ -4,6 +4,21 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.26.1
+
+### Fixed
+
+- Google service-account mode now uses the key file that
+  `GOOGLE_APPLICATION_CREDENTIALS` names in `.env`. The Google SDK reads
+  that variable only from the process environment, so a path set in `.env`
+  was ignored and the client fell back to whatever Application Default
+  Credentials the machine had, often another account, which Vertex
+  rejected with 403. The library now loads the key itself and passes it to
+  the Gemini client (completions, embeddings, images, video) and the
+  Text-to-Speech and Speech-to-Text clients. A path that is missing or is
+  not a service account key raises `AiProviderConfigurationValueError`.
+  With no path set, Application Default Credentials are used as before.
+
 ## 3.26.0
 
 ### Fixed

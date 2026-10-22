@@ -99,6 +99,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_openai_us_endpoint.py": ("completions", "engine_openai"),
     # Google Gemini engine
     "test_google_gemini.py": ("completions", "engine_gemini", "embeddings"),
+    "test_google_service_account_key.py": ("engine_gemini", "voice"),
     "test_google_gemini_nonmock.py": ("completions", "engine_gemini", "embeddings"),
     # Multi-engine completions surfaces
     "test_cached_token_capture.py": (
