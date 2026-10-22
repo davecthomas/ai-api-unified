@@ -192,6 +192,11 @@ class AiGuardrailBlockedError(AiProviderRuntimeError):
         backend: What made the decision (rules, classifier, openai_moderation).
         score: The backend's score or probability, when it reports one.
         categories: Category labels the backend reported, when any.
+        source: "request" (the caller's own text) or "tool_result" (text a
+            tool returned, sent back in a conversation).
+        tool_call_ids: For a tool_result block, the ids of the tool calls
+            whose results fired, so the caller can drop or redact them and
+            send the turn again.
     """
 
     def __init__(
@@ -203,6 +208,8 @@ class AiGuardrailBlockedError(AiProviderRuntimeError):
         backend: str,
         score: float | None = None,
         categories: tuple[str, ...] = (),
+        source: str = "request",
+        tool_call_ids: tuple[str, ...] = (),
     ) -> None:
         super().__init__(message)
         self.check: str = check
@@ -210,6 +217,8 @@ class AiGuardrailBlockedError(AiProviderRuntimeError):
         self.backend: str = backend
         self.score: float | None = score
         self.categories: tuple[str, ...] = categories
+        self.source: str = source
+        self.tool_call_ids: tuple[str, ...] = tool_call_ids
         # A guardrail decision is final; nothing about it says another
         # model would answer differently.
         self.fallback_reason: AiFallbackReason | None = None
