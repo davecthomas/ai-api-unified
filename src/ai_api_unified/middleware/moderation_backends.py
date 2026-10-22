@@ -298,6 +298,7 @@ def _run_azure(
     check: GuardrailModelCheckSettingsModel,
     settings: GuardrailsSettingsModel,
     str_text: str,
+    bool_document: bool = False,
 ) -> tuple[float, tuple[str, ...]]:
     config: Any = settings.backends.azure_content_safety
     str_endpoint: str = azure_endpoint(settings)
@@ -310,16 +311,28 @@ def _run_azure(
         bool_attack: bool = False
         # Loop over the chunks; one detected attack is enough.
         for str_chunk in _chunks(str_text, INT_AZURE_CHUNK_CHARS):
+            # A tool result is a document (Prompt Shields' indirect-attack
+            # analysis); the caller's own text is the user prompt.
+            dict_body: dict[str, Any] = (
+                {"userPrompt": "", "documents": [str_chunk]}
+                if bool_document
+                else {"userPrompt": str_chunk, "documents": []}
+            )
             body: Any = _raise_for_status(
                 client.post(
                     f"{str_endpoint}/contentsafety/text:shieldPrompt",
                     params={"api-version": config.api_version},
                     headers=dict_headers,
-                    json={"userPrompt": str_chunk, "documents": []},
+                    json=dict_body,
                 ),
                 "azure_content_safety",
             )
-            if (body.get("userPromptAnalysis") or {}).get("attackDetected"):
+            list_analyses: list[Any] = (
+                list(body.get("documentsAnalysis") or [])
+                if bool_document
+                else [body.get("userPromptAnalysis") or {}]
+            )
+            if any((item or {}).get("attackDetected") for item in list_analyses):
                 bool_attack = True
                 break
         # Early return: Prompt Shields says yes or no.
@@ -446,9 +459,14 @@ def run_backend(
     settings: GuardrailsSettingsModel,
     str_direction: str,
     str_text: str,
+    bool_document: bool = False,
 ) -> tuple[float, tuple[str, ...]]:
     """
     Runs one provider backend for one check.
+
+    bool_document marks the text as a tool result rather than the caller's
+    prompt; Azure Prompt Shields reads it as a document. Bedrock's
+    PROMPT_ATTACK filter has no such distinction and reads it as input.
 
     Returns:
         (top honored score, fired categories).
@@ -462,7 +480,7 @@ def run_backend(
         return _run_mistral(check, settings, str_text)
     if str_backend == GUARDRAIL_BACKEND_AZURE_CONTENT_SAFETY:
         # Early return with Azure's answer.
-        return _run_azure(str_check, check, settings, str_text)
+        return _run_azure(str_check, check, settings, str_text, bool_document)
     if str_backend == GUARDRAIL_BACKEND_BEDROCK_GUARDRAILS:
         # Early return with Bedrock's answer.
         return _run_bedrock(str_check, check, settings, str_direction, str_text)

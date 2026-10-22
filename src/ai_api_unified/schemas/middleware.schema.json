@@ -527,7 +527,7 @@
     },
     "GuardrailModelCheckSettingsModel": {
       "additionalProperties": false,
-      "description": "A model-backed check: prompt_injection or harmful_content.\n\nAttributes:\n    enabled: False turns the check off.\n    backend: `auto` (OpenAI Moderation when OPENAI_API_KEY is set, else\n        the classifier), `classifier`, or `openai_moderation`.\n        prompt_injection accepts only `classifier` (and `auto`, which\n        resolves to it): Moderation does not detect injection.\n    threshold: Probability or score at or above which the check fires.\n    action: `block` or `flag`; None inherits the file-wide `on_fail`.\n    direction: Which side the check reads; default both.\n    categories: harmful_content only: Moderation category names to\n        honor; empty means every category the endpoint reports.",
+      "description": "A model-backed check: prompt_injection or harmful_content.\n\nAttributes:\n    enabled: False turns the check off.\n    backend: `auto` (OpenAI Moderation when OPENAI_API_KEY is set, else\n        the classifier), `classifier`, or `openai_moderation`.\n        prompt_injection accepts only `classifier` (and `auto`, which\n        resolves to it): Moderation does not detect injection.\n    threshold: Probability or score at or above which the check fires.\n    action: `block` or `flag`; None inherits the file-wide `on_fail`.\n    direction: Which side the check reads; default both.\n    categories: harmful_content only: Moderation category names to\n        honor; empty means every category the endpoint reports.\n    tool_results: prompt_injection only: how tool results are checked.",
       "properties": {
         "enabled": {
           "default": true,
@@ -559,9 +559,43 @@
           },
           "title": "Categories",
           "type": "array"
+        },
+        "tool_results": {
+          "$ref": "#/$defs/GuardrailToolResultsSettingsModel"
         }
       },
       "title": "GuardrailModelCheckSettingsModel",
+      "type": "object"
+    },
+    "GuardrailToolResultsSettingsModel": {
+      "additionalProperties": false,
+      "description": "prompt_injection on tool results: text a tool returned, which the caller\nsends back in a conversation as a tool-result message. Each new tool\nresult (one after the model's last turn) is checked on its own, with\ninstructions that treat text addressed to the assistant as suspect.\n\nAttributes:\n    enabled: False leaves tool results out of the injection check (the\n        other checks still read them).\n    threshold: Probability at or above which a tool result fires; None\n        uses the check's threshold.\n    action: `block` or `flag`; None uses the check's action, then the\n        file-wide `on_fail`.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "action": {
+          "default": null,
+          "title": "Action"
+        }
+      },
+      "title": "GuardrailToolResultsSettingsModel",
       "type": "object"
     },
     "GuardrailsSettingsModel": {

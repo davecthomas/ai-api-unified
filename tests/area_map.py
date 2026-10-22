@@ -241,6 +241,7 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_async_twins.py": ("completions", "core", "images", "voice"),
     "test_response_cache.py": ("middleware", "completions", "embeddings", "core"),
     "test_guardrails.py": ("middleware", "completions", "core"),
+    "test_guardrail_tool_results.py": ("middleware", "completions", "core"),
     "test_moderation_backends.py": ("middleware", "completions", "core"),
     "test_model_router_nonmock.py": (
         "completions",

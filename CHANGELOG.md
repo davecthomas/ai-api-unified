@@ -4,6 +4,33 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.28.0
+
+### Added
+
+- The prompt-injection check judges tool results by their own standard
+  (`prompt_injection.tool_results`). Each new tool result in a
+  conversation is checked alone, with a question that treats instructions
+  addressed to the assistant as suspect; Azure Prompt Shields reads it as a
+  document. `threshold` and `action` can differ from the check's.
+- `AiGuardrailBlockedError.source` (`request` or `tool_result`) and
+  `.tool_call_ids`, and `AITurnResult.guardrail_flagged_tool_calls`, so a
+  caller can drop or redact the results that fired and resend.
+- `scripts/try_tool_result_checks.py`: a safe evaluation that sends
+  harmless canaries and controls to the check's backend only.
+
+### Fixed
+
+- Tool results from Gemini (`function_response`), Bedrock (`toolResult`),
+  and the OpenAI Responses API (`function_call_output`) were not read by
+  any guardrail check: their text sits under keys the checks did not look
+  at. Every engine's shape is now read.
+
+### Changed
+
+- Tool results from earlier turns are no longer re-checked on every turn;
+  each is checked on the turn it is first sent.
+
 ## 3.27.0
 
 ### Changed

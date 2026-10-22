@@ -1391,6 +1391,35 @@ def _normalize_guardrail_action(value: Any) -> str | None:
     return str_action
 
 
+class GuardrailToolResultsSettingsModel(BaseModel):
+    """
+    prompt_injection on tool results: text a tool returned, which the caller
+    sends back in a conversation as a tool-result message. Each new tool
+    result (one after the model's last turn) is checked on its own, with
+    instructions that treat text addressed to the assistant as suspect.
+
+    Attributes:
+        enabled: False leaves tool results out of the injection check (the
+            other checks still read them).
+        threshold: Probability at or above which a tool result fires; None
+            uses the check's threshold.
+        action: `block` or `flag`; None uses the check's action, then the
+            file-wide `on_fail`.
+    """
+
+    model_config: ConfigDict = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    action: str | None = None
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _check_action(cls, value: Any) -> str | None:
+        # Normal return with the canonical action, or None.
+        return _normalize_guardrail_action(value)
+
+
 class GuardrailModelCheckSettingsModel(BaseModel):
     """
     A model-backed check: prompt_injection or harmful_content.
@@ -1406,6 +1435,7 @@ class GuardrailModelCheckSettingsModel(BaseModel):
         direction: Which side the check reads; default both.
         categories: harmful_content only: Moderation category names to
             honor; empty means every category the endpoint reports.
+        tool_results: prompt_injection only: how tool results are checked.
     """
 
     model_config: ConfigDict = ConfigDict(extra="forbid")
@@ -1416,6 +1446,9 @@ class GuardrailModelCheckSettingsModel(BaseModel):
     action: str | None = None
     direction: str = DIRECTION_INPUT_OUTPUT
     categories: list[str] = Field(default_factory=list)
+    tool_results: GuardrailToolResultsSettingsModel = Field(
+        default_factory=GuardrailToolResultsSettingsModel
+    )
 
     @field_validator("backend", mode="before")
     @classmethod
@@ -1643,6 +1676,11 @@ class GuardrailsSettingsModel(BaseModel):
         list_names: list[str] = [check.name for check in self.custom]
         if len(set(list_names)) != len(list_names):
             raise ValueError("custom check names must be unique")
+        if "tool_results" in self.harmful_content.model_fields_set:
+            raise ValueError(
+                "tool_results belongs to prompt_injection; harmful_content "
+                "already reads tool results with the rest of the request."
+            )
         if self.prompt_injection.backend not in FROZENSET_PROMPT_INJECTION_BACKENDS:
             raise ValueError(
                 f"prompt_injection cannot use {self.prompt_injection.backend}; it "

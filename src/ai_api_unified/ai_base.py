@@ -767,6 +767,8 @@ class AITurnResult(BaseModel):
     usd_saved: Decimal | None = None
     # Guardrail checks that flagged this call (input or output), by name.
     guardrail_flags: list[str] = Field(default_factory=list)
+    # Tool calls whose results a flagging check fired on, by id.
+    guardrail_flagged_tool_calls: list[str] = Field(default_factory=list)
 
 
 class AIStructuredOutputResult(BaseModel):
