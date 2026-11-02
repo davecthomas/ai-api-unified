@@ -7,71 +7,83 @@ tier candidate name a whole coding run instead of a single model call. The
 candidate form is `harness:<profile>/<inner-engine>:<inner-model>`, for
 example `harness:pi-lean/claude:claude-sonnet-5`.
 
-The router, fallback chain, cooldowns, model pin, per-call floors, and the
-request cost report treat a run the same way they treat any other
-completions call. The engine itself holds no state between calls: it reads
-its run identity from the call, asks two remote servers for what it needs,
-blocks until the run ends, and returns a result with a cost report.
-
-This engine exists to serve the meta-harness, a control plane that routes
+The engine exists to serve the meta-harness, a control plane that routes
 coding tasks to a harness-and-model combination and runs the harness in a
 sandbox. The meta-harness is the caller in every diagram below. Its own
 design document carries the whole-system sequences (task API, scheduler,
 gateway, console); this document stops at the library's boundary.
 
-The library never knows what program runs inside the sandbox. The profile
-name is an opaque string the engine passes along. The sandbox program (pi,
-or anything else) is owned by the meta-harness and speaks a small Run API.
+## The library's role
 
-## What this library adds
+1. **A stateless router behind one call.** One call in, one result out. No
+   server, no store, no background work, no data pushed anywhere.
+   Everything the library needs arrives with the call or comes from
+   `models.json`, loaded once per process.
+2. **A harness is an engine.** A harness candidate is routed like any
+   other: the router, the fallback chain, cooldowns, pins, floors, and the
+   cost ledger apply unchanged. The sandbox program is opaque. The library
+   speaks a small Run API and a lease API, nothing else.
+3. **The return value is the whole data contract.** Everything the library
+   learns about a call is on the result, on success and on failure. The
+   caller records what it wants from that. The library's logs and events
+   serve operators of the library and are not an interface.
+4. **Per-call control is `provider_options`, nothing else.** `model` (a
+   hard-coded harness and model), `route`, `route_floor`, `route_ceiling`,
+   `thinking`, `purpose`, and `harness_call_id`. Pinned means pinned: a pin
+   ignores route hints and never escalates. A policy that wants a different
+   mix, such as sending a pinned run's compaction calls to a cheap tier,
+   lives in the gateway as a caller of this library, not in the router.
+5. **State lives with whoever owns it.** Run state in the sandbox, leases in
+   the pool manager, spend counters in the gateway, run history in the
+   meta-harness. The library holds none of it, which is what lets the
+   caller share one client across every task.
+
+## What ships
+
+### PR A: the result contract
 
 | Change | Where |
 |---|---|
-| `harness` completions engine: registry entry, model-string parser, probe that delegates to the inner model's probe and checks `pool_url`, capability table that delegates to the inner model's, pool and Run API client | `completions/ai_harness_completions.py`, `ai_provider_registry.py`, `util/ai_model_probes.py` |
-| `harness_run_started` and `harness_run_finished` log events (run id, sandbox, candidate, tier), for the library's own telemetry | the engine |
-| The lease request carries the call's `session_id` (from the observability context) as a hint, so the pool manager can prefer a sandbox that already holds that session | the engine |
-| Reported-cost entry in the request cost ledger, so an engine can record dollars a gateway stated rather than tokens times a price | `middleware/request_cost.py` |
 | `AiFallbackReason.RUN_FAILED`, with no cooldown period | `ai_provider_exceptions.py`, `completions/ai_fallback_cooldown.py` |
+| Reported-dollar line items in the request cost ledger: an engine records the cost a remote stated, with that remote as the pricing source | `middleware/request_cost.py` |
+| The request cost report attached to the exception raised when every candidate fails, as `exception.cost` | `ai_base.py`, `ai_provider_exceptions.py` |
+| `route_confidence` on `AITurnResult` and `AIPromptResult` | `ai_base.py`, `completions/ai_router_completions.py` |
 | The fallback chain places the candidate index in the request-scoped observability context | `completions/ai_fallback_completions.py` |
+
+### PR B: the harness engine
+
+| Change | Where |
+|---|---|
+| Registry entry, model-string parser, probe that delegates to the inner model's probe and checks `pool_url`, capability table that delegates to the inner model's | `completions/ai_harness_completions.py`, `ai_provider_registry.py`, `util/ai_model_probes.py` |
+| Lease, run token, Run API client, event follower, usage collection, release | the engine |
+| `harness_run` summary on the result; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
 | `providers.harness` with `pool_url` and `gateway_url`; credentials stay in the environment | `ai_models_config.py`, `schemas/` |
 
-Later, optional: a cancel event on completions calls; a streaming form of
-`send_conversation` with typed events.
+### Later, each its own PR, when the caller needs it
 
-## Events and the boundary
+- A cancel event on completions calls, polled by engines (kill switch).
+- `send_conversation_streaming` with typed events, for token-by-token text
+  in a console. A candidate is committed at its first delta.
 
-The library and the meta-harness are loosely coupled and share no event
-data. Each keeps its own.
+### Not in scope, and why
 
-- The library's events (routing decisions, fallbacks, cooldowns, model
-  pins, cost, and the harness engine's run start and finish) stay in the
-  library's own log and telemetry output. The meta-harness does not read
-  them, and the library writes to no store of the caller's.
-- The contract across the boundary is the call itself: its arguments, its
-  return value, and its exceptions. Everything the meta-harness needs to
-  record about a routed run is on the result: `route_tier`,
-  `route_method`, `model_pin`, `provider_engine`, `model_name`, `thinking`,
-  `config_id`, `config_version`, and the `cost` report with one line per
-  attempt.
-- The meta-harness learns which sandbox serves a try from its own pool
-  manager's lease record, not from a library event.
-- Inside a run, the gateway returns the turn's usage and the run's running
-  total on every response. The harness reports those in its own run
-  events. The meta-harness never reads the gateway's event output.
-
-## Stickiness and caching
+- An event sink into the caller's store: rule 3.
+- Config injection into the factory: one `models.json` per process is the
+  model, and nothing needs more.
+- Harness profiles in `models.json`: the profile is the sandbox's business.
+- A library-managed tool loop: the harness owns it.
 
 ## Parties in the diagrams
 
 | Party | Owned by | Role |
 |---|---|---|
-| Caller | the calling system | In the meta-harness this is the dispatcher, run from a run workflow: it builds the client with `AIFactory`, renders the task spec as the latest user message, and passes `harness_call_id` in `provider_options`. The library does not care who calls it; any Python program with harness candidates in its `models.json` is a caller |
+| Caller | the meta-harness | The dispatcher, run from a run workflow: builds the client once with `AIFactory`, renders the task spec as the latest user message, passes `harness_call_id` in `provider_options` |
 | Router | this library | `AiRouterCompletions`: classifies the prompt, picks a tier, runs the tier's chain |
 | Chain | this library | `AiFallbackCompletions` for one tier: tries candidates in order, applies cooldowns, sums cost across tries |
 | Engine | this library | `AiHarnessCompletions`: one blocking call per run |
-| Pool | the calling system | Pool manager: leases sandboxes by run id |
-| Sandbox | the calling system | The harness server inside a leased sandbox: `POST /run`, `GET /events`, `GET /usage`, cancel |
-| Gateway | ai-api-unified-http | Where the sandbox program sends its model calls; outside these diagrams except where noted |
+| Pool | the meta-harness | Pool manager: leases sandboxes by run id |
+| Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `GET /events`, `GET /usage`, cancel |
+| Gateway | ai-api-unified-http | Where the sandbox program sends its model calls; outside these diagrams |
 
 Run id is `harness_call_id` plus the candidate index, so a retried call
 derives the same id and finds its run.
@@ -92,16 +104,14 @@ sequenceDiagram
     C->>R: send_conversation(system, messages, provider_options={harness_call_id})
     R->>K: classify(latest user message)
     K-->>R: tier "standard", confidence 0.82
-    Note over R: emits routed(route_tier, route_method, config_id)
     R->>F: send_conversation(...) on the "standard" chain
     F->>E: candidate 0: harness:pi-lean/claude:claude-sonnet-5
     Note over F,E: candidate index 0 placed in request context
     E->>E: run_id = harness_call_id + "/0"
     E->>P: GET lease(run_id)
     P-->>E: none
-    E->>P: POST lease(run_id, image="pi-lean", resources)
+    E->>P: POST lease(run_id, image="pi-lean", session_id hint, resources)
     P-->>E: sandbox address, lease TTL
-    Note over E: emits harness_run_started(run_id, sandbox, candidate, tier)
     E->>E: mint run token (run id, tags, pin=claude:claude-sonnet-5, cap, expiry)
     E->>S: POST /run (prompt, profile, limits, token)
     S-->>E: 202 run accepted
@@ -110,13 +120,13 @@ sequenceDiagram
     E->>S: GET /usage
     S-->>E: usd_total, turns, tokens
     E->>P: release lease(run_id)
-    E-->>F: AITurnResult(text=PR URL, finish=complete, cost=reported usd)
-    Note over F: ledger: one reported-cost entry, source=gateway, run_id
+    E-->>F: AITurnResult(text=PR URL, finish=complete, harness_run, cost=reported usd)
+    Note over F: ledger: one reported-cost line, call_id=run_id, source=gateway
     F-->>R: result
-    R-->>C: result (route_tier=standard, model_name=harness:pi-lean/..., cost)
+    R-->>C: result (route_tier, route_confidence, model_name, harness_run, cost)
 ```
 
-## Scenario 2: the first candidate has no sandbox; the second runs
+## Scenario 2: the first candidate has no sandbox, the second runs
 
 ```mermaid
 sequenceDiagram
@@ -144,7 +154,7 @@ sequenceDiagram
     Note over F: returns the result, with provider_engine and model_name naming the candidate that served
 ```
 
-## Scenario 3: the run fails on the task; the tier is exhausted; escalate
+## Scenario 3: the run fails on the task, the tier is exhausted, escalate
 
 ```mermaid
 sequenceDiagram
@@ -166,13 +176,33 @@ sequenceDiagram
     E-->>F1: raise (reason=RUN_FAILED)
     F1-->>R: tier exhausted (both tries' cost on the ledger)
     Note over R: on_exhausted = escalate: next tier up, never down
-    Note over R: emits tier_exhausted(direction=up)
     R->>F2: send on "complex"
     F2->>E: candidate 0: harness:pi-careful/claude:claude-opus-5-5
     E->>S: run ... run_finished(pr_opened)
     E-->>F2: result
     F2-->>R: result
     Note over R: request cost report sums all three runs
+```
+
+## Scenario 4: every candidate fails and the call raises
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant R as Router
+    participant F as Chain (complex)
+    participant E as Engine
+
+    R->>F: send on "complex" (top tier)
+    F->>E: candidate 0
+    E-->>F: raise (RUN_FAILED), cost attached
+    F->>E: candidate 1
+    E-->>F: raise (RUN_FAILED), cost attached
+    F-->>R: tier exhausted
+    Note over R: no tier above: the call fails
+    R-->>C: raise AiProviderRequestError with exception.cost = the full report
+    Note over C: every try is on exception.cost.calls, with run ids, reasons, and dollars
 ```
 
 ## Hard-coding a harness and model for one call
@@ -202,10 +232,9 @@ turn = client.send_conversation(
   its own configured candidates in order, so fallback still applies.
 - The `allow` and `deny` lists in `models.json` still apply; a denied pair
   raises `ValueError` before any lease is taken.
-- The result and every event carry `route_method = model_pin` and
-  `model_pin = <the pair>`, so pinned runs are visible in metering.
+- The result carries `route_method = model_pin` and `model_pin = <pair>`.
 
-## Scenario 4: a follow-up pinned to the original candidate
+## Scenario 5: a follow-up pinned to the original candidate
 
 ```mermaid
 sequenceDiagram
@@ -222,8 +251,8 @@ sequenceDiagram
     Note over R: pinned: skip classifier, ignore route/route_floor, never escalate
     R->>F: send on the tier that holds the pinned candidate
     F->>E: the pinned candidate only
-    E->>P: lease(new_id/0, "pi-lean")
-    P-->>E: sandbox
+    E->>P: lease(new_id/0, "pi-lean", session_id hint)
+    P-->>E: sandbox (the warm one for this session, if the pool kept it)
     E->>S: POST /run (prompt = follow-up, session = restored history, token)
     S-->>E: ... run_finished
     E-->>F: result (route_method=model_pin, model_pin=harness:pi-lean/...)
@@ -231,7 +260,7 @@ sequenceDiagram
     R-->>C: result
 ```
 
-## Scenario 5: the caller's process dies mid-run and retries
+## Scenario 6: the caller's process dies mid-run and retries
 
 ```mermaid
 sequenceDiagram
@@ -259,7 +288,7 @@ sequenceDiagram
     E-->>F: result with the run's full reported cost
 ```
 
-## Scenario 6: the lease TTL passes; the engine cancels and raises TIMEOUT
+## Scenario 7: the lease TTL passes, the engine cancels and raises TIMEOUT
 
 ```mermaid
 sequenceDiagram
@@ -280,7 +309,7 @@ sequenceDiagram
     Note over F: TIMEOUT in fallback_on means next candidate, otherwise the call fails with the cost so far
 ```
 
-## Scenario 7: startup check of a harness candidate
+## Scenario 8: startup check of a harness candidate
 
 ```mermaid
 sequenceDiagram
@@ -302,6 +331,24 @@ sequenceDiagram
     Note over MC: an unknown inner model or an unreachable pool is reported here, not at the first run
 ```
 
+## What the caller can collect
+
+Every call returns enough to record a task's routing, attempts, and cost.
+The caller reads these fields from the returned object (or from
+`exception.cost` when the call raises) and writes them as its own records.
+
+| Source | Fields | Useful for |
+|---|---|---|
+| Result (`AITurnResult`, `AIPromptResult`) | `route_tier`, `route_method` (classifier, default, floor, override, low_confidence, model_pin), `route_confidence`, `model_pin`, `provider`, `provider_engine`, `model_name`, `thinking` (requested and applied), `usage`, `cache_hit`, `usd_saved`, `guardrail_flags`, `harness_run` | Which tier and candidate served, and why; the run's end reason, turns, and PR |
+| `result.cost` (`AIRequestCostReport`) | `request_id`, `status`, `started_at_utc`, `elapsed_ms`, `caller_id`, `session_id`, `workflow_id`, `tags` (includes `config_id`, `config_version`, and caller tags such as `run_id`), `served_by_*`, `total_usd`, `classifier_usd`, `wasted_usd`, `billed_calls`, `failed_calls` | Cost per task, cost of failed tries, classifier overhead |
+| `result.cost.calls[]` (one line per provider call or run) | `call_id` (the run id for a harness line), `role`, `provider_engine`, `model`, `route_tier`, `route_method`, `outcome`, `error_type`, `fallback_reason`, `served`, `elapsed_ms`, token counts, `usd_cost`, `pricing_source` | Every attempt in order: which candidate failed, why, how long, what it cost |
+| `preview_route()` (`AIRoutePreview`) | `tier`, `method`, `confidence`, `engine`, `model`, `thinking`, `input_tokens`, `usd_input`, `usd_max`, `classifier_usd`, `config_id` | Spend cap before a run, routing dry runs |
+
+Read from the returned object only. `last_decision`, `last_tier`, and
+`last_request_cost` on the client hold the most recent call on that
+client; with one client shared across concurrent tasks they may belong to
+another task.
+
 ## Context management
 
 Context has two layers, and the library owns only the outer one.
@@ -320,23 +367,14 @@ compaction. It forwards what the caller sends:
   to the inner model, so a caller can size a task spec or a restored
   session against the window the run will have.
 
-**Inner layer: the run's own context.** The sandbox program (pi) owns the
+**Inner layer: the run's own context.** The sandbox program owns the
 growing history, tool results, and compaction. The library supports it
-from the gateway side, per turn:
-
-- `count_tokens` and `max_context_tokens` for the pinned model, so the
-  harness can decide when to compact.
-- Prompt cache hints (`AIPromptCacheHint`) so the stable prefix (system
-  prompt, task spec, tool schemas) is reused across turns.
-- Tool-result checks (prompt injection, guardrails) on what enters the
-  context, raising with the offending tool-call ids.
-- A `route: trivial` hint on compaction and other auxiliary calls, so
-  summarization never runs on the task's tier (the gateway turns a pinned
-  call with a `route` hint into a banded one).
-
-The compaction policy itself (threshold, what is pinned verbatim, summary
-template) is a harness profile setting in the meta-harness design, not a
-library concern.
+from the gateway side, per turn: `count_tokens` and `max_context_tokens`
+for the pinned model; prompt cache hints for the stable prefix; tool-result
+checks (prompt injection, guardrails) on what enters the context; and the
+`route` hint on compaction calls, which the gateway maps to a band. The
+compaction policy itself is a harness profile setting in the meta-harness
+design.
 
 ## Stickiness and caching
 
@@ -355,6 +393,7 @@ library concern.
 - It never calls a model. The classifier call happens in the router before
   the engine is chosen; the sandbox program's model calls go to the gateway.
 - It never streams progress through the router. Progress is read from the
-  sandbox's event stream by the calling system.
+  sandbox's event stream by the meta-harness.
 - It never holds a run between calls. Everything it needs arrives with the
   call or is asked of the pool.
+- It never writes to the caller's stores or reads the caller's events.
