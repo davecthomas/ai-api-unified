@@ -70,7 +70,7 @@ would move it to the back for every concurrent task.
 |---|---|
 | Registry entry, model-string parser, probe that delegates to the inner model's probe and checks `pool_url`, capability table that delegates to the inner model's | `completions/ai_harness_completions.py`, `ai_provider_registry.py`, `util/ai_model_probes.py` |
 | Lease, carrying `harness_session_id`. Run token, minted and revoked through the HTTP Gateway. Run API client: `POST /run` for a new session, `POST /followup` for a kept or restored one. Event follower, usage collection, release. | the engine |
-| `harness_run` summary on the result, with `cache_hit_rate`; the run's token totals, cached and cache-write tokens included, in `result.usage`; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
+| `harness_run` summary on the result, with `cache_hit_rate`; the run's token totals (`cached_input_tokens`, `cache_write_5m_tokens` and `cache_write_1h_tokens` included) in `result.usage`; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
 | `providers.harness` with `pool_url` and `gateway_url`; the pool and HTTP Gateway API keys stay in the environment | `ai_models_config.py`, `schemas/` |
 
 ### Later PRs, when the caller needs them
@@ -499,8 +499,9 @@ and the repeated prefix at the cached rate, about a tenth of it on Anthropic.
   cached point. The system prompt and tool list stay fixed for a run, with no
   timestamps, run ids or reordered tools. A compaction rewrites the history,
   so the turn after it writes a new cache once.
-- **Metering reports the hit rate.** The HTTP Gateway returns `cached_input_tokens`
-  and the cache-write counts in every turn's `usage`. The model client sums
+- **Metering reports the hit rate.** The HTTP Gateway returns `cached_input_tokens`,
+  `cache_write_5m_tokens` and `cache_write_1h_tokens` in every turn's `usage`
+  (the two write counts bill at different rates). The model client sums
   them, the sandbox's `GET /usage` reports the totals, and the engine puts
   them in `result.usage`, along with `harness_run.cache_hit_rate`, which is
   cached input tokens divided by input tokens. The meta-harness meters it per
