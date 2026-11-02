@@ -45,7 +45,7 @@ HTTP Gateway, console). This document covers only the library's side.
 | Change | Where |
 |---|---|
 | `AiFallbackReason.RUN_FAILED`, with no cooldown period | `ai_provider_exceptions.py`, `completions/ai_fallback_cooldown.py` |
-| Reported-dollar line items in the request cost ledger: an engine records the cost a remote stated, with that remote as the pricing source | `middleware/request_cost.py` |
+| Reported-dollar line items in the request cost ledger: an engine records the cost a remote service reported, with that service as the pricing source | `middleware/request_cost.py` |
 | The request cost report attached to the exception raised when every candidate fails, as `exception.cost` | `ai_base.py`, `ai_provider_exceptions.py` |
 | `route_confidence` on `AITurnResult` and `AIPromptResult` | `ai_base.py`, `completions/ai_router_completions.py` |
 | The fallback chain places the candidate index in the request-scoped observability context | `completions/ai_fallback_completions.py` |
@@ -109,6 +109,40 @@ HTTP Gateway service, and external model providers.
 
 Run id is `harness_call_id` plus the candidate index, so a retried call
 derives the same id and finds its run.
+
+## Why the sandbox runs pi
+
+This library makes one model call and returns the result. A coding run also
+needs an agent loop, and this library does not own one (see Out of scope).
+pi supplies it:
+
+- Tools that act on the sandbox: `read`, `write`, `edit`, `bash`, `grep`,
+  `find` and `ls`, with output truncation and file edits applied in order.
+- The loop: call the model, run the tool calls in its reply, send the
+  results back, and repeat until the model stops.
+- Session state: the transcript in a JSONL file, follow-ups, steering
+  during a run, abort, and forks.
+- Compaction: when the context window fills, pi summarizes older turns so a
+  long run can continue.
+- The coding-agent system prompt and the tool descriptions.
+
+pi also has its own multi-provider model client, `ModelRuntime`, which
+overlaps with this library. `getModel(provider, id)` looks up a catalog
+entry: provider, id, wire API, base URL, context window and prices.
+`createAgentSession({ model })` then sends every turn to that one model
+through the provider's `streamSimple`. pi does not route between tiers or
+fall back to another provider. Its virtual models pick a model per request,
+and this design does not use them.
+
+The sandbox turns pi's model layer off. It creates the `ModelRuntime` with
+no built-in credentials and registers one provider, the model client, whose
+`streamSimple` calls the HTTP Gateway. The HTTP Gateway picks the real model
+through this library.
+
+pi decides what to do next in the sandbox. This library decides which model
+answers each turn, falls back when a call fails, and records the cost. Any
+harness whose model calls can be sent to the HTTP Gateway the same way can
+run under a `harness:<profile>` candidate.
 
 ## Scenario 1: a routed run that succeeds
 
@@ -523,7 +557,7 @@ request bytes and no model cost. A provider's stored conversation also
 cannot move to another provider, and the fallback chain retries a failed turn
 on another provider by sending the whole history again.
 
-## Stickiness and caching
+## Sandbox reuse and config loading
 
 - Within a run, the lease binds the run id to one sandbox; a retried call
   re-attaches to it. Across follow-ups the default is a fresh sandbox with
