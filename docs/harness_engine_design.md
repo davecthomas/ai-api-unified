@@ -104,7 +104,7 @@ HTTP Gateway service, and external model providers.
 | Chain | this library | `AiFallbackCompletions` for one tier: tries candidates in order, applies cooldowns, sums cost across tries |
 | harness engine | this library | `AiHarnessCompletions`: one blocking call per run |
 | Pool manager | the meta-harness | Leases sandboxes by run id |
-| Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `POST /followup`, `GET /events`, `GET /usage`, cancel |
+| Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `POST /followup`, `GET /events`, `GET /usage`, cancel. It runs pi in its own process through pi's TypeScript SDK. pi has no network API, so the engine reaches pi only through the Run API |
 | HTTP Gateway | ai-api-unified-http | Mints and revokes run tokens for the engine, and keeps the token registry. Receives every model call the sandbox program makes |
 
 Run id is `harness_call_id` plus the candidate index, so a retried call
@@ -451,7 +451,9 @@ supports it through the HTTP Gateway with:
 - `count_tokens` and `max_context_tokens` for the pinned model
 - prompt cache hints for the stable prefix and the growing history (see Prompt caching below)
 - tool-result checks (prompt injection, guardrails) on what enters the context
-- the `route` hint on compaction calls, which the HTTP Gateway maps to a band
+- the `route` hint on compaction calls, which the HTTP Gateway maps to a band.
+  The model client makes pi's compaction call itself from pi's
+  `session_before_compact` hook and sets `purpose: compaction` on it
 
 The compaction policy itself is a harness profile setting in the meta-harness
 design.
@@ -460,7 +462,7 @@ design.
 
 | When | Where the conversation is | Owner |
 |---|---|---|
-| During a run | pi's session directory in the sandbox, written after every turn | the sandbox (harness server) |
+| During a run | pi's session file (JSONL) in the sandbox's session directory, appended as pi records each message and tool result | the sandbox (harness server) |
 | Between runs | A copy of that directory in the pool manager's Cloud Storage bucket, stored under `harness_session_id` when the run ends | the pool manager |
 | Between runs, briefly | The finished sandbox itself, kept warm for the session for up to `sticky_window` (default 10 minutes) | the pool manager |
 | On each model turn | The whole history (system prompt, every earlier turn, tool calls and results), which pi's model client resends to the HTTP Gateway on every turn. The HTTP Gateway forwards it to the provider and keeps no copy | nobody |
@@ -481,10 +483,13 @@ Every turn of a run sends the whole history, so caching sets most of a
 turn's cost. With a warm cache, a turn bills its new tokens at the input rate
 and the repeated prefix at the cached rate, about a tenth of it on Anthropic.
 
-- **Every turn sends the hint.** pi's model client sets the HTTP Gateway's
-  `prompt_cache` field on every conversation turn:
-  `{"retention": "extended", "key": <harness_session_id>}`. The library maps
-  it to each provider's mechanism (`AIPromptCacheHint`). On Anthropic it also
+- **Every turn sends the hint.** pi passes its own cache settings
+  (`cacheRetention`, `sessionId`) to the model client on every call, and the
+  sandbox sets `PI_CACHE_RETENTION=long`. The model client maps that to the
+  HTTP Gateway's `prompt_cache` field:
+  `{"retention": "extended", "key": <harness_session_id>}`. The compaction
+  call omits the field, because no later call reuses its prompt. The library maps the field to each
+  provider's mechanism (`AIPromptCacheHint`). On Anthropic it also
   caches the growing history, so turn N reads turns 1 to N-1 from cache.
 - **The extended lifetime.** A coding run often waits more than 5 minutes
   between turns while tests or builds run, and the default cache would expire
@@ -492,6 +497,10 @@ and the repeated prefix at the cached rate, about a tenth of it on Anthropic.
   24 hours on OpenAI. Anthropic and Bedrock bill a cache write at 2 times the
   input rate on the extended lifetime, against 1.25 times on the default, so
   one cache read after a gap of more than 5 minutes covers the difference.
+- **pi's cache warming stays off.** pi can send refresh requests to keep an
+  idle cache warm, and each one is a billed call through the HTTP Gateway.
+  The sandbox sets `cacheWarming` to `off` and the model client declares no
+  cache lifetime on its model. The 1-hour lifetime covers the gaps between turns.
 - **The key.** `harness_session_id` as the key sends every turn of a session
   to the same OpenAI cache. Other engines ignore the key. Gemini caches
   repeated prefixes on its own.
