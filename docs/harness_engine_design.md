@@ -29,7 +29,8 @@ HTTP Gateway, console); this document stops at the library's boundary.
    serve operators of the library and are not an interface.
 4. **The caller controls each call through `provider_options` only.** `model` (a
    hard-coded harness and model), `route`, `route_floor`, `route_ceiling`,
-   `thinking`, `purpose`, and `harness_call_id`. A pin ignores route hints
+   `thinking`, `purpose`, `harness_call_id`, and `harness_session_id`. A pin
+   ignores route hints
    and never escalates. Any other rule, such as sending a pinned run's
    compaction calls to a cheap tier, belongs in the HTTP Gateway, which calls
    this library, and not in the router.
@@ -68,7 +69,7 @@ would move it to the back for every concurrent task.
 | Change | Where |
 |---|---|
 | Registry entry, model-string parser, probe that delegates to the inner model's probe and checks `pool_url`, capability table that delegates to the inner model's | `completions/ai_harness_completions.py`, `ai_provider_registry.py`, `util/ai_model_probes.py` |
-| Lease, run token, Run API client, event follower, usage collection, release | the engine |
+| Lease (carrying `harness_session_id`), run token, Run API client (`POST /run` for a new session, `POST /followup` for a kept or restored one), event follower, usage collection, release | the engine |
 | `harness_run` summary on the result; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
 | `providers.harness` with `pool_url` and `gateway_url`; credentials stay in the environment | `ai_models_config.py`, `schemas/` |
 
@@ -103,7 +104,7 @@ external model providers.
 | Chain | this library | `AiFallbackCompletions` for one tier: tries candidates in order, applies cooldowns, sums cost across tries |
 | harness engine | this library | `AiHarnessCompletions`: one blocking call per run |
 | Pool manager | the meta-harness | Leases sandboxes by run id |
-| Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `GET /events`, `GET /usage`, cancel |
+| Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `POST /followup`, `GET /events`, `GET /usage`, cancel |
 | HTTP Gateway | ai-api-unified-http | Where the sandbox program sends its model calls; outside these diagrams |
 
 Run id is `harness_call_id` plus the candidate index, so a retried call
@@ -139,8 +140,8 @@ sequenceDiagram
     E->>E: run_id = harness_call_id + "/0"
     E->>P: GET lease(run_id)
     P-->>E: none
-    E->>P: POST lease(run_id, image="pi-lean", session_id hint, resources)
-    P-->>E: sandbox address, lease TTL
+    E->>P: POST lease(run_id, image="pi-lean", harness_session_id, resources)
+    P-->>E: sandbox address, lease TTL, session state new
     E->>E: mint run token (run id, tags, pin=claude:claude-sonnet-5, cap, expiry)
     E->>S: POST /run (prompt, profile, limits, token)
     S-->>E: 202 run accepted
@@ -295,14 +296,16 @@ sequenceDiagram
     participant S as Sandbox: harness server + pi
     end
 
-    C->>R: send_conversation(messages incl. restored session, provider_options={model: "harness:pi-lean/claude:claude-sonnet-5", harness_call_id: new id})
+    C->>R: send_conversation(review feedback as the latest user message, provider_options={model: "harness:pi-lean/claude:claude-sonnet-5", harness_call_id: new id, harness_session_id: same id as the first run})
     Note over R: the reserved model key is removed and the call runs in model_pin_scope
     Note over R: pinned: skip classifier, ignore route/route_floor, never escalate
     R->>F: send on the tier that holds the pinned candidate
     F->>E: the pinned candidate only
-    E->>P: lease(new_id/0, "pi-lean", session_id hint)
-    P-->>E: sandbox (the warm one for this session, if the pool kept it)
-    E->>S: POST /run (prompt = follow-up, session = restored history, token)
+    E->>P: lease(new_id/0, "pi-lean", harness_session_id)
+    Note over P: the warm sandbox that kept this session, else a fresh one with the session directory copied in from storage
+    P-->>E: sandbox, session state kept or restored
+    E->>S: POST /followup (review feedback, token)
+    Note over S: pi switches to the stored session and continues it
     S-->>E: ... run_finished
     E-->>F: result (route_method=model_pin, model_pin=harness:pi-lean/...)
     F-->>R: result
@@ -425,12 +428,12 @@ compaction. It forwards what the caller sends:
   message, so it must stand on its own: title, description, acceptance
   checks, repo, file hints. Instructions go in the system prompt, which the
   classifier ignores.
-- The message history, when present, is a restored session for a follow-up.
-  The engine passes it to the Run API as the session to resume; the sandbox
-  owns it from then on. The library never trims it.
+- A follow-up sends only the new input (review comments, failed checks)
+  and the `harness_session_id` of the session to continue. The conversation
+  itself never passes through the library.
 - `max_context_tokens` and `count_tokens` on a harness candidate delegate
-  to the inner model, so a caller can size a task spec or a restored
-  session against the window the run will have.
+  to the inner model, so a caller can size a task spec against the window
+  the run will have.
 
 **Inner layer: the run's own context.** The sandbox program owns the
 growing history, tool results, and compaction. On every turn, the library
@@ -444,12 +447,28 @@ supports it through the HTTP Gateway with:
 The compaction policy itself is a harness profile setting in the meta-harness
 design.
 
+### Where context lives
+
+| When | Where the conversation is | Owner |
+|---|---|---|
+| During a run | pi's session directory in the sandbox, written after every turn | the sandbox (harness server) |
+| Between runs | A copy of that directory in the pool manager's Cloud Storage bucket, stored under `harness_session_id` when the sandbox drains | the pool manager |
+| Between runs, briefly | The finished sandbox itself, kept warm for the session for up to `sticky_window` (default 10 minutes) | the pool manager |
+| On each model turn | The request pi's model client sends to the HTTP Gateway, which forwards it and keeps no copy | nobody; the HTTP Gateway is stateless per turn |
+| In this library | Nothing. A call sends the new input and `harness_session_id`, never the conversation | — |
+
+The meta-harness chooses `harness_session_id`; one id per task fits, so every
+follow-up on a task's pull request continues the same conversation. The
+meta-harness event store also holds each turn's text and tool calls, as a
+record for the console and metering. A run never resumes from it.
+
 ## Stickiness and caching
 
 - Within a run, the lease binds the run id to one sandbox; a retried call
   re-attaches to it. Across follow-ups the default is a fresh sandbox with
-  the restored session directory; the `session_id` lease hint lets the pool
-  manager keep a finished sandbox warm for that session as its own policy.
+  the restored session directory. `harness_session_id` in the lease request
+  lets the pool manager keep a finished sandbox warm for that session, as its
+  own policy, and hand it back to the session's next follow-up.
 - The library reads `models.json` once per process per path, mtime, and
   environment, and reads settings only when the factory builds a client.
   Nothing opens a file per request. The caller builds the router client
