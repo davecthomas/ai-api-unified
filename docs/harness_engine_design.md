@@ -105,7 +105,9 @@ sequenceDiagram
     participant CD as Cooldown registry
 
     F->>E: candidate 0: harness:pi-lean/claude:claude-sonnet-5
-    E->>P: GET lease(call/0) -> none; POST lease(call/0, "pi-lean")
+    E->>P: GET lease(call/0)
+    P-->>E: none
+    E->>P: POST lease(call/0, "pi-lean")
     P-->>E: 503 no capacity within ready_timeout
     E-->>F: raise AiProviderRequestError(reason=UNAVAILABLE)
     F->>CD: bench candidate 0 for 30 s (reason UNAVAILABLE)
@@ -116,7 +118,7 @@ sequenceDiagram
     E->>S: POST /run ... GET /events ... run_finished
     E-->>F: result with reported cost
     Note over F: request total = cost of try 0 (zero) + try 1
-    F-->>F: return result; provider_engine/model name the candidate that served
+    Note over F: returns the result, with provider_engine and model_name naming the candidate that served
 ```
 
 ## Scenario 3: the run fails on the task; the tier is exhausted; escalate
@@ -220,8 +222,9 @@ sequenceDiagram
     C->>F: call (harness_call_id = X)
     F->>E: candidate 0
     E->>P: lease(X/0) -> sandbox A
-    E->>S: POST /run; GET /events ...
-    Note over C,E: caller process exits; sandbox A keeps running
+    E->>S: POST /run
+    E->>S: GET /events ...
+    Note over C,E: caller process exits, sandbox A keeps running
     C->>F: same call again (harness_call_id = X)
     F->>E: candidate 0
     E->>P: GET lease(X/0)
@@ -244,13 +247,14 @@ sequenceDiagram
     participant P as Pool
 
     F->>E: candidate 0, request_timeout_seconds = lease TTL
-    E->>S: POST /run; GET /events
+    E->>S: POST /run
+    E->>S: GET /events
     Note over E: deadline passes with no run_finished
     E->>S: POST /cancel
     S-->>E: run_canceled, partial usage
     E->>P: release lease
     E-->>F: raise (reason=TIMEOUT), partial cost attached
-    Note over F: TIMEOUT in fallback_on -> next candidate; otherwise the call fails with the cost so far
+    Note over F: TIMEOUT in fallback_on means next candidate, otherwise the call fails with the cost so far
 ```
 
 ## Scenario 7: startup check of a harness candidate
