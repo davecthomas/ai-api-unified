@@ -35,8 +35,48 @@ or anything else) is owned by the meta-harness and speaks a small Run API.
 | The fallback chain places the candidate index in the request-scoped observability context | `completions/ai_fallback_completions.py` |
 | `providers.harness` with `pool_url` and `gateway_url`; credentials stay in the environment | `ai_models_config.py`, `schemas/` |
 
+Also required, as its own PR: a structured event sink (see Events below).
+
 Later, optional: a cancel event on completions calls; a streaming form of
 `send_conversation` with typed events.
+
+## Events
+
+The meta-harness keeps an event store as its system of record. Its console,
+metering, analyzer, and alerts all read from the store. This library is one
+of the producers. Today the library emits its events only as Python log
+records, spread over several loggers (router, fallback, model pin,
+observability, metrics, cost), with event-name fields that differ by module.
+A caller can capture them only by attaching log handlers and parsing
+`extra` fields. ADR-0016 deferred a structured sink to a later phase. The
+meta-harness needs it now.
+
+**Addition: one event envelope and a pluggable sink.**
+
+- `AIEvent`: `event_id` (UUID, for dedupe), `event_type`, `time_utc`,
+  `request_id`, `seq` (order within the request), `config_id`,
+  `config_version`, `tags` (the observability context: `run_id`,
+  `session_id`, `caller_id`, `purpose`, and any caller tags), and a typed
+  `payload` per event type.
+- Event types, covering what the library emits today plus the harness
+  engine: `routed`, `classifier_failed`, `tier_exhausted`, `model_pin`,
+  `fallback`, `cooldown_started`, `provider_call`, `guardrail_flagged`,
+  `cost`, `request_cost`, `model_check`, `harness_run_started`,
+  `harness_run_finished`.
+- `AIEventSink`: one method, `emit(event)`. The caller registers sinks on the
+  factory or in `models.json`. The default sink is today's log output, so
+  existing log lines do not change.
+- Fail-open (ADR-0012): a sink that raises is logged and skipped, never
+  fails a call. The sink owns buffering. The library ships a queueing
+  wrapper that hands events to a background thread so a slow store never
+  adds latency to a call.
+- The library does no aggregation and keeps no events (ADR-0013, ADR-0014).
+
+The meta-harness registers a sink that writes to its store. The gateway
+does the same for the model calls inside a run, so every event about a
+run, from either process, lands in one store keyed by `run_id`.
+
+## Stickiness and caching
 
 ## Parties in the diagrams
 
