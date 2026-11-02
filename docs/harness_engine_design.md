@@ -70,7 +70,7 @@ would move it to the back for every concurrent task.
 |---|---|
 | Registry entry, model-string parser, probe that delegates to the inner model's probe and checks `pool_url`, capability table that delegates to the inner model's | `completions/ai_harness_completions.py`, `ai_provider_registry.py`, `util/ai_model_probes.py` |
 | Lease, carrying `harness_session_id`. Run token, minted and revoked through the HTTP Gateway. Run API client: `POST /run` for a new session, `POST /followup` for a kept or restored one. Event follower, usage collection, release. | the engine |
-| `harness_run` summary on the result; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
+| `harness_run` summary on the result, with `cache_hit_rate`; the run's token totals, cached and cache-write tokens included, in `result.usage`; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
 | `providers.harness` with `pool_url` and `gateway_url`; the pool and HTTP Gateway API keys stay in the environment | `ai_models_config.py`, `schemas/` |
 
 ### Later PRs, when the caller needs them
@@ -416,7 +416,7 @@ The caller reads these fields from the returned object (or from
 
 | Source | Fields | Useful for |
 |---|---|---|
-| Result (`AITurnResult`, `AIPromptResult`) | `route_tier`, `route_method` (classifier, default, floor, override, low_confidence, model_pin), `route_confidence`, `model_pin`, `provider`, `provider_engine`, `model_name`, `thinking` (requested and applied), `usage`, `cache_hit`, `usd_saved`, `guardrail_flags`, `harness_run` | Which tier and candidate served, and why; the run's end reason, turns, and PR |
+| Result (`AITurnResult`, `AIPromptResult`) | `route_tier`, `route_method` (classifier, default, floor, override, low_confidence, model_pin), `route_confidence`, `model_pin`, `provider`, `provider_engine`, `model_name`, `thinking` (requested and applied), `usage`, `cache_hit`, `usd_saved`, `guardrail_flags`, `harness_run` (run id, sandbox id, profile, end reason, turns, PR URL, elapsed time, `cache_hit_rate`) | Which tier and candidate served, and why; the run's end reason, turns, PR, and cache hit rate |
 | `result.cost` (`AIRequestCostReport`) | `request_id`, `status`, `started_at_utc`, `elapsed_ms`, `caller_id`, `session_id`, `workflow_id`, `tags` (includes `config_id`, `config_version`, and caller tags such as `run_id`), `served_by_*`, `total_usd`, `classifier_usd`, `wasted_usd`, `billed_calls`, `failed_calls` | Cost per task, cost of failed tries, classifier overhead |
 | `result.cost.calls[]` (one line per provider call or run) | `call_id` (the run id for a harness line), `role`, `provider_engine`, `model`, `route_tier`, `route_method`, `outcome`, `error_type`, `fallback_reason`, `served`, `elapsed_ms`, token counts, `usd_cost`, `pricing_source` | Every attempt in order: which candidate failed, why, how long, what it cost |
 | `preview_route()` (`AIRoutePreview`) | `tier`, `method`, `confidence`, `engine`, `model`, `thinking`, `input_tokens`, `usd_input`, `usd_max`, `classifier_usd`, `config_id` | Spend cap before a run, routing dry runs |
@@ -449,7 +449,7 @@ growing history, tool results, and compaction. On every turn, the library
 supports it through the HTTP Gateway with:
 
 - `count_tokens` and `max_context_tokens` for the pinned model
-- prompt cache hints for the stable prefix
+- prompt cache hints for the stable prefix and the growing history (see Prompt caching below)
 - tool-result checks (prompt injection, guardrails) on what enters the context
 - the `route` hint on compaction calls, which the HTTP Gateway maps to a band
 
@@ -466,15 +466,53 @@ design.
 | On each model turn | The whole history (system prompt, every earlier turn, tool calls and results), which pi's model client resends to the HTTP Gateway on every turn. The HTTP Gateway forwards it to the provider and keeps no copy | nobody |
 | In this library | Nothing. A call sends the new input and `harness_session_id`, never the conversation | — |
 
-Resending the whole history every turn costs less than its size suggests. The
-prompt cache hint lets the provider bill the unchanged prefix at its cached
-rate, and compaction keeps the history under the model's window (see the
-inner layer above).
+Resending the whole history every turn costs less than its size suggests:
+prompt caching bills the unchanged prefix at the cached rate, and compaction
+keeps the history under the model's window.
 
 The meta-harness chooses `harness_session_id`; one id per task fits, so every
 follow-up on a task's pull request continues the same conversation. The
 meta-harness event store also holds each turn's text and tool calls, as a
 record for the console and metering. A run never resumes from it.
+
+### Prompt caching
+
+Every turn of a run sends the whole history, so caching sets most of a
+turn's cost. With a warm cache, a turn bills its new tokens at the input rate
+and the repeated prefix at the cached rate, about a tenth of it on Anthropic.
+
+- **Every turn sends the hint.** pi's model client sets the HTTP Gateway's
+  `prompt_cache` field on every conversation turn:
+  `{"retention": "extended", "key": <harness_session_id>}`. The library maps
+  it to each provider's mechanism (`AIPromptCacheHint`). On Anthropic it also
+  caches the growing history, so turn N reads turns 1 to N-1 from cache.
+- **The extended lifetime.** A coding run often waits more than 5 minutes
+  between turns while tests or builds run, and the default cache would expire
+  in that gap. `extended` asks for 1 hour on Anthropic and Bedrock and
+  24 hours on OpenAI. Anthropic and Bedrock bill a cache write at 2 times the
+  input rate on the extended lifetime, against 1.25 times on the default, so
+  one cache read after a gap of more than 5 minutes covers the difference.
+- **The key.** `harness_session_id` as the key sends every turn of a session
+  to the same OpenAI cache. Other engines ignore the key. Gemini caches
+  repeated prefixes on its own.
+- **A byte-identical prefix.** A cache hit needs the same bytes up to the
+  cached point. The system prompt and tool list stay fixed for a run, with no
+  timestamps, run ids or reordered tools. A compaction rewrites the history,
+  so the turn after it writes a new cache once.
+- **Metering reports the hit rate.** The HTTP Gateway returns `cached_input_tokens`
+  and the cache-write counts in every turn's `usage`. The model client sums
+  them, the sandbox's `GET /usage` reports the totals, and the engine puts
+  them in `result.usage`, along with `harness_run.cache_hit_rate`, which is
+  cached input tokens divided by input tokens. The meta-harness meters it per
+  run, profile and model. A low rate means something in the prefix changes
+  between turns.
+
+The library does not use the providers' server-side conversation state
+(OpenAI's `previous_response_id`, Gemini's `previous_interaction_id`). A
+turn sent that way still bills the earlier turns as input, so it saves
+request bytes and no model cost. A provider's stored conversation also
+cannot move to another provider, and the fallback chain retries a failed turn
+on another provider with the history in hand.
 
 ## Stickiness and caching
 
