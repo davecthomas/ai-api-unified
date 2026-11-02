@@ -150,6 +150,36 @@ sequenceDiagram
     Note over R: request cost report sums all three runs
 ```
 
+## Hard-coding a harness and model for one call
+
+The caller can name the harness and model for a single call and bypass
+routing. This exists today for every engine and needs no change for
+`harness` candidates:
+
+```python
+turn = client.send_conversation(
+    system_prompt, messages,
+    provider_options={"model": "harness:pi-careful/claude:claude-opus-5-5",
+                      "harness_call_id": call_id},
+)
+```
+
+- `provider_options["model"]` is a reserved key (as is `model=` on
+  `send_prompt_with_result`). The library removes it before the request
+  reaches the engine and runs the call inside `model_pin_scope`.
+- The call skips the classifier and ignores `route`, `route_floor`, and
+  `route_ceiling`. It never escalates to another tier.
+- The pair does not have to be in `models.json`. On a router it runs on the
+  chain of the tier that holds it, else on the default chain; a pair outside
+  the configuration is built on first use and kept for later pins. Unpinned
+  calls never use it.
+- If the pinned run fails with a trigger reason, the chain it ran on tries
+  its own configured candidates in order, so fallback still applies.
+- The `allow` and `deny` lists in `models.json` still apply; a denied pair
+  raises `ValueError` before any lease is taken.
+- The result and every event carry `route_method = model_pin` and
+  `model_pin = <the pair>`, so pinned runs are visible in metering.
+
 ## Scenario 4: a follow-up pinned to the original candidate
 
 ```mermaid
@@ -162,8 +192,8 @@ sequenceDiagram
     participant P as Pool
     participant S as Sandbox
 
-    Note over C: with model_pin_scope("harness:pi-lean/claude:claude-sonnet-5")
-    C->>R: send_conversation(messages incl. restored session, provider_options={harness_call_id: new id})
+    C->>R: send_conversation(messages incl. restored session, provider_options={model: "harness:pi-lean/claude:claude-sonnet-5", harness_call_id: new id})
+    Note over R: the reserved model key is removed and the call runs in model_pin_scope
     Note over R: pinned: skip classifier, ignore route/route_floor, never escalate
     R->>F: send on the tier that holds the pinned candidate
     F->>E: the pinned candidate only
@@ -244,6 +274,42 @@ sequenceDiagram
     HP-->>MC: available
     Note over MC: an unknown inner model or an unreachable pool is reported here, not at the first run
 ```
+
+## Context management
+
+Context has two layers, and the library owns only the outer one.
+
+**Outer layer: what crosses the router into the run.** The engine does no
+compaction. It forwards what the caller sends:
+
+- The latest user message is the task spec. The classifier reads only that
+  message, so it must stand on its own: title, description, acceptance
+  checks, repo, file hints. Instructions go in the system prompt, which the
+  classifier ignores.
+- The message history, when present, is a restored session for a follow-up.
+  The engine passes it to the Run API as the session to resume; the sandbox
+  owns it from then on. The library never trims it.
+- `max_context_tokens` and `count_tokens` on a harness candidate delegate
+  to the inner model, so a caller can size a task spec or a restored
+  session against the window the run will have.
+
+**Inner layer: the run's own context.** The sandbox program (pi) owns the
+growing history, tool results, and compaction. The library supports it
+from the gateway side, per turn:
+
+- `count_tokens` and `max_context_tokens` for the pinned model, so the
+  harness can decide when to compact.
+- Prompt cache hints (`AIPromptCacheHint`) so the stable prefix (system
+  prompt, task spec, tool schemas) is reused across turns.
+- Tool-result checks (prompt injection, guardrails) on what enters the
+  context, raising with the offending tool-call ids.
+- A `route: trivial` hint on compaction and other auxiliary calls, so
+  summarization never runs on the task's tier (the gateway turns a pinned
+  call with a `route` hint into a banded one).
+
+The compaction policy itself (threshold, what is pinned verbatim, summary
+template) is a harness profile setting in the meta-harness design, not a
+library concern.
 
 ## Stickiness and caching
 
