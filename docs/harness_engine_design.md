@@ -69,9 +69,9 @@ would move it to the back for every concurrent task.
 | Change | Where |
 |---|---|
 | Registry entry, model-string parser, probe that delegates to the inner model's probe and checks `pool_url`, capability table that delegates to the inner model's | `completions/ai_harness_completions.py`, `ai_provider_registry.py`, `util/ai_model_probes.py` |
-| Lease (carrying `harness_session_id`), run token, Run API client (`POST /run` for a new session, `POST /followup` for a kept or restored one), event follower, usage collection, release | the engine |
+| Lease, carrying `harness_session_id`. Run token, minted and revoked through the HTTP Gateway. Run API client: `POST /run` for a new session, `POST /followup` for a kept or restored one. Event follower, usage collection, release. | the engine |
 | `harness_run` summary on the result; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
-| `providers.harness` with `pool_url` and `gateway_url`; credentials stay in the environment | `ai_models_config.py`, `schemas/` |
+| `providers.harness` with `pool_url` and `gateway_url`; the pool and HTTP Gateway API keys stay in the environment | `ai_models_config.py`, `schemas/` |
 
 ### Later PRs, when the caller needs them
 
@@ -94,8 +94,8 @@ wraps this library. Sandbox programs call it for every model turn.
 
 Each sequence diagram groups its participants in boxes by owner: the
 meta-harness (the caller, its pool manager), this library (running inside
-the caller's process), the sandbox (a meta-harness image, one per run), and
-external model providers.
+the caller's process), the sandbox (a meta-harness image, one per run), the
+HTTP Gateway service, and external model providers.
 
 | Party | Owned by | Role |
 |---|---|---|
@@ -105,7 +105,7 @@ external model providers.
 | harness engine | this library | `AiHarnessCompletions`: one blocking call per run |
 | Pool manager | the meta-harness | Leases sandboxes by run id |
 | Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `POST /followup`, `GET /events`, `GET /usage`, cancel |
-| HTTP Gateway | ai-api-unified-http | Where the sandbox program sends its model calls; outside these diagrams |
+| HTTP Gateway | ai-api-unified-http | Mints and revokes run tokens for the engine, and keeps the token registry. Receives every model call the sandbox program makes |
 
 Run id is `harness_call_id` plus the candidate index, so a retried call
 derives the same id and finds its run.
@@ -127,11 +127,14 @@ sequenceDiagram
     box rgba(251,188,5,0.16) Sandbox (meta-harness image, one per run)
     participant S as Sandbox: harness server + pi
     end
+    box rgba(156,39,176,0.12) HTTP Gateway service
+    participant GW as HTTP Gateway
+    end
     box rgba(128,128,128,0.14) External model providers
     participant K as Classifier model
     end
 
-    C->>R: send_conversation(system, messages, provider_options={harness_call_id})
+    C->>R: send_conversation(system, messages, provider_options={harness_call_id, harness_session_id})
     R->>K: classify(latest user message)
     K-->>R: tier "standard", confidence 0.82
     R->>F: send_conversation(...) on the "standard" chain
@@ -142,13 +145,15 @@ sequenceDiagram
     P-->>E: none
     E->>P: POST lease(run_id, image="pi-lean", harness_session_id, resources)
     P-->>E: sandbox address, lease TTL, session state new
-    E->>E: mint run token (run id, tags, pin=claude:claude-sonnet-5, cap, expiry)
+    E->>GW: mint run token (run id, tags, pin=claude:claude-sonnet-5, cap, expiry)
+    GW-->>E: opaque run token, recorded in the HTTP Gateway's token registry
     E->>S: POST /run (prompt, profile, limits, token)
     S-->>E: 202 run accepted
     E->>S: GET /events (SSE)
     S-->>E: ... run_finished(end_reason=pr_opened)
     E->>S: GET /usage
     S-->>E: usd_total, turns, tokens
+    E->>GW: revoke run token
     E->>P: release lease(run_id)
     E-->>F: AITurnResult(text=PR URL, finish=complete, harness_run, cost=reported usd)
     Note over F: ledger: one reported-cost line, call_id=run_id, source=http_gateway
@@ -361,6 +366,9 @@ sequenceDiagram
     box rgba(251,188,5,0.16) Sandbox (meta-harness image, one per run)
     participant S as Sandbox: harness server + pi
     end
+    box rgba(156,39,176,0.12) HTTP Gateway service
+    participant GW as HTTP Gateway
+    end
 
     F->>E: candidate 0, request_timeout_seconds = lease TTL
     E->>S: POST /run
@@ -368,6 +376,7 @@ sequenceDiagram
     Note over E: deadline passes with no run_finished
     E->>S: POST /cancel
     S-->>E: run_canceled, partial usage
+    E->>GW: revoke run token
     E->>P: release lease
     E-->>F: raise (reason=TIMEOUT), partial cost attached
     Note over F: TIMEOUT in fallback_on means next candidate, otherwise the call fails with the cost so far
@@ -452,10 +461,15 @@ design.
 | When | Where the conversation is | Owner |
 |---|---|---|
 | During a run | pi's session directory in the sandbox, written after every turn | the sandbox (harness server) |
-| Between runs | A copy of that directory in the pool manager's Cloud Storage bucket, stored under `harness_session_id` when the sandbox drains | the pool manager |
+| Between runs | A copy of that directory in the pool manager's Cloud Storage bucket, stored under `harness_session_id` when the run ends | the pool manager |
 | Between runs, briefly | The finished sandbox itself, kept warm for the session for up to `sticky_window` (default 10 minutes) | the pool manager |
-| On each model turn | The request pi's model client sends to the HTTP Gateway, which forwards it and keeps no copy | nobody; the HTTP Gateway is stateless per turn |
+| On each model turn | The whole history (system prompt, every earlier turn, tool calls and results), which pi's model client resends to the HTTP Gateway on every turn. The HTTP Gateway forwards it to the provider and keeps no copy | nobody |
 | In this library | Nothing. A call sends the new input and `harness_session_id`, never the conversation | — |
+
+Resending the whole history every turn costs less than its size suggests. The
+prompt cache hint lets the provider bill the unchanged prefix at its cached
+rate, and compaction keeps the history under the model's window (see the
+inner layer above).
 
 The meta-harness chooses `harness_session_id`; one id per task fits, so every
 follow-up on a task's pull request continues the same conversation. The
