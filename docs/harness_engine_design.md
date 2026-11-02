@@ -107,8 +107,11 @@ HTTP Gateway service, and external model providers.
 | Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `POST /followup`, `GET /events`, `GET /usage`, cancel. It runs pi in its own process through pi's TypeScript SDK. pi has no network API, so the engine reaches pi only through the Run API |
 | HTTP Gateway | ai-api-unified-http | Mints and revokes run tokens for the engine, and keeps the token registry. Receives every model call the sandbox program makes |
 
-Run id is `harness_call_id` plus the candidate index, so a retried call
-derives the same id and finds its run.
+Run id is `harness_call_id` plus the route tier and the candidate index
+(the `route_tier` and `candidate_index` observability tags), so a retried
+call derives the same id and finds its run. The tier is part of the id
+because every tier's chain numbers its candidates from 0. Without it, an
+escalated run would find the failed run of the tier below.
 
 ## Why the sandbox runs pi
 
@@ -174,7 +177,7 @@ sequenceDiagram
     R->>F: send_conversation(...) on the "standard" chain
     F->>E: candidate 0: harness:pi-lean/claude:claude-sonnet-5
     Note over F,E: candidate index 0 placed in request context
-    E->>E: run_id = harness_call_id + "/0"
+    E->>E: run_id = harness_call_id + "/standard/0"
     E->>P: GET lease(run_id)
     P-->>E: none
     E->>P: POST lease(run_id, image="pi-lean", harness_session_id, resources)

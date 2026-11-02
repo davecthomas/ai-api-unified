@@ -187,6 +187,12 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
     "test_finops_cost_observability.py": ("middleware", "pricing"),
     "test_request_cost.py": ("middleware", "pricing", "completions", "core"),
     "test_prompt_result.py": ("middleware", "pricing", "completions", "core"),
+    "test_harness_result_contract.py": (
+        "middleware",
+        "pricing",
+        "completions",
+        "core",
+    ),
     "test_model_pin.py": ("completions", "core", "engine_anthropic"),
     "test_turn_result_envelope.py": ("middleware", "pricing", "completions", "core"),
     "test_media_typed_errors.py": ("core", "embeddings", "middleware"),

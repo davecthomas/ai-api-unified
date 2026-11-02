@@ -58,8 +58,8 @@ FALLBACK_EVENT_RECOVERED: str = "candidate_recovered"
 FALLBACK_EVENT_RESTING: str = "candidate_resting"
 
 # Default rest per reason, in seconds. A reason absent here benches for
-# DEFAULT_COOLDOWN_SECONDS; INVALID_OUTPUT is about one answer, not the
-# model's health, so it never benches.
+# DEFAULT_COOLDOWN_SECONDS. INVALID_OUTPUT is about one answer and RUN_FAILED
+# about one task, not the model's health, so neither starts a cooldown.
 DICT_DEFAULT_COOLDOWN_SECONDS: dict[AiFallbackReason, float] = {
     AiFallbackReason.UNAVAILABLE: 30.0,
     AiFallbackReason.RATE_LIMITED: 30.0,
@@ -68,6 +68,7 @@ DICT_DEFAULT_COOLDOWN_SECONDS: dict[AiFallbackReason, float] = {
     AiFallbackReason.MODEL_UNAVAILABLE: 300.0,
     AiFallbackReason.AUTH_REJECTED: 3600.0,
     AiFallbackReason.INVALID_OUTPUT: 0.0,
+    AiFallbackReason.RUN_FAILED: 0.0,
 }
 DEFAULT_COOLDOWN_SECONDS: float = 30.0
 

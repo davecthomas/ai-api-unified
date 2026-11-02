@@ -7,7 +7,12 @@ consistent, actionable errors to callers.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import Enum
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ai_api_unified.middleware.request_cost import AIRequestCostReport
 
 
 class AiFallbackReason(str, Enum):
@@ -46,6 +51,11 @@ class AiFallbackReason(str, Enum):
             is a spending decision. Turn it on to let the chain try the next
             model and the router escalate on bad output; each discarded
             answer is a wasted line item on the request's cost report.
+        RUN_FAILED: A harness run ended without finishing its task (an
+            error, a turn or time limit). Off by default: the next candidate
+            is a second paid run, which is a spending decision. Starts no
+            cooldown, because one hard task says nothing about whether the
+            candidate is healthy.
     """
 
     UNAVAILABLE = "unavailable"
@@ -55,6 +65,7 @@ class AiFallbackReason(str, Enum):
     AUTH_REJECTED = "auth_rejected"
     TIMEOUT = "timeout"
     INVALID_OUTPUT = "invalid_output"
+    RUN_FAILED = "run_failed"
 
 
 class _DeriveFallbackReason:
@@ -137,7 +148,15 @@ def classify_transport_fallback_reason(bool_timeout: bool) -> AiFallbackReason |
 class AiProviderError(RuntimeError):
     """
     Base exception for all provider resolution and loading failures.
+
+    Attributes:
+        cost: The request's cost report when this error ended a request the
+            library opened: every provider call it made, failed tries
+            included, with totals. Set on any exception that leaves the
+            outermost request scope; None until then.
     """
+
+    cost: AIRequestCostReport | None = None
 
 
 class AiProviderDependencyUnavailableError(AiProviderError):
@@ -246,6 +265,14 @@ class AiProviderRequestError(AiProviderRuntimeError):
             supplied, it is True for the reasons in
             FROZENSET_ACCOUNT_FALLBACK_REASONS; engines whose quota or model
             access is scoped per model pass False.
+        usage: Token usage the failed call was billed for, as an
+            AITokenUsage, or None when nothing was billed.
+        reported_usd_cost: The dollar cost a remote service reported for the
+            failed call, when the engine prices nothing itself (a harness run
+            reports what its model turns cost). The request's cost report
+            uses it in place of registry pricing.
+        reported_cost_source: Who reported `reported_usd_cost`; it becomes
+            the line item's pricing_source.
     """
 
     def __init__(
@@ -258,8 +285,14 @@ class AiProviderRequestError(AiProviderRuntimeError):
             AiFallbackReason | None | _DeriveFallbackReason
         ) = DERIVE_FALLBACK_REASON,
         account_wide: bool | None = None,
+        usage: Any = None,
+        reported_usd_cost: Decimal | None = None,
+        reported_cost_source: str | None = None,
     ) -> None:
         super().__init__(message)
+        self.usage: Any = usage
+        self.reported_usd_cost: Decimal | None = reported_usd_cost
+        self.reported_cost_source: str | None = reported_cost_source
         self.status_code: int | None = status_code
         self.provider_engine: str | None = provider_engine
         self.fallback_reason: AiFallbackReason | None

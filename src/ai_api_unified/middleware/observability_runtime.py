@@ -10,6 +10,7 @@ from types import MappingProxyType
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import TYPE_CHECKING, TypeVar
 
 from collections.abc import Awaitable, Callable, Iterator, Mapping
@@ -190,6 +191,12 @@ class AiApiCallResultSummaryModel:
             fields to the denominator when computing one.
         finish_reason: Optional provider finish reason.
         dict_metadata: Additional scalar metadata fields safe to emit in logs.
+        provider_reported_usd_cost: Dollar cost a remote service reported for
+            the call, for an engine that prices nothing itself (a harness run
+            reports what its model turns cost). When set, the cost event and
+            the request line item use it in place of registry pricing.
+        provider_reported_cost_source: Who reported that cost; it becomes the
+            pricing_source on the cost event and the line item.
     """
 
     provider_elapsed_ms: float
@@ -212,6 +219,8 @@ class AiApiCallResultSummaryModel:
     # Thinking tokens, a subset of provider_completion_tokens, when the
     # provider reports them separately (Gemini, OpenAI).
     provider_reasoning_tokens: int | None = None
+    provider_reported_usd_cost: Decimal | None = None
+    provider_reported_cost_source: str | None = None
 
     def __post_init__(self) -> None:
         """

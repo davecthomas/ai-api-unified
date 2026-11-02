@@ -92,10 +92,14 @@ class AIRequestCostLineItem(BaseModel):
         cache_write_1h_tokens: Tokens written to a 1-hour cache.
         reasoning_tokens: Thinking tokens, a subset of `output_tokens`, when
             the provider reports them separately.
-        usd_cost: Cost from registry pricing; None when the call failed, the
-            model is unpriced, or the provider reported no usage.
-        pricing_source: URL of the rates `usd_cost` was computed from.
-        pricing_effective_date: Date those rates took effect.
+        usd_cost: Cost from registry pricing, or the cost a remote service
+            reported for the call (see reported_call_cost); None when the
+            call failed unbilled, the model is unpriced, or the provider
+            reported no usage.
+        pricing_source: URL of the rates `usd_cost` was computed from, or
+            the service that reported it.
+        pricing_effective_date: Date those rates took effect; None for a
+            reported cost.
         outcome: `ok` or `error`.
         error_type: Exception class name when the call failed.
         fallback_reason: The failure's `AiFallbackReason` value, if any.
@@ -131,12 +135,13 @@ class AIRequestCostLineItem(BaseModel):
     @property
     def billed(self) -> bool:
         """
-        True when the provider reported usage, priced or not. A failed call
-        whose exception carried usage (a billed answer the library could not
-        use) is billed too; a 529 or a connection error is not.
+        True when the provider reported usage, priced or not, or a remote
+        service reported a cost. A failed call whose exception carried usage
+        (a billed answer the library could not use) is billed too; a 529 or
+        a connection error is not.
         """
-        # Normal return: any usage means the provider charged for the call.
-        return any(
+        # Normal return: any usage or reported cost means someone charged.
+        return self.usd_cost is not None or any(
             value is not None
             for value in (
                 self.input_tokens,
@@ -365,6 +370,31 @@ def compute_call_cost(
     )
 
 
+def reported_call_cost(
+    call_result_summary: AiApiCallResultSummaryModel,
+) -> tuple[Decimal, str | None] | None:
+    """
+    The cost a remote service reported for one call, with its source.
+
+    An engine that calls no model itself, such as a harness run whose model
+    turns go through another service, reports that service's dollars. The
+    per-call cost event and the request line item both use them in place of
+    registry pricing, so the two never disagree.
+
+    Args:
+        call_result_summary: The call's usage summary.
+
+    Returns:
+        (usd, source), or None when the call has no reported cost.
+    """
+    usd_reported: Decimal | None = call_result_summary.provider_reported_usd_cost
+    if usd_reported is None:
+        # Early return: registry pricing applies.
+        return None
+    # Normal return with the reported dollars and who reported them.
+    return usd_reported, call_result_summary.provider_reported_cost_source
+
+
 def build_line_item(
     *,
     call_context: AiApiCallContextModel,
@@ -422,10 +452,21 @@ def build_line_item(
             fallback_reason=str_fallback_reason,
             elapsed_ms=float_elapsed_ms,
         )
-    pricing: AIModelPricing | None = resolve_call_pricing(call_context)
-    usd_cost: Decimal | None = (
-        compute_call_cost(pricing, call_result_summary) if pricing else None
+    pricing: AIModelPricing | None = None
+    usd_cost: Decimal | None
+    str_pricing_source: str | None = None
+    pricing_effective_date: date | None = None
+    reported: tuple[Decimal, str | None] | None = reported_call_cost(
+        call_result_summary
     )
+    if reported is not None:
+        usd_cost, str_pricing_source = reported
+    else:
+        pricing = resolve_call_pricing(call_context)
+        usd_cost = compute_call_cost(pricing, call_result_summary) if pricing else None
+        if pricing is not None:
+            str_pricing_source = pricing.source
+            pricing_effective_date = pricing.effective_date
     # Normal return with the priced (or unpriced) billed call.
     return AIRequestCostLineItem(
         call_id=call_context.call_id,
@@ -443,8 +484,8 @@ def build_line_item(
         cache_write_1h_tokens=call_result_summary.provider_cache_write_1h_tokens,
         reasoning_tokens=call_result_summary.provider_reasoning_tokens,
         usd_cost=usd_cost,
-        pricing_source=pricing.source if pricing is not None else None,
-        pricing_effective_date=pricing.effective_date if pricing is not None else None,
+        pricing_source=str_pricing_source,
+        pricing_effective_date=pricing_effective_date,
         outcome=str_outcome,
         error_type=str_error_type,
         fallback_reason=str_fallback_reason,
@@ -459,23 +500,28 @@ def summary_from_exception_usage(
     """
     Builds a usage summary from the `usage` an exception carries, when a
     billed answer was discarded (invalid structured output, a truncated
-    structured answer).
+    structured answer), and from the cost a remote service reported for a
+    failed call (a failed harness run).
 
     Args:
         exception: The failure; its `usage` attribute, when present, is an
-            AITokenUsage-shaped object (input_tokens, output_tokens, ...).
+            AITokenUsage-shaped object (input_tokens, output_tokens, ...),
+            and its `reported_usd_cost` and `reported_cost_source`, when
+            present, are the reported cost and who reported it.
         float_elapsed_ms: Wall-clock provider time for the call.
 
     Returns:
-        The summary, or None when the exception carries no usage or the usage
-        reports no tokens at all.
+        The summary, or None when the exception carries neither usage with
+        tokens nor a reported cost.
     """
     from ai_api_unified.middleware.observability_runtime import (
         AiApiCallResultSummaryModel,
     )
 
     usage: Any = getattr(exception, "usage", None)
-    if usage is None:
+    usd_reported: Decimal | None = getattr(exception, "reported_usd_cost", None)
+    str_reported_source: str | None = getattr(exception, "reported_cost_source", None)
+    if usage is None and usd_reported is None:
         # Early return: a transport failure carries nothing billable.
         return None
     tuple_counts: tuple[int | None, ...] = tuple(
@@ -489,7 +535,7 @@ def summary_from_exception_usage(
             "cache_write_1h_tokens",
         )
     )
-    if all(value is None for value in tuple_counts):
+    if all(value is None for value in tuple_counts) and usd_reported is None:
         # Early return: usage present but empty, so nothing was billed.
         return None
     # Normal return with the discarded answer's usage.
@@ -501,6 +547,8 @@ def summary_from_exception_usage(
         provider_total_tokens=tuple_counts[3],
         provider_cache_write_5m_tokens=tuple_counts[4],
         provider_cache_write_1h_tokens=tuple_counts[5],
+        provider_reported_usd_cost=usd_reported,
+        provider_reported_cost_source=str_reported_source,
     )
 
 
@@ -685,6 +733,8 @@ class RequestCallCapture(RequestCostScope):
         served_model: That candidate's model.
         route_tier: Router tier that served the call, when a router did.
         route_method: How the router chose it.
+        route_confidence: The classifier's confidence in its pick, when it
+            ran and reported one.
     """
 
     def __init__(self, operation: str) -> None:
@@ -694,6 +744,7 @@ class RequestCallCapture(RequestCostScope):
         self.served_model: str | None = None
         self.route_tier: str | None = None
         self.route_method: str | None = None
+        self.route_confidence: float | None = None
         self._bool_adopted: bool = False
 
     def adopt(self, scope: RequestCostScope) -> None:
@@ -776,11 +827,13 @@ def note_served_route(
     model: str | None = None,
     route_tier: str | None = None,
     route_method: str | None = None,
+    route_confidence: float | None = None,
 ) -> None:
     """
     Records what a wrapper knows about the client that served a call: a
     fallback chain names the candidate's engine token and model, a router
-    names the tier and how it was chosen. Fields left None are kept.
+    names the tier, how it was chosen, and the classifier's confidence.
+    Fields left None are kept.
     """
     # Loop over the active captures to record the route.
     for capture in _capturing_non_classifier():
@@ -792,6 +845,8 @@ def note_served_route(
             capture.route_tier = route_tier
         if route_method is not None:
             capture.route_method = route_method
+        if route_confidence is not None:
+            capture.route_confidence = route_confidence
     # Normal return after recording.
     return None
 
@@ -835,6 +890,21 @@ def record_call_line_item(
             record_exception.__class__.__name__,
         )
     # Normal return after recording (or logging the failure).
+    return None
+
+
+def _attach_request_cost(exception: BaseException, report: AIRequestCostReport) -> None:
+    """
+    Sets `exception.cost` to the report of the request it ended, so a caller
+    that shares one client across tasks still gets this request's spend.
+    """
+    try:
+        setattr(exception, "cost", report)
+    except (AttributeError, TypeError):
+        # An exception type with slots or a read-only attribute keeps its
+        # own value; the report still went to the cost event.
+        pass
+    # Normal return after attaching (or skipping).
     return None
 
 
@@ -887,7 +957,8 @@ def request_cost_scope(
     Yields:
         The active scope, or a joined view of it. `scope.bool_owner` tells
         the caller whether it opened the scope; `scope.report` is set when
-        the owner's block ends.
+        the owner's block ends. When the owner's block raises, the exception
+        also carries the report as `exception.cost`.
     """
     from ai_api_unified.middleware.observability_runtime import (
         get_observability_context,
@@ -916,9 +987,13 @@ def request_cost_scope(
         },
     )
     str_status: str = REQUEST_STATUS_ERROR
+    raised: BaseException | None = None
     try:
         yield scope
         str_status = REQUEST_STATUS_OK
+    except BaseException as exception:
+        raised = exception
+        raise
     finally:
         try:
             reset_observability_context(token_context)
@@ -936,3 +1011,5 @@ def request_cost_scope(
             )
         if scope.report is not None:
             _emit_request_cost(scope.report)
+            if raised is not None:
+                _attach_request_cost(raised, scope.report)

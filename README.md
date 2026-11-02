@@ -1,4 +1,4 @@
-# ai-api-unified 3.28.0
+# ai-api-unified 3.29.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -270,6 +270,7 @@ result.text                                # the response
 result.provider, result.provider_engine    # "anthropic", "claude"
 result.model_name                          # "claude-opus-5"
 result.route_tier, result.route_method     # "hard", "classifier" (None off a router)
+result.route_confidence                    # the classifier's confidence in that pick, if reported
 result.thinking                            # requested and applied level
 result.usage.input_tokens, result.usage.output_tokens
 result.total_usd                           # Decimal, classifier and failed attempts included
@@ -284,8 +285,8 @@ Every field describes this call alone, even inside a caller's
 Conversation turns and structured results carry the same fields:
 `AITurnResult` and `AIStructuredOutputResult` from `send_conversation`,
 `send_structured_output`, and their async twins have `provider`,
-`provider_engine`, `model_name`, `route_tier`, `route_method`, `model_pin`,
-`thinking`, `usage`, and `cost` (the call's `AIRequestCostReport`, so
+`provider_engine`, `model_name`, `route_tier`, `route_method`,
+`route_confidence`, `model_pin`, `thinking`, `usage`, and `cost` (the call's `AIRequestCostReport`, so
 `turn.cost.total_usd` is what the turn cost).
 
 ### Completions with automatic fallback
@@ -1624,6 +1625,7 @@ Rules for the chain:
 | `MODEL_UNAVAILABLE` | no | 404, an unknown or retired model id, a model not offered in the region |
 | `TIMEOUT` | no | the call's `request_timeout_seconds` passed with no answer |
 | `INVALID_OUTPUT` | no | a structured answer that is not valid JSON, not a JSON object, or fails the response model (`StructuredOutputValidationError`) |
+| `RUN_FAILED` | no | a harness run that ended without finishing its task: an error, or a turn or time limit |
 | `None` | never | a safety refusal, request validation before any call |
 
 `MODEL_UNAVAILABLE` is off by default because an unknown model id usually
@@ -1659,6 +1661,10 @@ next model, and the router escalate, on bad output; each discarded answer
 then shows on the request's cost report as a wasted line item (see
 "Per-request cost").
 
+`RUN_FAILED` is off by default for the same reason: the run was paid for,
+and the next candidate is a second paid run. Turn it on to let the chain
+try the next candidate, and the router escalate, when a harness run fails.
+
 A safety refusal is never a trigger: retrying a
 refused request on another model is a policy decision, not a reliability one,
 and it belongs in your code if you want it.
@@ -1683,6 +1689,7 @@ more doomed request before failing over. A cooldown remembers the failure:
 | `QUOTA_EXHAUSTED`, `MODEL_UNAVAILABLE` | 5 minutes |
 | `AUTH_REJECTED` | 1 hour, or until the engine's key or base URL changes |
 | `INVALID_OUTPUT` | none: a bad answer says nothing about the model's health |
+| `RUN_FAILED` | none: one hard task says nothing about the candidate's health |
 
 Only reasons in `fallback_on` bench a candidate. An account-wide failure
 (`QUOTA_EXHAUSTED` or `AUTH_REJECTED`, unless the engine marks it per-model)
@@ -2982,6 +2989,29 @@ and `wasted_usd`; its per-call cost event carries `outcome: "error"`. A model
 with no registry pricing counts as billed but unpriced
 (`unpriced_calls`), so `total_usd` understates the request by its cost.
 The ledger records calls whether or not the observability middleware is on.
+
+An engine that calls no model itself, such as a harness engine whose model
+turns go through another service, records the dollars that service
+reported. It sets `provider_reported_usd_cost` and
+`provider_reported_cost_source` on its result summary, or
+`reported_usd_cost` and `reported_cost_source` on the
+`AiProviderRequestError` it raises. The line item and the per-call cost
+event then carry that cost, with the reporting service as
+`pricing_source`, no `pricing_effective_date`, and `pricing_confidence`
+`reported` on the event.
+
+When a request raises, its report is on the exception as
+`exception.cost`. Read it there when one client serves many tasks at
+once, since `client.last_request_cost` belongs to whichever request ended
+last:
+
+```python
+try:
+    router.send_conversation(messages)
+except AiProviderRequestError as error:
+    error.cost.total_usd     # every failed try, priced
+    error.cost.calls         # one line item per try, with its fallback_reason
+```
 
 To roll several library calls into one logical request, such as a workflow
 step, open the scope yourself. Nested scopes join the outer one, and the
