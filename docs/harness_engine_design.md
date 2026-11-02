@@ -11,7 +11,7 @@ The engine exists to serve the meta-harness, a control plane that routes
 coding tasks to a harness-and-model combination and runs the harness in a
 sandbox. The meta-harness is the caller in every diagram below. Its own
 design document carries the whole-system sequences (task API, scheduler,
-gateway, console); this document stops at the library's boundary.
+HTTP Gateway, console); this document stops at the library's boundary.
 
 ## The library's role
 
@@ -32,9 +32,9 @@ gateway, console); this document stops at the library's boundary.
    `thinking`, `purpose`, and `harness_call_id`. Pinned means pinned: a pin
    ignores route hints and never escalates. A policy that wants a different
    mix, such as sending a pinned run's compaction calls to a cheap tier,
-   lives in the gateway as a caller of this library, not in the router.
+   lives in the HTTP Gateway as a caller of this library, not in the router.
 5. **State lives with whoever owns it.** Run state in the sandbox, leases in
-   the pool manager, spend counters in the gateway, run history in the
+   the pool manager, spend counters in the HTTP Gateway, run history in the
    meta-harness. The library holds none of it, which is what lets the
    caller share one client across every task.
 
@@ -75,6 +75,9 @@ gateway, console); this document stops at the library's boundary.
 
 ## Parties in the diagrams
 
+The **HTTP Gateway** is `ai-api-unified-http`, the separate HTTP service that
+wraps this library. Sandbox programs call it for every model turn.
+
 | Party | Owned by | Role |
 |---|---|---|
 | Caller | the meta-harness | The dispatcher, run from a run workflow: builds the client once with `AIFactory`, renders the task spec as the latest user message, passes `harness_call_id` in `provider_options` |
@@ -83,7 +86,7 @@ gateway, console); this document stops at the library's boundary.
 | Engine | this library | `AiHarnessCompletions`: one blocking call per run |
 | Pool | the meta-harness | Pool manager: leases sandboxes by run id |
 | Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `GET /events`, `GET /usage`, cancel |
-| Gateway | ai-api-unified-http | Where the sandbox program sends its model calls; outside these diagrams |
+| HTTP Gateway | ai-api-unified-http | Where the sandbox program sends its model calls; outside these diagrams |
 
 Run id is `harness_call_id` plus the candidate index, so a retried call
 derives the same id and finds its run.
@@ -121,7 +124,7 @@ sequenceDiagram
     S-->>E: usd_total, turns, tokens
     E->>P: release lease(run_id)
     E-->>F: AITurnResult(text=PR URL, finish=complete, harness_run, cost=reported usd)
-    Note over F: ledger: one reported-cost line, call_id=run_id, source=gateway
+    Note over F: ledger: one reported-cost line, call_id=run_id, source=http_gateway
     F-->>R: result
     R-->>C: result (route_tier, route_confidence, model_name, harness_run, cost)
 ```
@@ -369,10 +372,10 @@ compaction. It forwards what the caller sends:
 
 **Inner layer: the run's own context.** The sandbox program owns the
 growing history, tool results, and compaction. The library supports it
-from the gateway side, per turn: `count_tokens` and `max_context_tokens`
+from the HTTP Gateway side, per turn: `count_tokens` and `max_context_tokens`
 for the pinned model; prompt cache hints for the stable prefix; tool-result
 checks (prompt injection, guardrails) on what enters the context; and the
-`route` hint on compaction calls, which the gateway maps to a band. The
+`route` hint on compaction calls, which the HTTP Gateway maps to a band. The
 compaction policy itself is a harness profile setting in the meta-harness
 design.
 
@@ -391,7 +394,7 @@ design.
 ## What the engine does not do
 
 - It never calls a model. The classifier call happens in the router before
-  the engine is chosen; the sandbox program's model calls go to the gateway.
+  the engine is chosen; the sandbox program's model calls go to the HTTP Gateway.
 - It never streams progress through the router. Progress is read from the
   sandbox's event stream by the meta-harness.
 - It never holds a run between calls. Everything it needs arrives with the
