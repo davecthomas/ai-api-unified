@@ -10,17 +10,17 @@ example `harness:pi-lean/claude:claude-sonnet-5`.
 The engine exists to serve the meta-harness, a control plane that routes
 coding tasks to a harness-and-model combination and runs the harness in a
 sandbox. The meta-harness is the caller in every diagram below. Its own
-design document carries the whole-system sequences (task API, scheduler,
+design document has the whole-system sequences (task API, scheduler,
 HTTP Gateway, console); this document stops at the library's boundary.
 
 ## The library's role
 
-1. **A stateless router behind one call.** One call in, one result out. No
-   server, no store, no background work, no data pushed anywhere.
-   Everything the library needs arrives with the call or comes from
+1. **A stateless router behind one call.** One call goes in and one result
+   comes out. The library runs no server, keeps no store, does no background
+   work, and pushes no data. Everything the library needs arrives with the call or comes from
    `models.json`, loaded once per process.
-2. **A harness is an engine.** A harness candidate is routed like any
-   other: the router, the fallback chain, cooldowns, pins, floors, and the
+2. **A harness is an engine.** The router treats a harness candidate like
+   any other: the router, the fallback chain, cooldowns, pins, floors, and the
    cost ledger apply unchanged. The sandbox program is opaque. The library
    speaks a small Run API and a lease API, nothing else.
 3. **The return value is the whole data contract.** Everything the library
@@ -29,14 +29,14 @@ HTTP Gateway, console); this document stops at the library's boundary.
    serve operators of the library and are not an interface.
 4. **Per-call control is `provider_options`, nothing else.** `model` (a
    hard-coded harness and model), `route`, `route_floor`, `route_ceiling`,
-   `thinking`, `purpose`, and `harness_call_id`. Pinned means pinned: a pin
-   ignores route hints and never escalates. A policy that wants a different
+   `thinking`, `purpose`, and `harness_call_id`. A pin ignores route hints
+   and never escalates. A policy that wants a different
    mix, such as sending a pinned run's compaction calls to a cheap tier,
    lives in the HTTP Gateway as a caller of this library, not in the router.
 5. **State lives with whoever owns it.** Run state in the sandbox, leases in
    the pool manager, spend counters in the HTTP Gateway, run history in the
-   meta-harness. The library holds none of it, which is what lets the
-   caller share one client across every task.
+   meta-harness. Because the library holds none of it, the caller can share
+   one client across every task.
 
 ## What ships
 
@@ -63,14 +63,14 @@ HTTP Gateway, console); this document stops at the library's boundary.
 
 - A cancel event on completions calls, polled by engines (kill switch).
 - `send_conversation_streaming` with typed events, for token-by-token text
-  in a console. A candidate is committed at its first delta.
+  in a console. Each chain commits to a candidate at its first delta.
 
-### Not in scope, and why
+### Out of scope
 
 - An event sink into the caller's store: rule 3.
-- Config injection into the factory: one `models.json` per process is the
-  model, and nothing needs more.
-- Harness profiles in `models.json`: the profile is the sandbox's business.
+- Config injection into the factory: the design uses one `models.json` per
+  process, and no caller needs more.
+- Harness profiles in `models.json`: the meta-harness owns profiles.
 - A library-managed tool loop: the harness owns it.
 
 ## Parties in the diagrams
@@ -228,14 +228,14 @@ turn = client.send_conversation(
 - The call skips the classifier and ignores `route`, `route_floor`, and
   `route_ceiling`. It never escalates to another tier.
 - The pair does not have to be in `models.json`. On a router it runs on the
-  chain of the tier that holds it, else on the default chain; a pair outside
-  the configuration is built on first use and kept for later pins. Unpinned
-  calls never use it.
+  chain of the tier that holds it, else on the default chain. The library
+  builds a pair outside the configuration on first use and keeps it for
+  later pins. Unpinned calls never use it.
 - If the pinned run fails with a trigger reason, the chain it ran on tries
   its own configured candidates in order, so fallback still applies.
 - The `allow` and `deny` lists in `models.json` still apply; a denied pair
-  raises `ValueError` before any lease is taken.
-- The result carries `route_method = model_pin` and `model_pin = <pair>`.
+  raises `ValueError` before the engine takes a lease.
+- The result has `route_method = model_pin` and `model_pin = <pair>`.
 
 ## Scenario 5: a follow-up pinned to the original candidate
 
@@ -395,8 +395,8 @@ design.
 
 - It never calls a model. The classifier call happens in the router before
   the engine is chosen; the sandbox program's model calls go to the HTTP Gateway.
-- It never streams progress through the router. Progress is read from the
-  sandbox's event stream by the meta-harness.
+- It never streams progress through the router. The meta-harness reads
+  progress from the sandbox's event stream.
 - It never holds a run between calls. Everything it needs arrives with the
-  call or is asked of the pool.
+  call or comes from the pool.
 - It never writes to the caller's stores or reads the caller's events.
