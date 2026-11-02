@@ -1203,7 +1203,11 @@ class AiRouterCompletions(AIBaseCompletions):
             finally:
                 reset_observability_context(token)
             note_served_route(
-                route_tier=self._tier_label(int_current), route_method=str_method
+                route_tier=self._tier_label(int_current),
+                route_method=str_method,
+                route_confidence=(
+                    decision.confidence if decision is not None else None
+                ),
             )
             self._last_tier_index = int_current
             self._last_route_client = client
@@ -1261,7 +1265,11 @@ class AiRouterCompletions(AIBaseCompletions):
             finally:
                 reset_observability_context(token)
             note_served_route(
-                route_tier=self._tier_label(int_current), route_method=str_method
+                route_tier=self._tier_label(int_current),
+                route_method=str_method,
+                route_confidence=(
+                    decision.confidence if decision is not None else None
+                ),
             )
             self._last_tier_index = int_current
             self._last_route_client = client

@@ -36,11 +36,14 @@ from ai_api_unified.middleware.request_cost import (
     OBSERVABILITY_EVENT_REQUEST_COST,
     AIRequestCostReport,
     compute_call_cost,
+    reported_call_cost,
     resolve_call_pricing,
 )
 from ai_api_unified.pricing.model_pricing import AIModelPricing
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+# pricing_confidence on a cost event whose dollars a remote service reported.
+PRICING_CONFIDENCE_REPORTED: str = "reported"
 OBSERVABILITY_LOGGER_NAME: str = "ai_api_unified.middleware.observability"
 COST_LOGGER_NAME: str = "ai_api_unified.observability.cost"
 OBSERVABILITY_EVENT_INPUT: str = "ai_api_call_input"
@@ -427,8 +430,10 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
 
         Computes USD cost from the provider-reported token counts and the
         model's registry pricing, then logs a structured event on the cost topic
-        with pricing provenance. Skips silently when disabled, the model is
-        unpriced, or no token counts are available.
+        with pricing provenance. A call whose summary carries a cost reported
+        by a remote service logs that cost instead, with that service as the
+        pricing source. Skips silently when disabled, the model is unpriced,
+        or no token counts are available.
 
         Args:
             call_context: Immutable provider-boundary call metadata for the call.
@@ -442,13 +447,23 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
         if not self.observability_settings.emit_cost:
             # Early return because cost enrichment is disabled.
             return None
-        pricing: AIModelPricing | None = resolve_call_pricing(call_context)
-        if pricing is None:
-            # Early return because this model has no token pricing on record.
-            return None
-        # The request line item is priced by the same function, so the
+        # The request line item is priced by the same functions, so the
         # per-call event and the per-request total never disagree.
-        usd_cost: Decimal | None = compute_call_cost(pricing, call_result_summary)
+        reported: tuple[Decimal, str | None] | None = reported_call_cost(
+            call_result_summary
+        )
+        pricing: AIModelPricing | None = None
+        usd_cost: Decimal | None
+        str_pricing_source: str | None = None
+        if reported is not None:
+            usd_cost, str_pricing_source = reported
+        else:
+            pricing = resolve_call_pricing(call_context)
+            if pricing is None:
+                # Early return because this model has no token pricing on record.
+                return None
+            usd_cost = compute_call_cost(pricing, call_result_summary)
+            str_pricing_source = pricing.source
         if usd_cost is None:
             # Early return because there is no usage to cost.
             return None
@@ -480,10 +495,16 @@ class LoggerBackedObservabilityMiddleware(AiApiObservabilityMiddleware):
             "cache_write_5m_tokens": int_cache_write_5m_tokens,
             "cache_write_1h_tokens": int_cache_write_1h_tokens,
             "usd_cost": str(usd_cost),
-            "currency": pricing.currency,
-            "pricing_effective_date": pricing.effective_date.isoformat(),
-            "pricing_source": pricing.source,
-            "pricing_confidence": pricing.confidence,
+            "currency": pricing.currency if pricing is not None else "USD",
+            "pricing_effective_date": (
+                pricing.effective_date.isoformat() if pricing is not None else None
+            ),
+            "pricing_source": str_pricing_source,
+            "pricing_confidence": (
+                pricing.confidence
+                if pricing is not None
+                else PRICING_CONFIDENCE_REPORTED
+            ),
             "outcome": "error" if exception is not None else "ok",
             "error_type": (
                 exception.__class__.__name__ if exception is not None else None

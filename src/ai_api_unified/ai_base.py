@@ -742,6 +742,8 @@ class AITurnResult(BaseModel):
         route_tier: Router tier that served it; None off a router.
         route_method: How the route was chosen, or `model_pin` for a pinned
             call; None off a router unless pinned.
+        route_confidence: The router classifier's confidence in its tier
+            pick, when it ran and reported one; None otherwise.
         model_pin: The engine:model the call was pinned to, or None.
         cost: Every provider call the turn made, with totals; see
             AIRequestCostReport.
@@ -760,6 +762,7 @@ class AITurnResult(BaseModel):
     provider: str | None = None
     route_tier: str | None = None
     route_method: str | None = None
+    route_confidence: float | None = None
     model_pin: str | None = None
     cost: AIRequestCostReport | None = None
     # True when the response cache answered; usd_saved is the original cost.
@@ -791,6 +794,8 @@ class AIStructuredOutputResult(BaseModel):
         route_tier: Router tier that served it; None off a router.
         route_method: How the route was chosen, or `model_pin` for a pinned
             call; None off a router unless pinned.
+        route_confidence: The router classifier's confidence in its tier
+            pick, when it ran and reported one; None otherwise.
         model_pin: The engine:model the call was pinned to, or None.
         cost: Every provider call this call made, with totals; see
             AIRequestCostReport.
@@ -808,6 +813,7 @@ class AIStructuredOutputResult(BaseModel):
     provider: str | None = None
     route_tier: str | None = None
     route_method: str | None = None
+    route_confidence: float | None = None
     model_pin: str | None = None
     cost: AIRequestCostReport | None = None
     # True when the response cache answered; usd_saved is the original cost.
@@ -837,6 +843,8 @@ class AIPromptResult(BaseModel):
         route_method: How the route was chosen (classifier, default, floor,
             override, low_confidence, model_pin); None off a router unless
             the call was pinned.
+        route_confidence: The router classifier's confidence in its tier
+            pick, when it ran and reported one; None otherwise.
         model_pin: The engine:model the call was pinned to, or None.
         thinking: The thinking level requested and the one applied on the
             served call; see AIThinkingResolution.
@@ -854,6 +862,7 @@ class AIPromptResult(BaseModel):
     model_name: str | None = None
     route_tier: str | None = None
     route_method: str | None = None
+    route_confidence: float | None = None
     model_pin: str | None = None
     thinking: AIThinkingResolution | None = None
     usage: AITokenUsage = Field(default_factory=AITokenUsage)
@@ -4337,6 +4346,7 @@ class AIBaseCompletions(AIBase):
             "model_name": str_model,
             "route_tier": str_tier,
             "route_method": str_method,
+            "route_confidence": capture.route_confidence,
             "model_pin": pin.label if pin is not None else None,
             "thinking": capture.thinking,
             "usage": usage,
@@ -4367,6 +4377,7 @@ class AIBaseCompletions(AIBase):
             "provider": dict_fields["provider"],
             "route_tier": dict_fields["route_tier"],
             "route_method": dict_fields["route_method"],
+            "route_confidence": dict_fields["route_confidence"],
             "model_pin": dict_fields["model_pin"],
             "cost": dict_fields["cost"],
         }

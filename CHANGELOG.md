@@ -4,6 +4,29 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.29.0
+
+### Added
+
+- `AiFallbackReason.RUN_FAILED`, for a harness run that ended without
+  finishing its task. Off by default in `fallback_on`, and it starts no
+  cooldown.
+- `exception.cost`: the `AIRequestCostReport` of the request an exception
+  ended, failed tries included, so a caller sharing one client across
+  tasks gets each failed request's spend.
+- Reported costs: an engine that calls no model itself records the dollars
+  a remote service reported, through `provider_reported_usd_cost` and
+  `provider_reported_cost_source` on its result summary or
+  `reported_usd_cost` and `reported_cost_source` on
+  `AiProviderRequestError`. The line item and the per-call cost event use
+  them in place of registry pricing. `AiProviderRequestError` also takes
+  `usage`.
+- `route_confidence` on `AITurnResult`, `AIStructuredOutputResult`, and
+  `AIPromptResult`: the router classifier's confidence in its tier pick.
+- The fallback chain sets the `candidate_index` observability tag while
+  each candidate runs: the candidate's position in the chain's
+  configuration.
+
 ## 3.28.0
 
 ### Added

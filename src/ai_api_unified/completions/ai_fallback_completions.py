@@ -54,6 +54,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any, ClassVar, Type, TypeVar
 
 from pydantic import BaseModel, ConfigDict
@@ -81,6 +82,11 @@ from ..ai_provider_exceptions import (
     AiProviderConfigurationError,
     AiProviderRequestError,
 )
+from ..middleware.observability_runtime import (
+    get_observability_context,
+    reset_observability_context,
+    set_observability_context,
+)
 from ..middleware.request_cost import note_served_route
 from ..thinking import parse_thinking_level
 from .ai_fallback_cooldown import (
@@ -93,6 +99,36 @@ from .ai_fallback_cooldown import (
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# Observability tag naming the chain position of the candidate a call is
+# trying. A harness engine derives its run id from it (with the route tier),
+# so a retried call finds the run it started.
+TAG_CANDIDATE_INDEX: str = "candidate_index"
+
+
+@contextmanager
+def candidate_index_scope(int_index: int) -> Iterator[None]:
+    """
+    Places one candidate's chain position in the request-scoped
+    observability context while that candidate runs.
+
+    Args:
+        int_index: The candidate's position in the chain's configuration
+            (a pinned pair outside it follows the configured ones). It does
+            not change with cooldown order, so a retry sees the same value.
+    """
+    context = get_observability_context()
+    token = set_observability_context(
+        caller_id=context.caller_id,
+        session_id=context.session_id,
+        workflow_id=context.workflow_id,
+        tags={**dict(context.tags), TAG_CANDIDATE_INDEX: str(int_index)},
+    )
+    try:
+        yield
+    finally:
+        reset_observability_context(token)
+
 
 # Values of the `ai_fallback_event` field on this module's log records, so a
 # log processor can count and alert on each without parsing the message.
@@ -1158,7 +1194,8 @@ class AiFallbackCompletions(AIBaseCompletions):
             int_pin=int_pin,
         ):
             try:
-                result: T = call(client)
+                with candidate_index_scope(int_index):
+                    result: T = call(client)
             except AiProviderRequestError as error:
                 if not self._should_continue(
                     error,
@@ -1240,7 +1277,8 @@ class AiFallbackCompletions(AIBaseCompletions):
             int_pin=int_pin,
         ):
             try:
-                result: T = await call(client)
+                with candidate_index_scope(int_index):
+                    result: T = await call(client)
             except AiProviderRequestError as error:
                 if not self._should_continue(
                     error,
