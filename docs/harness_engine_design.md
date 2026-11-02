@@ -13,10 +13,15 @@ completions call. The engine itself holds no state between calls: it reads
 its run identity from the call, asks two remote servers for what it needs,
 blocks until the run ends, and returns a result with a cost report.
 
+This engine exists to serve the meta-harness, a control plane that routes
+coding tasks to a harness-and-model combination and runs the harness in a
+sandbox. The meta-harness is the caller in every diagram below. Its own
+design document carries the whole-system sequences (task API, scheduler,
+gateway, console); this document stops at the library's boundary.
+
 The library never knows what program runs inside the sandbox. The profile
 name is an opaque string the engine passes along. The sandbox program (pi,
-or anything else) is owned by the caller's system and speaks a small Run
-API.
+or anything else) is owned by the meta-harness and speaks a small Run API.
 
 ## What this library adds
 
@@ -36,7 +41,7 @@ Later, optional: a cancel event on completions calls; a streaming form of
 
 | Party | Owned by | Role |
 |---|---|---|
-| Caller | the calling system | Builds the client with `AIFactory`, sends the task as the latest user message, passes `harness_call_id` in `provider_options` |
+| Caller | the calling system | In the meta-harness this is the dispatcher, run from a run workflow: it builds the client with `AIFactory`, renders the task spec as the latest user message, and passes `harness_call_id` in `provider_options`. The library does not care who calls it; any Python program with harness candidates in its `models.json` is a caller |
 | Router | this library | `AiRouterCompletions`: classifies the prompt, picks a tier, runs the tier's chain |
 | Chain | this library | `AiFallbackCompletions` for one tier: tries candidates in order, applies cooldowns, sums cost across tries |
 | Engine | this library | `AiHarnessCompletions`: one blocking call per run |
