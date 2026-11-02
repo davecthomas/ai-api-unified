@@ -7,7 +7,7 @@ tier candidate name a whole coding run instead of a single model call. The
 candidate form is `harness:<profile>/<inner-engine>:<inner-model>`, for
 example `harness:pi-lean/claude:claude-sonnet-5`.
 
-The engine exists to serve the meta-harness, a control plane that routes
+The engine serves the meta-harness, a control plane that routes
 coding tasks to a harness-and-model combination and runs the harness in a
 sandbox. The meta-harness is the caller in every diagram below. Its own
 design document has the whole-system sequences (task API, scheduler,
@@ -15,24 +15,24 @@ HTTP Gateway, console); this document stops at the library's boundary.
 
 ## The library's role
 
-1. **A stateless router behind one call.** One call goes in and one result
-   comes out. The library runs no server, keeps no store, does no background
-   work, and pushes no data. Everything the library needs arrives with the call or comes from
-   `models.json`, loaded once per process.
+1. **A stateless router behind one call.** One call brings everything the
+   library needs, apart from `models.json`, which it loads once per process.
+   The library runs no server, keeps no store, does no background work, and
+   pushes no data.
 2. **A harness is an engine.** The router treats a harness candidate like
-   any other: the router, the fallback chain, cooldowns, pins, floors, and the
-   cost ledger apply unchanged. The sandbox program is opaque. The library
-   speaks a small Run API and a lease API, nothing else.
+   any other candidate: the fallback chain, cooldowns, pins, floors, and the
+   cost ledger apply unchanged. The library does not know which program runs
+   in the sandbox. It uses only a small Run API and a lease API.
 3. **The return value is the whole data contract.** Everything the library
    learns about a call is on the result, on success and on failure. The
    caller records what it wants from that. The library's logs and events
    serve operators of the library and are not an interface.
-4. **Per-call control is `provider_options`, nothing else.** `model` (a
+4. **The caller controls each call through `provider_options` only.** `model` (a
    hard-coded harness and model), `route`, `route_floor`, `route_ceiling`,
    `thinking`, `purpose`, and `harness_call_id`. A pin ignores route hints
-   and never escalates. A policy that wants a different
-   mix, such as sending a pinned run's compaction calls to a cheap tier,
-   lives in the HTTP Gateway as a caller of this library, not in the router.
+   and never escalates. Any other rule, such as sending a pinned run's
+   compaction calls to a cheap tier, belongs in the HTTP Gateway, which calls
+   this library, and not in the router.
 5. **State lives with whoever owns it.** Run state in the sandbox, leases in
    the pool manager, spend counters in the HTTP Gateway, run history in the
    meta-harness. Because the library holds none of it, the caller can share
@@ -50,6 +50,19 @@ HTTP Gateway, console); this document stops at the library's boundary.
 | `route_confidence` on `AITurnResult` and `AIPromptResult` | `ai_base.py`, `completions/ai_router_completions.py` |
 | The fallback chain places the candidate index in the request-scoped observability context | `completions/ai_fallback_completions.py` |
 
+A **cooldown** is a period that starts when a candidate fails for one of the
+chain's fallback reasons (ADR-0023). During it, the fallback chain moves that
+candidate to the end of the try order for every call in the process, so other
+candidates go first. A candidate in cooldown is still tried when every candidate
+ahead of it fails, so a cooldown never fails a call that a candidate could
+serve. The period depends on the reason: 30 seconds for `UNAVAILABLE`,
+`RATE_LIMITED` and `TIMEOUT`, 5 minutes for `QUOTA_EXHAUSTED` and
+`MODEL_UNAVAILABLE`, 1 hour for `AUTH_REJECTED`, and none for
+`INVALID_OUTPUT`. `models.json` can change each period under
+`completions.cooldown`. `RUN_FAILED` starts no cooldown: a run that fails on a
+hard task shows nothing about whether the candidate is healthy, and a cooldown
+would move it to the back for every concurrent task.
+
 ### PR B: the harness engine
 
 | Change | Where |
@@ -59,7 +72,7 @@ HTTP Gateway, console); this document stops at the library's boundary.
 | `harness_run` summary on the result; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
 | `providers.harness` with `pool_url` and `gateway_url`; credentials stay in the environment | `ai_models_config.py`, `schemas/` |
 
-### Later, each its own PR, when the caller needs it
+### Later PRs, when the caller needs them
 
 - A cancel event on completions calls, polled by engines (kill switch).
 - `send_conversation_streaming` with typed events, for token-by-token text
@@ -89,7 +102,7 @@ external model providers.
 | ai-api-unified router | this library | `AiRouterCompletions`: classifies the prompt, picks a tier, runs the tier's chain |
 | Chain | this library | `AiFallbackCompletions` for one tier: tries candidates in order, applies cooldowns, sums cost across tries |
 | harness engine | this library | `AiHarnessCompletions`: one blocking call per run |
-| Pool manager | the meta-harness | Pool manager: leases sandboxes by run id |
+| Pool manager | the meta-harness | Leases sandboxes by run id |
 | Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `GET /events`, `GET /usage`, cancel |
 | HTTP Gateway | ai-api-unified-http | Where the sandbox program sends its model calls; outside these diagrams |
 
@@ -405,7 +418,7 @@ another task.
 
 Context has two layers, and the library owns only the outer one.
 
-**Outer layer: what crosses the router into the run.** The engine does no
+**Outer layer: what the caller passes into the run.** The engine does no
 compaction. It forwards what the caller sends:
 
 - The latest user message is the task spec. The classifier reads only that
@@ -420,12 +433,15 @@ compaction. It forwards what the caller sends:
   session against the window the run will have.
 
 **Inner layer: the run's own context.** The sandbox program owns the
-growing history, tool results, and compaction. The library supports it
-from the HTTP Gateway side, per turn: `count_tokens` and `max_context_tokens`
-for the pinned model; prompt cache hints for the stable prefix; tool-result
-checks (prompt injection, guardrails) on what enters the context; and the
-`route` hint on compaction calls, which the HTTP Gateway maps to a band. The
-compaction policy itself is a harness profile setting in the meta-harness
+growing history, tool results, and compaction. On every turn, the library
+supports it through the HTTP Gateway with:
+
+- `count_tokens` and `max_context_tokens` for the pinned model
+- prompt cache hints for the stable prefix
+- tool-result checks (prompt injection, guardrails) on what enters the context
+- the `route` hint on compaction calls, which the HTTP Gateway maps to a band
+
+The compaction policy itself is a harness profile setting in the meta-harness
 design.
 
 ## Stickiness and caching
