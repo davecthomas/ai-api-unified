@@ -29,6 +29,7 @@ or anything else) is owned by the meta-harness and speaks a small Run API.
 |---|---|
 | `harness` completions engine: registry entry, model-string parser, probe that delegates to the inner model's probe and checks `pool_url`, capability table that delegates to the inner model's, pool and Run API client | `completions/ai_harness_completions.py`, `ai_provider_registry.py`, `util/ai_model_probes.py` |
 | `harness_run_started` observability event at lease time (run id, sandbox, candidate, tier) | the engine |
+| The lease request carries the call's `session_id` (from the observability context) as a hint, so the pool manager can prefer a sandbox that already holds that session | the engine |
 | Reported-cost entry in the request cost ledger, so an engine can record dollars a gateway stated rather than tokens times a price | `middleware/request_cost.py` |
 | `AiFallbackReason.RUN_FAILED`, with no cooldown period | `ai_provider_exceptions.py`, `completions/ai_fallback_cooldown.py` |
 | The fallback chain places the candidate index in the request-scoped observability context | `completions/ai_fallback_completions.py` |
@@ -243,6 +244,18 @@ sequenceDiagram
     HP-->>MC: available
     Note over MC: an unknown inner model or an unreachable pool is reported here, not at the first run
 ```
+
+## Stickiness and caching
+
+- Within a run, the lease binds the run id to one sandbox; a retried call
+  re-attaches to it. Across follow-ups the default is a fresh sandbox with
+  the restored session directory; the `session_id` lease hint lets the pool
+  manager keep a finished sandbox warm for that session as its own policy.
+- The library reads `models.json` once per process per path, mtime, and
+  environment, and reads settings only when the factory builds a client.
+  Nothing opens a file per request. The caller builds the router client
+  once per process and shares it; per-call state lives in context
+  variables, so sharing is safe.
 
 ## What the engine does not do
 
