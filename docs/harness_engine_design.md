@@ -78,13 +78,18 @@ HTTP Gateway, console); this document stops at the library's boundary.
 The **HTTP Gateway** is `ai-api-unified-http`, the separate HTTP service that
 wraps this library. Sandbox programs call it for every model turn.
 
+Each sequence diagram groups its participants in boxes by owner: the
+meta-harness (the caller, its pool manager), this library (running inside
+the caller's process), the sandbox (a meta-harness image, one per run), and
+external model providers.
+
 | Party | Owned by | Role |
 |---|---|---|
-| Caller | the meta-harness | The dispatcher, run from a run workflow: builds the client once with `AIFactory`, renders the task spec as the latest user message, passes `harness_call_id` in `provider_options` |
-| Router | this library | `AiRouterCompletions`: classifies the prompt, picks a tier, runs the tier's chain |
+| Run service (meta-harness caller) | the meta-harness | The dispatcher, run from a run workflow: builds the client once with `AIFactory`, renders the task spec as the latest user message, passes `harness_call_id` in `provider_options` |
+| ai-api-unified router | this library | `AiRouterCompletions`: classifies the prompt, picks a tier, runs the tier's chain |
 | Chain | this library | `AiFallbackCompletions` for one tier: tries candidates in order, applies cooldowns, sums cost across tries |
-| Engine | this library | `AiHarnessCompletions`: one blocking call per run |
-| Pool | the meta-harness | Pool manager: leases sandboxes by run id |
+| harness engine | this library | `AiHarnessCompletions`: one blocking call per run |
+| Pool manager | the meta-harness | Pool manager: leases sandboxes by run id |
 | Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `GET /events`, `GET /usage`, cancel |
 | HTTP Gateway | ai-api-unified-http | Where the sandbox program sends its model calls; outside these diagrams |
 
@@ -96,13 +101,21 @@ derives the same id and finds its run.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Caller
-    participant R as Router
-    participant K as Classifier
+    box rgba(66,135,245,0.12) Meta-harness (the caller and its services)
+    participant C as Run service (meta-harness caller)
+    participant P as Pool manager
+    end
+    box rgba(52,168,83,0.14) ai-api-unified (this library, in the caller's process)
+    participant R as ai-api-unified router
     participant F as Chain (tier)
-    participant E as Engine
-    participant P as Pool
-    participant S as Sandbox
+    participant E as harness engine
+    end
+    box rgba(251,188,5,0.16) Sandbox (meta-harness image, one per run)
+    participant S as Sandbox: harness server + pi
+    end
+    box rgba(128,128,128,0.14) External model providers
+    participant K as Classifier model
+    end
 
     C->>R: send_conversation(system, messages, provider_options={harness_call_id})
     R->>K: classify(latest user message)
@@ -134,11 +147,17 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
+    box rgba(66,135,245,0.12) Meta-harness (the caller and its services)
+    participant P as Pool manager
+    end
+    box rgba(52,168,83,0.14) ai-api-unified (this library, in the caller's process)
     participant F as Chain (tier)
-    participant E as Engine
-    participant P as Pool
-    participant S as Sandbox
+    participant E as harness engine
     participant CD as Cooldown registry
+    end
+    box rgba(251,188,5,0.16) Sandbox (meta-harness image, one per run)
+    participant S as Sandbox: harness server + pi
+    end
 
     F->>E: candidate 0: harness:pi-lean/claude:claude-sonnet-5
     E->>P: GET lease(call/0)
@@ -162,12 +181,16 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant R as Router
+    box rgba(52,168,83,0.14) ai-api-unified (this library, in the caller's process)
+    participant R as ai-api-unified router
     participant F1 as Chain (standard)
     participant F2 as Chain (complex)
-    participant E as Engine
-    participant S as Sandbox
+    participant E as harness engine
     participant CD as Cooldown registry
+    end
+    box rgba(251,188,5,0.16) Sandbox (meta-harness image, one per run)
+    participant S as Sandbox: harness server + pi
+    end
 
     R->>F1: send on "standard"
     F1->>E: candidate 0
@@ -192,10 +215,14 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Caller
-    participant R as Router
+    box rgba(66,135,245,0.12) Meta-harness (the caller and its services)
+    participant C as Run service (meta-harness caller)
+    end
+    box rgba(52,168,83,0.14) ai-api-unified (this library, in the caller's process)
+    participant R as ai-api-unified router
     participant F as Chain (complex)
-    participant E as Engine
+    participant E as harness engine
+    end
 
     R->>F: send on "complex" (top tier)
     F->>E: candidate 0
@@ -242,12 +269,18 @@ turn = client.send_conversation(
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Caller
-    participant R as Router
+    box rgba(66,135,245,0.12) Meta-harness (the caller and its services)
+    participant C as Run service (meta-harness caller)
+    participant P as Pool manager
+    end
+    box rgba(52,168,83,0.14) ai-api-unified (this library, in the caller's process)
+    participant R as ai-api-unified router
     participant F as Chain (tier)
-    participant E as Engine
-    participant P as Pool
-    participant S as Sandbox
+    participant E as harness engine
+    end
+    box rgba(251,188,5,0.16) Sandbox (meta-harness image, one per run)
+    participant S as Sandbox: harness server + pi
+    end
 
     C->>R: send_conversation(messages incl. restored session, provider_options={model: "harness:pi-lean/claude:claude-sonnet-5", harness_call_id: new id})
     Note over R: the reserved model key is removed and the call runs in model_pin_scope
@@ -268,11 +301,17 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Caller
+    box rgba(66,135,245,0.12) Meta-harness (the caller and its services)
+    participant C as Run service (meta-harness caller)
+    participant P as Pool manager
+    end
+    box rgba(52,168,83,0.14) ai-api-unified (this library, in the caller's process)
     participant F as Chain (tier)
-    participant E as Engine
-    participant P as Pool
-    participant S as Sandbox
+    participant E as harness engine
+    end
+    box rgba(251,188,5,0.16) Sandbox (meta-harness image, one per run)
+    participant S as Sandbox: harness server + pi
+    end
 
     C->>F: call (harness_call_id = X)
     F->>E: candidate 0
@@ -296,10 +335,16 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
+    box rgba(66,135,245,0.12) Meta-harness (the caller and its services)
+    participant P as Pool manager
+    end
+    box rgba(52,168,83,0.14) ai-api-unified (this library, in the caller's process)
     participant F as Chain (tier)
-    participant E as Engine
-    participant S as Sandbox
-    participant P as Pool
+    participant E as harness engine
+    end
+    box rgba(251,188,5,0.16) Sandbox (meta-harness image, one per run)
+    participant S as Sandbox: harness server + pi
+    end
 
     F->>E: candidate 0, request_timeout_seconds = lease TTL
     E->>S: POST /run
@@ -317,11 +362,15 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
+    box rgba(66,135,245,0.12) Meta-harness (the caller and its services)
+    participant P as Pool manager
+    end
+    box rgba(52,168,83,0.14) ai-api-unified (this library, in the caller's process)
     participant Fa as AIFactory
     participant MC as Model checker
-    participant HP as harness probe
+    participant HP as harness engine probe
     participant IP as inner engine probe
-    participant P as Pool
+    end
 
     Fa->>MC: check_all(every configured candidate)
     MC->>HP: harness:pi-lean/claude:claude-sonnet-5
