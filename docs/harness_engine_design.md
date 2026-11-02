@@ -2,8 +2,8 @@
 
 ## Summary
 
-This document describes a `harness` completions engine. It lets a router
-tier candidate name a whole coding run instead of a single model call. The
+A `harness` completions engine lets a router tier candidate name a whole
+coding run instead of a single model call. The
 candidate form is `harness:<profile>/<inner-engine>:<inner-model>`, for
 example `harness:pi-lean/claude:claude-sonnet-5`.
 
@@ -11,11 +11,11 @@ The engine serves the meta-harness, a control plane that routes
 coding tasks to a harness-and-model combination and runs the harness in a
 sandbox. The meta-harness is the caller in every diagram below. Its own
 design document has the whole-system sequences (task API, scheduler,
-HTTP Gateway, console); this document stops at the library's boundary.
+HTTP Gateway, console). This document covers only the library's side.
 
 ## The library's role
 
-1. **A stateless router behind one call.** One call brings everything the
+1. **A stateless router behind one call.** One call carries everything the
    library needs, apart from `models.json`, which it loads once per process.
    The library runs no server, keeps no store, does no background work, and
    pushes no data.
@@ -30,8 +30,7 @@ HTTP Gateway, console); this document stops at the library's boundary.
 4. **The caller controls each call through `provider_options` only.** `model` (a
    hard-coded harness and model), `route`, `route_floor`, `route_ceiling`,
    `thinking`, `purpose`, `harness_call_id`, and `harness_session_id`. A pin
-   ignores route hints
-   and never escalates. Any other rule, such as sending a pinned run's
+   ignores route hints and never escalates. Any other rule, such as sending a pinned run's
    compaction calls to a cheap tier, belongs in the HTTP Gateway, which calls
    this library, and not in the router.
 5. **State lives with whoever owns it.** Run state in the sandbox, leases in
@@ -46,7 +45,7 @@ HTTP Gateway, console); this document stops at the library's boundary.
 | Change | Where |
 |---|---|
 | `AiFallbackReason.RUN_FAILED`, with no cooldown period | `ai_provider_exceptions.py`, `completions/ai_fallback_cooldown.py` |
-| Reported-dollar line items in the request cost ledger: an engine records the cost a remote stated, with that remote as the pricing source | `middleware/request_cost.py` |
+| Reported-dollar line items in the request cost ledger: an engine records the cost a remote service reported, with that service as the pricing source | `middleware/request_cost.py` |
 | The request cost report attached to the exception raised when every candidate fails, as `exception.cost` | `ai_base.py`, `ai_provider_exceptions.py` |
 | `route_confidence` on `AITurnResult` and `AIPromptResult` | `ai_base.py`, `completions/ai_router_completions.py` |
 | The fallback chain places the candidate index in the request-scoped observability context | `completions/ai_fallback_completions.py` |
@@ -75,9 +74,10 @@ would move it to the back for every concurrent task.
 
 ### Later PRs, when the caller needs them
 
-- A cancel event on completions calls, polled by engines (kill switch).
+- A cancel event on completions calls, which engines poll so a caller can
+  stop a run early.
 - `send_conversation_streaming` with typed events, for token-by-token text
-  in a console. Each chain commits to a candidate at its first delta.
+  in a console. Each chain commits to a candidate when the first chunk of text arrives.
 
 ### Out of scope
 
@@ -104,11 +104,45 @@ HTTP Gateway service, and external model providers.
 | Chain | this library | `AiFallbackCompletions` for one tier: tries candidates in order, applies cooldowns, sums cost across tries |
 | harness engine | this library | `AiHarnessCompletions`: one blocking call per run |
 | Pool manager | the meta-harness | Leases sandboxes by run id |
-| Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `POST /followup`, `GET /events`, `GET /usage`, cancel |
+| Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `POST /followup`, `GET /events`, `GET /usage`, cancel. It runs pi in its own process through pi's TypeScript SDK. pi has no network API, so the engine reaches pi only through the Run API |
 | HTTP Gateway | ai-api-unified-http | Mints and revokes run tokens for the engine, and keeps the token registry. Receives every model call the sandbox program makes |
 
 Run id is `harness_call_id` plus the candidate index, so a retried call
 derives the same id and finds its run.
+
+## Why the sandbox runs pi
+
+This library makes one model call and returns the result. A coding run also
+needs an agent loop, and this library does not own one (see Out of scope).
+pi supplies it:
+
+- Tools that act on the sandbox: `read`, `write`, `edit`, `bash`, `grep`,
+  `find` and `ls`, with output truncation and file edits applied in order.
+- The loop: call the model, run the tool calls in its reply, send the
+  results back, and repeat until the model stops.
+- Session state: the transcript in a JSONL file, follow-ups, steering
+  during a run, abort, and forks.
+- Compaction: when the context window fills, pi summarizes older turns so a
+  long run can continue.
+- The coding-agent system prompt and the tool descriptions.
+
+pi also has its own multi-provider model client, `ModelRuntime`, which
+overlaps with this library. `getModel(provider, id)` looks up a catalog
+entry: provider, id, wire API, base URL, context window and prices.
+`createAgentSession({ model })` then sends every turn to that one model
+through the provider's `streamSimple`. pi does not route between tiers or
+fall back to another provider. Its virtual models pick a model per request,
+and this design does not use them.
+
+The sandbox turns pi's model layer off. It creates the `ModelRuntime` with
+no built-in credentials and registers one provider, the model client, whose
+`streamSimple` calls the HTTP Gateway. The HTTP Gateway picks the real model
+through this library.
+
+pi decides what to do next in the sandbox. This library decides which model
+answers each turn, falls back when a call fails, and records the cost. Any
+harness whose model calls can be sent to the HTTP Gateway the same way can
+run under a `harness:<profile>` candidate.
 
 ## Scenario 1: a routed run that succeeds
 
@@ -184,7 +218,7 @@ sequenceDiagram
     E->>P: POST lease(call/0, "pi-lean")
     P-->>E: 503 no capacity within ready_timeout
     E-->>F: raise AiProviderRequestError(reason=UNAVAILABLE)
-    F->>CD: bench candidate 0 for 30 s (reason UNAVAILABLE)
+    F->>CD: start a 30 s cooldown for candidate 0 (reason UNAVAILABLE)
     Note over F: UNAVAILABLE is in fallback_on: move on
     F->>E: candidate 1: harness:pi-careful/openai:gpt-5.6-luna
     E->>P: lease(call/1, "pi-careful")
@@ -195,7 +229,7 @@ sequenceDiagram
     Note over F: returns the result, with provider_engine and model_name naming the candidate that served
 ```
 
-## Scenario 3: the run fails on the task, the tier is exhausted, escalate
+## Scenario 3: both standard runs fail and the router escalates
 
 ```mermaid
 sequenceDiagram
@@ -215,7 +249,7 @@ sequenceDiagram
     F1->>E: candidate 0
     E->>S: run ... run_finished(end_reason=ERROR)
     E-->>F1: raise (reason=RUN_FAILED), cost of the failed run attached
-    Note over F1,CD: RUN_FAILED benches nothing: one hard task says nothing about the candidate's health
+    Note over F1,CD: RUN_FAILED starts no cooldown: one hard task says nothing about the candidate's health
     F1->>E: candidate 1
     E->>S: run ... run_finished(end_reason=turn_limit)
     E-->>F1: raise (reason=RUN_FAILED)
@@ -277,8 +311,8 @@ turn = client.send_conversation(
   chain of the tier that holds it, else on the default chain. The library
   builds a pair outside the configuration on first use and keeps it for
   later pins. Unpinned calls never use it.
-- If the pinned run fails with a trigger reason, the chain it ran on tries
-  its own configured candidates in order, so fallback still applies.
+- If the pinned run fails for a reason in `fallback_on`, the chain it ran
+  on tries its own configured candidates in order, so fallback still applies.
 - The `allow` and `deny` lists in `models.json` still apply; a denied pair
   raises `ValueError` before the engine takes a lease.
 - The result has `route_method = model_pin` and `model_pin = <pair>`.
@@ -434,7 +468,7 @@ Context has two layers, and the library owns only the outer one.
 compaction. It forwards what the caller sends:
 
 - The latest user message is the task spec. The classifier reads only that
-  message, so it must stand on its own: title, description, acceptance
+  message, so it must hold the whole task: title, description, acceptance
   checks, repo, file hints. Instructions go in the system prompt, which the
   classifier ignores.
 - A follow-up sends only the new input (review comments, failed checks)
@@ -445,13 +479,15 @@ compaction. It forwards what the caller sends:
   the run will have.
 
 **Inner layer: the run's own context.** The sandbox program owns the
-growing history, tool results, and compaction. On every turn, the library
-supports it through the HTTP Gateway with:
+growing history, tool results, and compaction. Through the HTTP Gateway,
+the library gives each of its model turns:
 
 - `count_tokens` and `max_context_tokens` for the pinned model
 - prompt cache hints for the stable prefix and the growing history (see Prompt caching below)
 - tool-result checks (prompt injection, guardrails) on what enters the context
-- the `route` hint on compaction calls, which the HTTP Gateway maps to a band
+- a `route` hint and `purpose: compaction` on compaction calls. pi's model
+  client makes those calls itself from pi's `session_before_compact` hook,
+  and the HTTP Gateway maps the hint to a range of tiers
 
 The compaction policy itself is a harness profile setting in the meta-harness
 design.
@@ -460,7 +496,7 @@ design.
 
 | When | Where the conversation is | Owner |
 |---|---|---|
-| During a run | pi's session directory in the sandbox, written after every turn | the sandbox (harness server) |
+| During a run | pi's session file (JSONL) in the sandbox's session directory, appended as pi records each message and tool result | the sandbox (harness server) |
 | Between runs | A copy of that directory in the pool manager's Cloud Storage bucket, stored under `harness_session_id` when the run ends | the pool manager |
 | Between runs, briefly | The finished sandbox itself, kept warm for the session for up to `sticky_window` (default 10 minutes) | the pool manager |
 | On each model turn | The whole history (system prompt, every earlier turn, tool calls and results), which pi's model client resends to the HTTP Gateway on every turn. The HTTP Gateway forwards it to the provider and keeps no copy | nobody |
@@ -470,7 +506,7 @@ Resending the whole history every turn costs less than its size suggests:
 prompt caching bills the unchanged prefix at the cached rate, and compaction
 keeps the history under the model's window.
 
-The meta-harness chooses `harness_session_id`; one id per task fits, so every
+The meta-harness chooses `harness_session_id`. With one id per task, every
 follow-up on a task's pull request continues the same conversation. The
 meta-harness event store also holds each turn's text and tool calls, as a
 record for the console and metering. A run never resumes from it.
@@ -481,27 +517,33 @@ Every turn of a run sends the whole history, so caching sets most of a
 turn's cost. With a warm cache, a turn bills its new tokens at the input rate
 and the repeated prefix at the cached rate, about a tenth of it on Anthropic.
 
-- **Every turn sends the hint.** pi's model client sets the HTTP Gateway's
-  `prompt_cache` field on every conversation turn:
-  `{"retention": "extended", "key": <harness_session_id>}`. The library maps
-  it to each provider's mechanism (`AIPromptCacheHint`). On Anthropic it also
+- pi passes its own cache settings (`cacheRetention`, `sessionId`) to the
+  model client on every call, and the sandbox sets `PI_CACHE_RETENTION=long`.
+  The model client maps that to the HTTP Gateway's `prompt_cache` field:
+  `{"retention": "extended", "key": <harness_session_id>}`. The compaction
+  call omits the field, because no later call reuses its prompt. The library
+  maps the field to each provider's mechanism (`AIPromptCacheHint`). On Anthropic it also
   caches the growing history, so turn N reads turns 1 to N-1 from cache.
-- **The extended lifetime.** A coding run often waits more than 5 minutes
+- A coding run often waits more than 5 minutes
   between turns while tests or builds run, and the default cache would expire
   in that gap. `extended` asks for 1 hour on Anthropic and Bedrock and
   24 hours on OpenAI. Anthropic and Bedrock bill a cache write at 2 times the
   input rate on the extended lifetime, against 1.25 times on the default, so
   one cache read after a gap of more than 5 minutes covers the difference.
-- **The key.** `harness_session_id` as the key sends every turn of a session
+- pi's cache warming stays off. pi can send refresh requests to keep an
+  idle cache warm, and each one is a billed call through the HTTP Gateway.
+  The sandbox sets `cacheWarming` to `off` and the model client declares no
+  cache lifetime on its model. The 1-hour lifetime covers the gaps between turns.
+- `harness_session_id` as the key sends every turn of a session
   to the same OpenAI cache. Other engines ignore the key. Gemini caches
   repeated prefixes on its own.
-- **A byte-identical prefix.** A cache hit needs the same bytes up to the
+- A cache hit needs the same bytes up to the
   cached point. The system prompt and tool list stay fixed for a run, with no
   timestamps, run ids or reordered tools. A compaction rewrites the history,
   so the turn after it writes a new cache once.
-- **Metering reports the hit rate.** The HTTP Gateway returns `cached_input_tokens`,
-  `cache_write_5m_tokens` and `cache_write_1h_tokens` in every turn's `usage`
-  (the two write counts bill at different rates). The model client sums
+- The HTTP Gateway returns `cached_input_tokens`, `cache_write_5m_tokens`
+  and `cache_write_1h_tokens` in every turn's `usage` (the two write counts
+  bill at different rates). The model client sums
   them, the sandbox's `GET /usage` reports the totals, and the engine puts
   them in `result.usage`, along with `harness_run.cache_hit_rate`, which is
   cached input tokens divided by input tokens. The meta-harness meters it per
@@ -513,9 +555,9 @@ The library does not use the providers' server-side conversation state
 turn sent that way still bills the earlier turns as input, so it saves
 request bytes and no model cost. A provider's stored conversation also
 cannot move to another provider, and the fallback chain retries a failed turn
-on another provider with the history in hand.
+on another provider by sending the whole history again.
 
-## Stickiness and caching
+## Sandbox reuse and config loading
 
 - Within a run, the lease binds the run id to one sandbox; a retried call
   re-attaches to it. Across follow-ups the default is a fresh sandbox with
