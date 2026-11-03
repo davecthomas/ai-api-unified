@@ -340,26 +340,32 @@ def build_cache_key(
 def _serialize_result(
     result: Any, usd: Decimal | None, dict_meta: dict[str, Any] | None = None
 ) -> bytes | None:
-    """The stored form of a result, or None when it cannot be stored."""
+    """The stored form of a result, or None when it cannot be stored.
+
+    The provider has already billed the call, so a result that will not
+    serialize is skipped. The call still returns it.
+    """
     dict_entry: dict[str, Any]
-    if isinstance(result, BaseModel):
-        dict_entry = {
-            "kind": "model",
-            "type": f"{type(result).__module__}.{type(result).__qualname__}",
-            "payload": result.model_dump(mode="json"),
-        }
-    elif isinstance(result, (str, dict, list)):
-        dict_entry = {"kind": "json", "payload": result}
-    else:
-        # Early return: an unknown shape is not stored.
-        return None
-    dict_entry["usd"] = str(usd) if usd is not None else None
-    dict_entry["meta"] = dict_meta or {}
     try:
+        if isinstance(result, BaseModel):
+            dict_entry = {
+                "kind": "model",
+                "type": f"{type(result).__module__}.{type(result).__qualname__}",
+                "payload": result.model_dump(mode="json"),
+            }
+        elif isinstance(result, (str, dict, list)):
+            dict_entry = {"kind": "json", "payload": result}
+        else:
+            # Early return: an unknown shape is not stored.
+            return None
+        dict_entry["usd"] = str(usd) if usd is not None else None
+        dict_entry["meta"] = dict_meta or {}
         # Normal return with the JSON bytes.
         return json.dumps(dict_entry, separators=(",", ":")).encode("utf-8")
     except (TypeError, ValueError):
-        # Early return: a provider object in the result cannot be stored.
+        # Early return: raw bytes or a provider object in the result cannot
+        # be stored. Pydantic serialization and UTF-8 decode errors are both
+        # ValueErrors.
         return None
 
 
