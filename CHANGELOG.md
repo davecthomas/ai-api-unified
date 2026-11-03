@@ -4,6 +4,18 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.29.1
+
+### Fixed
+
+- Gemini tool-use turns with the response cache on no longer fail after
+  Gemini has billed the call. `raw_content` parts now hold
+  `thought_signature` as base64 text, so the turn serializes to JSON, and
+  google-genai decodes the text back to bytes on replay.
+- The response cache skips storing a result it cannot serialize and
+  returns the result to the caller. Before, a serialization error raised
+  out of the call.
+
 ## 3.29.0
 
 ### Added

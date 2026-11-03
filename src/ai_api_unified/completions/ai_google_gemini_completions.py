@@ -1257,11 +1257,15 @@ class GoogleGeminiCompletions(AIBaseCompletions, AIGoogleBase):
     def _serialize_gemini_part(part: Any) -> dict[str, Any]:
         """
         Serializes one candidate content part into a replayable dictionary.
+
+        The JSON dump base64-encodes bytes fields such as thought_signature,
+        so the turn stays JSON-safe for the response cache and HTTP callers.
+        google-genai decodes the base64 text back to bytes on replay.
         """
         model_dump = getattr(part, "model_dump", None)
         if callable(model_dump):
             try:
-                dict_part: Any = model_dump(exclude_none=True)
+                dict_part: Any = model_dump(mode="json", exclude_none=True)
                 if isinstance(dict_part, dict):
                     # Early return with the SDK-serialized part.
                     return dict_part
