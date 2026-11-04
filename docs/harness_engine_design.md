@@ -68,7 +68,7 @@ would move it to the back for every concurrent task.
 | Change | Where |
 |---|---|
 | Registry entry, model-string parser, probe that delegates to the inner model's probe and checks `pool_url`, capability table that delegates to the inner model's | `completions/ai_harness_completions.py`, `ai_provider_registry.py`, `util/ai_model_probes.py` |
-| Lease, carrying `harness_session_id`. Run token, minted and revoked through the HTTP Gateway. Run API client: `POST /run` for a new session, `POST /followup` for a kept or restored one. Event follower, usage collection, release. | the engine |
+| Lease, carrying `harness_session_id`. Run grant, requested from and revoked through the HTTP Gateway, whose key goes to the sandbox. Run API client: `POST /run` for a new session, `POST /followup` for a kept or restored one. Event follower, usage collection, release. | the engine |
 | `harness_run` summary on the result, with `cache_hit_rate`; the run's token totals (`cached_input_tokens`, `cache_write_5m_tokens` and `cache_write_1h_tokens` included) in `result.usage`; each cost line's `call_id` is the run id | `ai_base.py`, the engine |
 | `providers.harness` with `pool_url` and `gateway_url`; the pool and HTTP Gateway API keys stay in the environment | `ai_models_config.py`, `schemas/` |
 
@@ -105,7 +105,7 @@ HTTP Gateway service, and external model providers.
 | harness engine | this library | `AiHarnessCompletions`: one blocking call per run |
 | Pool manager | the meta-harness | Leases sandboxes by run id |
 | Sandbox | the meta-harness | The harness server inside a leased sandbox: `POST /run`, `POST /followup`, `GET /events`, `GET /usage`, cancel. It runs pi in its own process through pi's TypeScript SDK. pi has no network API, so the engine reaches pi only through the Run API |
-| HTTP Gateway | ai-api-unified-http | Mints and revokes run tokens for the engine, and keeps the token registry. Receives every model call the sandbox program makes |
+| HTTP Gateway | ai-api-unified-http | Issues and revokes run grants for the engine and stores them (`/v1/run-grants`, service 1.18.0). A grant pins the run's model, caps its spend and expires. Receives every model call the sandbox program makes, authenticated by the grant's key |
 
 Run id is `harness_call_id` plus the route tier and the candidate index
 (the `route_tier` and `candidate_index` observability tags), so a retried
@@ -182,15 +182,15 @@ sequenceDiagram
     P-->>E: none
     E->>P: POST lease(run_id, image="pi-lean", harness_session_id, resources)
     P-->>E: sandbox address, lease TTL, session state new
-    E->>GW: mint run token (run id, tags, pin=claude:claude-sonnet-5, cap, expiry)
-    GW-->>E: opaque run token, recorded in the HTTP Gateway's token registry
-    E->>S: POST /run (prompt, profile, limits, token)
+    E->>GW: request run grant (run id, tags, pin=claude:claude-sonnet-5, spend limit, expiry)
+    GW-->>E: grant key, with the grant stored in the HTTP Gateway's Redis
+    E->>S: POST /run (prompt, profile, limits, grant key)
     S-->>E: 202 run accepted
     E->>S: GET /events (SSE)
     S-->>E: ... run_finished(end_reason=pr_opened)
     E->>S: GET /usage
     S-->>E: usd_total, turns, tokens
-    E->>GW: revoke run token
+    E->>GW: revoke run grant
     E->>P: release lease(run_id)
     E-->>F: AITurnResult(text=PR URL, finish=complete, harness_run, cost=reported usd)
     Note over F: ledger: one reported-cost line, call_id=run_id, source=http_gateway
@@ -346,7 +346,7 @@ sequenceDiagram
     E->>P: lease(new_id/0, "pi-lean", harness_session_id)
     Note over P: the warm sandbox that kept this session, else a fresh one with the session directory copied in from storage
     P-->>E: sandbox, session state kept or restored
-    E->>S: POST /followup (review feedback, token)
+    E->>S: POST /followup (review feedback, grant key)
     Note over S: pi switches to the stored session and continues it
     S-->>E: ... run_finished
     E-->>F: result (route_method=model_pin, model_pin=harness:pi-lean/...)
@@ -413,7 +413,7 @@ sequenceDiagram
     Note over E: deadline passes with no run_finished
     E->>S: POST /cancel
     S-->>E: run_canceled, partial usage
-    E->>GW: revoke run token
+    E->>GW: revoke run grant
     E->>P: release lease
     E-->>F: raise (reason=TIMEOUT), partial cost attached
     Note over F: TIMEOUT in fallback_on means next candidate, otherwise the call fails with the cost so far
