@@ -1,5 +1,12 @@
 # Harness Engine Design
 
+> **Status, 2026-11-04: the engine (PR B) is withdrawn.** The meta-harness
+> runs its candidate loop in its Temporal workflow instead, and uses this
+> library's router only to classify a task and pick its tier. The reasons are
+> in the meta-harness technical design, section 6.3. PR A, the result
+> contract, shipped in 3.29.0 and stays. This document is kept as the record
+> of the design that was reversed.
+
 ## Summary
 
 A `harness` completions engine lets a router tier candidate name a whole
