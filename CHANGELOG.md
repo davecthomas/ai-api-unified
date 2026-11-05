@@ -4,6 +4,23 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.30.0
+
+### Added
+
+- `classify_route` and `aclassify_route` on `AiRouterCompletions`: the tier
+  a request routes to, how it was chosen, its confidence and thinking level,
+  and the tier's candidates in order, as an `AIRouteDecision`. The router
+  picks the tier as a call would, and builds and calls none of the
+  candidates. The classifier call is billed, and its cost is on the
+  decision as `classifier_usd`.
+- `AiRouteClassifier`, a router that only classifies, built by
+  `AIFactory.get_route_classifier()`. Its tier candidates are never built,
+  so they skip the engine-token check and the configured-model check, and
+  may name something the library has no engine for, such as
+  `harness:pi-lean/claude:claude-sonnet-5`. The caller runs the candidates
+  itself. The config must name a `default_tier`.
+
 ## 3.29.1
 
 ### Fixed
