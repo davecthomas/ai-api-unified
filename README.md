@@ -1,4 +1,4 @@
-# ai-api-unified 3.29.1
+# ai-api-unified 3.30.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -2094,6 +2094,43 @@ preview.classifier_usd                             # what classifying cost
   default when omitted) at the output rate, thinking included: the most
   the first attempt should cost. Fallbacks and escalations, if they
   happen, add to it. An unpriced model has no cost estimate.
+
+### Route classification
+
+`client.classify_route(...)` (and `aclassify_route`) answers "which tier,
+and which models, in what order?" and stops there. It picks the tier
+exactly as a call would, and builds and calls none of the tier's
+candidates:
+
+```python
+decision = client.classify_route(prompt, provider_options={"route_floor": "standard"})
+decision.tier, decision.method, decision.confidence   # "complex", "classifier", 0.91
+decision.thinking                                     # the tier's thinking level
+decision.candidates                                   # the tier's AIFallbackCandidates, in order
+decision.classifier_usd                               # what classifying cost
+```
+
+When the caller runs the candidates itself, build a router that does
+nothing else:
+
+```python
+from ai_api_unified import AIFactory
+
+router = AIFactory.get_route_classifier()   # `router` in models.json
+decision = await router.aclassify_route(task_text, provider_options={"route_floor": "complex"})
+for candidate in decision.candidates:
+    ...   # run candidate.engine / candidate.model your own way
+```
+
+- `AiRouteClassifier` answers no completions call. Its tier candidates are
+  never built or probed, so they skip the engine-token check and the
+  configured-model check, and may name engines the library does not have.
+  The meta-harness lists `harness:<harness profile>/<provider>:<model>`
+  candidates and runs each as a coding run.
+- The classifier is resolved as for `get_ai_completions_client`, and a
+  classifier the allow/deny lists deny is left out.
+- There is no default chain, so the config must name `default_tier`, and
+  `route: "default"` raises.
 
 ### Pinning a model for one call
 

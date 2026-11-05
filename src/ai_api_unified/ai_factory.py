@@ -30,6 +30,7 @@ from .ai_provider_exceptions import (
     AiProviderDependencyUnavailableError,
     AiProviderRuntimeError,
 )
+from .completions.ai_route_classifier import AiRouteClassifier
 from .completions.ai_router_completions import AiRouterCompletions
 from .routing.router_config import (
     AIRouterClassifierConfig,
@@ -622,6 +623,76 @@ class AIFactory:
         _stamp_identity(router_client)
         # Normal return with the routing client over the default route.
         return router_client
+
+    @staticmethod
+    def get_route_classifier(
+        router: AIRouterConfig | None = None,
+    ) -> AiRouteClassifier:
+        """
+        Builds a router that only classifies: it picks a request's tier and
+        returns the tier's candidates, and answers no completions call.
+
+        Tier candidates are returned as configured and never built, so they
+        skip the engine-token check and the configured-model check that
+        get_ai_completions_client runs on them. A candidate may name
+        something the library has no engine for, such as
+        `harness:pi-lean/claude:claude-sonnet-5`; the caller validates and
+        runs its own candidates. The classifier is resolved exactly as for
+        get_ai_completions_client, and a classifier the models.json
+        allow/deny policy denies is left out, so every request routes to
+        default_tier.
+
+        Args:
+            router: The router config; defaults to `router` in models.json
+                (or the COMPLETIONS_ROUTER_CONFIG setting).
+
+        Returns:
+            AiRouteClassifier: The classify-only router.
+
+        Raises:
+            ValueError: No router is configured, or it names no default_tier.
+        """
+        env_settings: EnvSettings = EnvSettings()
+        router_config: AIRouterConfig | None = AIFactory._resolve_router_config(
+            env_settings=env_settings, router=router
+        )
+        if router_config is None:
+            raise ValueError(
+                "No router is configured: pass router=, or set `router` in "
+                "models.json (or COMPLETIONS_ROUTER_CONFIG)."
+            )
+        policy: AIModelPolicy = AIFactory._model_policy(env_settings)
+        candidate: AIFallbackCandidate | None = AIFactory._router_classifier_candidate(
+            env_settings=env_settings, router_config=router_config
+        )
+        str_denied: str | None = (
+            policy.denial_reason(candidate.engine, candidate.model)
+            if candidate is not None
+            else None
+        )
+        classifier: AIBaseClassifier | None
+        str_unavailable: str | None
+        if candidate is not None and str_denied is not None:
+            classifier = None
+            str_unavailable = f"classifier model {candidate.label} is {str_denied}"
+        else:
+            classifier, str_unavailable = AIFactory._resolve_router_classifier(
+                env_settings=env_settings, router_config=router_config
+            )
+        # Normal return with the classify-only router.
+        return AiRouteClassifier(
+            config=router_config,
+            classifier=classifier,
+            str_classifier_unavailable_reason=str_unavailable,
+            config_id=compute_config_id(
+                {
+                    "router": router_config.model_dump(
+                        mode="json", exclude={"pruned_tiers"}
+                    )
+                }
+            ),
+            config_version=AIFactory._resolve_config_version(env_settings),
+        )
 
     _LIST_LAST_MODEL_CHECK: list[AiModelCheckResult] = []
 

@@ -72,7 +72,9 @@ from .ai_provider_exceptions import (
     AiProviderRequestError,
 )
 from .ai_factory import AIFactory
+from .completions.ai_route_classifier import AiRouteClassifier
 from .completions.ai_router_completions import AiRouterCompletions
+from .routing.route_decision import AIRouteDecision
 from .routing.router_config import (
     AIRouterClassifierConfig,
     AIRouterConfig,
@@ -135,6 +137,8 @@ __all__: list[str] = [
     "AiCandidateCooldowns",
     "AIFallbackCooldownPolicy",
     "AIConfigRequirements",
+    "AiRouteClassifier",
+    "AIRouteDecision",
     "AiRouterCompletions",
     "AIRouterClassifierConfig",
     "AIRouterConfig",

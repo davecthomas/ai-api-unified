@@ -76,6 +76,7 @@ from ..middleware.request_cost import (
 )
 from ..pricing.pricing_registry import get_model_pricing
 from ..thinking import parse_thinking_level
+from ..routing.route_decision import AIRouteDecision
 from ..routing.router_config import (
     AIRouterConfig,
     AIRouterTier,
@@ -1625,6 +1626,109 @@ class AiRouterCompletions(AIBaseCompletions):
                 "classifier_usd": classifier_usd or preview.classifier_usd,
                 "config_id": self.config_id or preview.config_id,
             }
+        )
+
+    # ── Route classification ────────────────────────────────────────────────
+
+    def classify_route(
+        self,
+        prompt: str | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> AIRouteDecision:
+        """
+        Picks the tier this request would use, exactly as a call would (the
+        classifier, overrides, floors, ceilings, a pinned history), and
+        returns it with the tier's candidates. Builds and calls none of the
+        candidates, so a caller can run them itself. The classifier call is
+        real and billed; its cost is on the decision as `classifier_usd`.
+        No route is logged, and the follow-up ratchet is not advanced.
+
+        Args:
+            prompt: The request text, when it is a single prompt.
+            messages: The request history, when it is a conversation.
+            provider_options: Only `route`, `route_floor` and
+                `route_ceiling` are read.
+
+        Returns:
+            AIRouteDecision: The tier, how it was chosen, and its candidates.
+
+        Raises:
+            ValueError: A route option names no tier, or route_floor sits
+                above route_ceiling.
+        """
+        _, str_route, str_floor, str_ceiling = self._strip_route_option(
+            provider_options
+        )
+        str_route_id: str = uuid.uuid4().hex
+        with request_cost_scope("classify_route", request_id=str_route_id) as scope:
+            int_index, str_method, decision = self._select(
+                str_text=classification_text_for(prompt, messages),
+                messages=messages,
+                str_route=str_route,
+                str_floor=str_floor,
+                str_ceiling=str_ceiling,
+                str_operation="classify_route",
+                str_route_id=str_route_id,
+            )
+        # Normal return with the pick and its candidates.
+        return self._route_decision(int_index, str_method, decision, scope)
+
+    async def aclassify_route(
+        self,
+        prompt: str | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> AIRouteDecision:
+        """Async twin of classify_route."""
+        _, str_route, str_floor, str_ceiling = self._strip_route_option(
+            provider_options
+        )
+        str_route_id: str = uuid.uuid4().hex
+        with request_cost_scope("classify_route", request_id=str_route_id) as scope:
+            int_index, str_method, decision = await self._aselect(
+                str_text=classification_text_for(prompt, messages),
+                messages=messages,
+                str_route=str_route,
+                str_floor=str_floor,
+                str_ceiling=str_ceiling,
+                str_operation="classify_route",
+                str_route_id=str_route_id,
+            )
+        # Normal return with the pick and its candidates.
+        return self._route_decision(int_index, str_method, decision, scope)
+
+    def _route_decision(
+        self,
+        int_index: int | None,
+        str_method: str,
+        decision: AIClassificationResult | None,
+        scope: Any,
+    ) -> AIRouteDecision:
+        """The decision for a selection: the tier's candidates, or the default chain's."""
+        candidates: list[AIFallbackCandidate] = (
+            list(self._config.tiers[int_index].candidates)
+            if int_index is not None
+            else list(self._default_client._known_pin_candidates())
+        )
+        classifier_usd: Any = (
+            scope.report.classifier_usd if scope.report is not None else None
+        )
+        # Normal return with the decision.
+        return AIRouteDecision(
+            tier=self._tier_label(int_index) if int_index is not None else None,
+            method=str_method,
+            confidence=decision.confidence if decision is not None else None,
+            thinking=(
+                self._tier_thinking(int_index)
+                if int_index is not None
+                else self._thinking_level
+            ),
+            candidates=candidates,
+            classifier_usd=classifier_usd or Decimal("0"),
+            config_id=self.config_id,
         )
 
     # ── Public API ──────────────────────────────────────────────────────────
