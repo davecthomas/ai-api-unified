@@ -96,6 +96,9 @@ class AICompletionsCapabilitiesAnthropic(AICompletionsCapabilitiesBase):
 
     # Context window sizes (max input tokens each model can handle).
     DICT_ANTHROPIC_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
+        "claude-fable-5-2": 1_000_000,
+        "claude-sonnet-5-5": 1_000_000,
+        "claude-haiku-5-5": 1_000_000,
         "claude-fable-5-1": 1_000_000,
         "claude-opus-5-5": 1_000_000,
         "claude-fable-5": 1_000_000,
@@ -149,7 +152,12 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
     # Models that reject a forced tool_choice ({"type": "tool"} or "any")
     # with a 400; tool use must run with tool_choice auto on these.
     SET_MODELS_WITHOUT_FORCED_TOOL_CHOICE: ClassVar[frozenset[str]] = frozenset(
-        {"claude-fable-5-1", "claude-opus-5-5"}
+        {
+            "claude-fable-5-2",
+            "claude-fable-5-1",
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+        }
     )
     # The Messages API requires max_tokens on every request. Non-streaming
     # requests stay under SDK HTTP-timeout guards at this size.
@@ -313,16 +321,19 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         # Current Claude lineup on the native Anthropic API (aliases, not
         # date-suffixed snapshots).
         return [
-            "claude-fable-5-1",  # most capable, premium tier
+            "claude-fable-5-2",  # most capable, premium tier
             "claude-opus-5-5",  # current Opus-tier flagship
-            "claude-fable-5",  # previous premium tier
+            "claude-sonnet-5-5",  # latest speed/intelligence balance
+            "claude-haiku-5-5",  # fastest, most cost-effective
+            "claude-fable-5-1",  # previous premium tier
+            "claude-fable-5",  # older premium tier
             "claude-opus-5",  # previous Opus-tier flagship (default)
-            "claude-sonnet-5",  # latest speed/intelligence balance
+            "claude-sonnet-5",  # previous-generation Sonnet
             "claude-opus-4-8",  # older Opus
             "claude-opus-4-7",  # previous-generation Opus
             "claude-opus-4-6",  # older Opus
-            "claude-sonnet-4-6",  # previous-generation Sonnet
-            "claude-haiku-4-5",  # fastest, most cost-effective
+            "claude-sonnet-4-6",  # older Sonnet
+            "claude-haiku-4-5",  # previous-generation Haiku
         ]
 
     @property
@@ -1119,7 +1130,7 @@ class AiAnthropicCompletions(AIAnthropicBase, AIBaseCompletions):
         format and parse the response into the specified Pydantic model.
 
         On models with always-on thinking (claude-fable-5, claude-fable-5-1,
-        claude-opus-5-5), thinking tokens
+        claude-fable-5-2, claude-opus-5-5), thinking tokens
         count against max_tokens; pass a max_response_tokens well above the
         2048 shared default there so the budget covers thinking plus the JSON
         body.

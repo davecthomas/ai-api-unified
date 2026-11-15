@@ -101,6 +101,10 @@ class TestLifecycleChanges:
             ("google", "gemini-3-pro-image-preview"),
             ("google", "veo-3.0-generate-001"),
             ("google", "veo-2.0-generate-001"),
+            # Past their 2026-10-23 sunset (retired in the Nov 2026 sweep).
+            ("openai", "o4-mini"),
+            ("openai", "gpt-4.1-nano"),
+            ("openai", "gpt-image-1"),
         ],
     )
     def test_retired_models_raise(self, str_provider: str, str_model: str) -> None:
@@ -110,10 +114,7 @@ class TestLifecycleChanges:
     @pytest.mark.parametrize(
         ("str_model", "sunset", "str_replacement"),
         [
-            ("o4-mini", date(2026, 10, 23), "gpt-5.6-luna"),
-            ("gpt-4.1-nano", date(2026, 10, 23), "gpt-5.6-luna"),
-            ("gpt-image-1", date(2026, 10, 23), "gpt-image-2"),
-            ("gpt-image-1.5", date(2026, 12, 1), "gpt-image-2"),
+            ("gpt-image-1.5", date(2026, 12, 1), "gpt-image-2.6-sunburst"),
         ],
     )
     def test_openai_deprecations(
@@ -212,7 +213,7 @@ class TestOpenAIEngines:
         assert "gpt-6-astra" in client.list_model_names
 
     def test_images_default_and_catalog(self) -> None:
-        assert AIOpenAIImages.DEFAULT_IMAGE_MODEL == "gpt-image-2"
+        assert AIOpenAIImages.DEFAULT_IMAGE_MODEL == "gpt-image-2.5-sunburst"
         assert "dall-e-3" not in AIOpenAIImages.SUPPORTED_IMAGE_MODELS
 
     def test_retired_image_model_rejected_at_construction(self) -> None:
@@ -315,7 +316,7 @@ def _build_gemini_images_client(
 
 class TestGeminiImagesEngine:
     def test_default_is_a_native_gemini_image_model(self) -> None:
-        assert AIGoogleGeminiImages.DEFAULT_IMAGE_MODEL == "gemini-3.1-flash-image"
+        assert AIGoogleGeminiImages.DEFAULT_IMAGE_MODEL == "gemini-nano-banana-2.1"
         assert not any(
             str_model.startswith("imagen")
             for str_model in AIGoogleGeminiImages.SUPPORTED_IMAGE_MODELS

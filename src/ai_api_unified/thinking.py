@@ -260,7 +260,7 @@ LIST_EFFORT_LEVELS_WITH_OFF: list[AIThinkingLevel] = [
 #
 # Model classes, by name prefix, from the Anthropic thinking table
 # (platform.claude.com, cached 2026-10):
-#   always_on: Fable 5 / 5.1, Mythos, Opus 5.5 — thinking cannot be turned
+#   always_on: Fable 5 / 5.1 / 5.2, Mythos, Opus 5.5 — thinking cannot be turned
 #       off; `output_config.effort` is the only control.
 #   adaptive:  Opus 5, Haiku 5.5, Sonnet 5, Opus 4.6-4.8, Sonnet 4.6 —
 #       `thinking: {type: adaptive}` plus effort; `{type: disabled}` for off.
@@ -592,9 +592,11 @@ def openai_thinking_capabilities(model_name: str) -> AIThinkingCapabilities | No
 
 # --- Gemini ---
 #
-# Gemini 3.x takes `thinking_config.thinking_level` (minimal|low|medium|high
-# on 3 Flash and later; 3 Pro accepts low|high) and cannot turn thinking
-# off. Gemini 2.5 takes `thinking_config.thinking_budget`; Flash and Flash
+# Gemini 3.x and 4 take `thinking_config.thinking_level` (minimal|low|medium|
+# high on 3 Flash through 3.7 Flash; 3 Pro accepts low|high; 3.8 Flash and
+# Gemini 4 reject minimal and start at low) and cannot turn thinking off.
+# Gemini 4 Hydrogen also documents xhigh, which google-genai 2.10's
+# ThinkingLevel enum cannot send, so MAX is not offered. Gemini 2.5 takes `thinking_config.thinking_budget`; Flash and Flash
 # Lite accept 0 (off), Pro's floor is 128. Gemini 2.0 and 1.5 have no
 # thinking control.
 DICT_GEMINI_LEVEL: dict[AIThinkingLevel, str] = {
@@ -603,6 +605,10 @@ DICT_GEMINI_LEVEL: dict[AIThinkingLevel, str] = {
     AIThinkingLevel.MEDIUM: "MEDIUM",
     AIThinkingLevel.HIGH: "HIGH",
 }
+# Models whose lowest thinking_level is low (minimal returns an error).
+TUPLE_GEMINI_NO_MINIMAL_PREFIXES: tuple[str, ...] = ("gemini-4", "gemini-3.8")
+# Models that take thinking_level rather than thinking_budget.
+TUPLE_GEMINI_LEVEL_PREFIXES: tuple[str, ...] = ("gemini-3", "gemini-4")
 DICT_GEMINI_25_BUDGET: dict[AIThinkingLevel, int] = {
     AIThinkingLevel.OFF: 0,
     AIThinkingLevel.LOW: 1024,
@@ -616,14 +622,24 @@ INT_GEMINI_25_PRO_MAX_BUDGET: int = 32_768
 def gemini_thinking_capabilities(model_name: str) -> AIThinkingCapabilities | None:
     """The standard levels a Gemini model honors, or None without a control."""
     str_name: str = model_name.strip().lower()
-    if str_name.startswith("gemini-3"):
+    if str_name.startswith(TUPLE_GEMINI_LEVEL_PREFIXES):
+        if str_name.startswith(TUPLE_GEMINI_NO_MINIMAL_PREFIXES):
+            # Early return: 3.8 Flash and Gemini 4 start at low.
+            return AIThinkingCapabilities(
+                levels=[
+                    AIThinkingLevel.LOW,
+                    AIThinkingLevel.MEDIUM,
+                    AIThinkingLevel.HIGH,
+                ],
+                notes="thinking_config.thinking_level LOW|MEDIUM|HIGH",
+            )
         if "pro" in str_name:
             # Early return: 3 Pro's two levels.
             return AIThinkingCapabilities(
                 levels=[AIThinkingLevel.LOW, AIThinkingLevel.HIGH],
                 notes="thinking_config.thinking_level LOW|HIGH",
             )
-        # Early return: 3 Flash and later.
+        # Early return: 3 Flash through 3.7 Flash.
         return AIThinkingCapabilities(
             levels=list(DICT_GEMINI_LEVEL),
             notes="thinking_config.thinking_level MINIMAL|LOW|MEDIUM|HIGH",
@@ -644,7 +660,7 @@ def gemini_thinking_capabilities(model_name: str) -> AIThinkingCapabilities | No
 def gemini_thinking_config(model_name: str, level: AIThinkingLevel) -> dict[str, Any]:
     """The `thinking_config` dict that applies one honored level on a Gemini model."""
     str_name: str = model_name.strip().lower()
-    if str_name.startswith("gemini-3"):
+    if str_name.startswith(TUPLE_GEMINI_LEVEL_PREFIXES):
         # Normal return with the level name.
         return {"thinking_level": DICT_GEMINI_LEVEL[level]}
     int_budget: int = DICT_GEMINI_25_BUDGET[level]

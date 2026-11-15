@@ -59,7 +59,7 @@ class TestAiFactoryProviderLoading:
         video_engine: str = "openai",
         completions_model_name: str = "gpt-4o-mini",
         embedding_model_name: str = "text-embedding-3-small",
-        image_model_name: str = "gpt-image-1",
+        image_model_name: str = "gpt-image-2.5-sunburst",
         video_model_name: str = "sora-2",
         embedding_dimensions: str = "1536",
     ) -> Mock:
@@ -178,7 +178,7 @@ class TestAiFactoryProviderLoading:
                     images_client: FakeImagesClient = AIFactory.get_ai_images_client()
 
         assert isinstance(images_client, FakeImagesClient)
-        assert images_client.model == "gpt-image-1"
+        assert images_client.model == "gpt-image-2.5-sunburst"
         mock_get_ai_provider_spec.assert_called_once_with(
             AI_PROVIDER_CAPABILITY_IMAGES,
             "openai",
@@ -209,7 +209,7 @@ class TestAiFactoryProviderLoading:
                     images_client: FakeImagesClient = AIFactory.get_ai_images_client()
 
         assert isinstance(images_client, FakeImagesClient)
-        assert images_client.model == "gpt-image-1"
+        assert images_client.model == "gpt-image-2.5-sunburst"
         mock_get_ai_provider_spec.assert_called_once_with(
             AI_PROVIDER_CAPABILITY_IMAGES,
             "google-gemini",

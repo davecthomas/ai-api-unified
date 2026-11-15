@@ -100,7 +100,9 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
 
     # Context window sizes (max tokens each model can handle)
     DICT_OPENAI_CONTEXT_WINDOWS: ClassVar[dict[str, int]] = {
-        # --- GPT-6 family (API, Sep 2026; 922K max input of the 1.05M) ---
+        # --- GPT-6 family (API, Sep-Oct 2026; 922K max input of the 1.05M) ---
+        "gpt-6.1-sol": 1_050_000,
+        "gpt-6.1-terra": 1_050_000,
         "gpt-6-astra": 1_050_000,
         "gpt-6-sol": 1_050_000,
         "gpt-6-luna": 1_050_000,
@@ -114,7 +116,6 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
         "gpt-5.4-mini": 400_000,
         "gpt-5.4-nano": 400_000,
         "gpt-5.2": 400_000,
-        "gpt-5.1-codex-max": 400_000,
         # --- GPT-5 Family (API) ---
         "gpt-5": 400_000,
         "gpt-5-mini": 400_000,
@@ -122,10 +123,6 @@ class AICompletionsCapabilitiesOpenAI(AICompletionsCapabilitiesBase):
         # --- GPT-4.1 Family (API) ---
         "gpt-4.1": 1_000_000,
         "gpt-4.1-mini": 1_000_000,
-        "gpt-4.1-nano": 1_000_000,
-        # --- o4 Reasoning Series (API & Help Center) ---
-        "o4-mini": 200_000,
-        "o4-mini-high": 200_000,  # "high" is a reasoning effort mode, not a larger context model
         # --- GPT-4o Omni Series (launch blog) ---
         "gpt-4o": 128_000,
         "gpt-4o-mini": 128_000,
@@ -344,11 +341,13 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
 
     @property
     def list_model_names(self) -> list[str]:
-        # Verified against the live models.list catalog on 2026-09-25.
+        # Verified against the live models.list catalog on 2026-11-15.
         return [
-            # --- GPT-6 family (Sep 2026) ---
+            # --- GPT-6 family (Sep-Oct 2026) ---
             "gpt-6-astra",  # flagship, most capable
-            "gpt-6-sol",  # coding and agent workhorse
+            "gpt-6.1-sol",  # coding and agent workhorse
+            "gpt-6.1-terra",  # mid tier
+            "gpt-6-sol",  # previous coding and agent workhorse
             "gpt-6-luna",  # high-volume, lowest cost
             # --- GPT-5.6 family ---
             "gpt-5.6-sol",  # previous-generation flagship
@@ -360,7 +359,6 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             "gpt-5.4-mini",  # smaller, cheaper 5.4 variant
             "gpt-5.4-nano",  # lowest-cost 5.4 variant
             "gpt-5.2",  # older 5.x generation, still served
-            "gpt-5.1-codex-max",  # coding-optimized, large context
             # --- GPT-5 Family (previous generation, still available) ---
             "gpt-5",  # flagship
             "gpt-5-mini",  # smaller, cheaper variant
@@ -368,10 +366,6 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             # --- GPT-4.1 Family (still supported, introduced Apr 2025) ---
             "gpt-4.1",  # high context (1M tokens), not deprecated yet
             "gpt-4.1-mini",  # lower-cost variant
-            "gpt-4.1-nano",  # smallest variant; shuts down 2026-10-23
-            # --- o4 Reasoning Series ---
-            "o4-mini",  # reasoning-focused model; shuts down 2026-10-23
-            "o4-mini-high",  # higher reasoning capacity variant
             # --- GPT-4o Omni Series (superseded by GPT-5 but still available) ---
             "gpt-4o",  # multimodal model (text, vision, audio)
             "gpt-4o-mini",  # cheaper multimodal variant
@@ -692,6 +686,16 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
         if max_response_tokens is not None:
             dict_request_kwargs[self.MAX_TOKENS_REQUEST_FIELD] = max_response_tokens
         if tools:
+            if (
+                self.completions_model.strip()
+                .lower()
+                .startswith(self.TUPLE_CHAT_NO_TOOLS_MODEL_PREFIXES)
+            ):
+                # Raise before the request: the API answers 400.
+                raise ValueError(
+                    f"{self.completions_model} accepts tool calls only on the "
+                    "Responses API; use the openai-responses engine."
+                )
             dict_request_kwargs["tools"] = self._build_chat_provider_tools(tools)
         if tool_choice is not None:
             dict_request_kwargs["tool_choice"] = {
@@ -1845,6 +1849,14 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             # Early return because the SDK response did not expose usage metadata as expected.
             return None
 
+    # Models that serve Chat Completions but accept tool calls only on the
+    # Responses API; see
+    # https://developers.openai.com/api/docs/guides/latest-model
+    TUPLE_CHAT_NO_TOOLS_MODEL_PREFIXES: ClassVar[tuple[str, ...]] = (
+        "gpt-6-astra",
+        "gpt-6.1-",
+    )
+
     # Models that accept prompt_cache_retention="24h"; see
     # https://developers.openai.com/api/docs/guides/prompt-caching
     SET_PROMPT_CACHE_24H_MODELS: ClassVar[frozenset[str]] = frozenset(
@@ -1856,7 +1868,6 @@ class AiOpenAICompletions(AIOpenAIBase, AIBaseCompletions):
             "gpt-5.1",
             "gpt-5.1-chat-latest",
             "gpt-5.1-codex",
-            "gpt-5.1-codex-max",
             "gpt-5.1-codex-mini",
             "gpt-5",
             "gpt-5-codex",

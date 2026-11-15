@@ -172,6 +172,15 @@ DICT_TEST_FILE_AREAS: dict[str, tuple[str, ...]] = {
         "engine_gemini",
         "engine_bedrock",
     ),
+    "test_model_catalog_nov_2026.py": (
+        "pricing",
+        "completions",
+        "engine_anthropic",
+        "engine_openai",
+        "engine_gemini",
+        "engine_bedrock",
+        "images",
+    ),
     "test_model_catalog_sep_2026.py": (
         "pricing",
         "completions",

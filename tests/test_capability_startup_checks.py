@@ -67,7 +67,7 @@ def _env(**overrides: str) -> Mock:
         "EMBEDDING_MODEL_NAME": "text-embedding-3-small",
         "EMBEDDING_DIMENSIONS": "1536",
         "IMAGE_ENGINE": "openai",
-        "IMAGE_MODEL_NAME": "gpt-image-1",
+        "IMAGE_MODEL_NAME": "gpt-image-2.5-sunburst",
         "VIDEO_ENGINE": "openai",
         "VIDEO_MODEL_NAME": "sora-2",
         **overrides,
