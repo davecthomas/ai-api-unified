@@ -100,10 +100,11 @@ class AIGoogleGeminiImages(AIGoogleBase, AIBaseImages):
     from the Gemini API on 2026-08-17.
     """
 
-    DEFAULT_IMAGE_MODEL: ClassVar[str] = "gemini-3.1-flash-image"
-    # Verified against the live models.list catalog on 2026-09-25.
+    DEFAULT_IMAGE_MODEL: ClassVar[str] = "gemini-nano-banana-2.1"
+    # Verified against the live models.list catalog on 2026-11-15.
     SUPPORTED_IMAGE_MODELS: ClassVar[list[str]] = [
-        "gemini-3.1-flash-image",  # Nano Banana 2
+        "gemini-nano-banana-2.1",  # Nano Banana 2.1
+        "gemini-3.1-flash-image",  # Nano Banana 2 (deprecated)
         "gemini-3.1-flash-lite-image",  # Nano Banana 2 Lite
         "gemini-3-pro-image",  # Nano Banana Pro
         "gemini-2.5-flash-image",  # shuts down 2026-10-02

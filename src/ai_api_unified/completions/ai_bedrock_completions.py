@@ -107,8 +107,8 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         "zai.glm",
     )
     # Models that reject an assistant prefill (the last turn must be the
-    # user's). "claude-opus-5" also matches opus-5-5, and "claude-fable-5"
-    # matches fable-5-1.
+    # user's). "claude-opus-5" also matches opus-5-5, "claude-sonnet-5"
+    # sonnet-5-5, and "claude-fable-5" fable-5-1 and fable-5-2.
     TUPLE_NO_PREFILL_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
         "claude-opus-4-6",
         "claude-sonnet-4-6",
@@ -116,6 +116,7 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         "claude-opus-4-8",
         "claude-opus-5",
         "claude-sonnet-5",
+        "claude-haiku-5",
         "claude-fable-5",
         "deepseek.r1",
     )
@@ -125,6 +126,7 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         "claude-opus-4-8",
         "claude-opus-5",
         "claude-sonnet-5",
+        "claude-haiku-5",
         "claude-fable-5",
     )
     # Models that reason before answering (Bedrock model cards).
@@ -136,12 +138,15 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
     )
     # Models that reject a forced toolChoice; they run tool use on auto only.
     TUPLE_NO_FORCED_TOOL_CHOICE_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
+        "claude-fable-5-2",
         "claude-fable-5-1",
         "claude-opus-5-5",
+        "claude-sonnet-5-5",
     )
     # Models that also accept the 1-hour cachePoint TTL; see
     # https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
-    # "claude-opus-5" also matches opus-5-5, and "claude-fable-5" fable-5-1.
+    # "claude-opus-5" also matches opus-5-5, "claude-sonnet-5" sonnet-5-5,
+    # and "claude-fable-5" fable-5-1 and fable-5-2.
     TUPLE_PROMPT_CACHE_1H_TTL_MODEL_MARKERS: ClassVar[tuple[str, ...]] = (
         "claude-haiku-4-5",
         "claude-sonnet-4-5",
@@ -152,6 +157,7 @@ class AICompletionsCapabilitiesBedrock(AICompletionsCapabilitiesBase):
         "claude-opus-4-8",
         "claude-opus-5",
         "claude-sonnet-5",
+        "claude-haiku-5",
         "claude-fable-5",
         "claude-mythos-5",
     )
@@ -302,8 +308,11 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
         "amazon.nova-lite-v1:0": 300_000,
         "amazon.nova-pro-v1:0": 300_000,
         "amazon.nova-premier-v1:0": 1_000_000,
+        "us.anthropic.claude-fable-5-2": 1_000_000,
         "us.anthropic.claude-fable-5-1": 1_000_000,
         "us.anthropic.claude-opus-5-5": 1_000_000,
+        "us.anthropic.claude-sonnet-5-5": 1_000_000,
+        "us.anthropic.claude-haiku-5-5": 1_000_000,
         "us.anthropic.claude-opus-5": 1_000_000,
         "us.anthropic.claude-sonnet-5": 1_000_000,
         "us.anthropic.claude-3-5-haiku-20241022-v1:0": 200_000,
@@ -318,8 +327,11 @@ class AiBedrockCompletions(AIBedrockBase, AIBaseCompletions):
             "amazon.nova-lite-v1:0",
             "amazon.nova-pro-v1:0",
             "amazon.nova-premier-v1:0",
+            "us.anthropic.claude-fable-5-2",
             "us.anthropic.claude-fable-5-1",
             "us.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-sonnet-5-5",
+            "us.anthropic.claude-haiku-5-5",
             "us.anthropic.claude-opus-5",
             "us.anthropic.claude-sonnet-5",
             "us.anthropic.claude-3-5-haiku-20241022-v1:0",

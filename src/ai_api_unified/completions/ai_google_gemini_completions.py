@@ -90,8 +90,8 @@ GOOGLE_GENAI_ERRORS: object = gerr
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_COMPLETIONS_MODEL: str = "gemini-3.7-flash"
-DEFAULT_FALLBACK_MODEL: str = "gemini-3.7-flash"
+DEFAULT_COMPLETIONS_MODEL: str = "gemini-3.8-flash"
+DEFAULT_FALLBACK_MODEL: str = "gemini-3.8-flash"
 MAX_RETRIES: int = 5
 INITIAL_BACKOFF_DELAY: float = 1.0
 BACKOFF_MULTIPLIER: float = 2.0
@@ -119,22 +119,36 @@ LIST_MODELS_FAILURE_TTL_SECONDS: float = 60.0
 # Context window and status only. Pricing now lives in the pricing registry
 # (single source of truth); lifecycle (deprecated/retired) is enforced there.
 GEMINI_MODEL_SPECS: dict[str, dict[str, Any]] = {
-    # Latest stable models (Gemini 3.x generation; token limits confirmed via
-    # the models.get API 2026-08-03 and 2026-09-25: 1,048,576 in / 65,536 out).
-    "gemini-3.8-flash": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
-    "gemini-3.7-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    # Gemini 4 (GA Oct-Nov 2026): Carbon is the top reasoning tier, Argon the
+    # efficient reasoning tier, Hydrogen the Flash-equivalent. One 1,048,576
+    # token window is shared by input and output (models.list 2026-11-15).
+    "gemini-4-carbon": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
+    "gemini-4-argon": {"max_context_tokens": 1_048_576, "status": "Latest Stable"},
+    "gemini-4-hydrogen": {
+        "max_context_tokens": 1_048_576,
+        "status": "Latest Stable",
+    },
+    # Gemini 3.x generation; token limits confirmed via the models.get API
+    # 2026-08-03 and 2026-09-25: 1,048,576 in / 65,536 out.
+    "gemini-3.8-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    "gemini-3.7-flash": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
     "gemini-3.6-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
-    "gemini-3.5-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    # Requests for 3.5 Flash route to 3.6 Flash.
+    "gemini-3.5-flash": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
     "gemini-3.5-flash-lite": {
         "max_context_tokens": 1_048_576,
         "status": "Latest Stable",
     },
-    "gemini-3.1-flash-lite": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    "gemini-3.1-flash-lite": {
+        "max_context_tokens": 1_048_576,
+        "status": "Deprecated",
+    },
     # Latest pro tier is preview-only on the Gemini API as of 2026-08.
     "gemini-3.1-pro-preview": {"max_context_tokens": 1_048_576, "status": "Preview"},
     # Previous stable generation
-    "gemini-2.5-pro": {"max_context_tokens": 1_048_576, "status": "Stable"},
-    "gemini-2.5-flash": {"max_context_tokens": 1_048_576, "status": "Stable"},
+    # 2.5 Pro and 2.5 Flash shut down 2026-12-01.
+    "gemini-2.5-pro": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
+    "gemini-2.5-flash": {"max_context_tokens": 1_048_576, "status": "Deprecated"},
     "gemini-2.5-flash-lite": {
         "max_context_tokens": 1_048_576,
         "status": "Stable",

@@ -1,4 +1,4 @@
-# ai-api-unified 3.30.0
+# ai-api-unified 3.31.0
 
 [![CI](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml/badge.svg)](https://github.com/davecthomas/ai-api-unified/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ai-api-unified.svg)](https://pypi.org/project/ai-api-unified/)
@@ -44,11 +44,11 @@ models is a configuration change: set the capability's engine and model in
 <!-- supported-models:start -->
 | Capability | Provider | Engine (`<section>.engine`) | Models |
 | --- | --- | --- | --- |
-| Completions | OpenAI | `openai`, `openai-responses` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (default), `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano` ⚠ until 2026-10-23, `o4-mini` ⚠ until 2026-10-23, `gpt-4o`, `gpt-4o-mini` |
-| Completions | Anthropic | `claude` | `claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5` (default), `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
-| Completions | Google | `google-gemini` | `gemini-3.8-flash`, `gemini-3.7-flash` (default), `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-pro-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
+| Completions | OpenAI | `openai`, `openai-responses` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (default), `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano` ⚠ until 2027-04-01, `gpt-5.2`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1` ⚠ until 2027-01-14, `gpt-4.1-mini` ⚠ until 2027-01-14, `gpt-4o` ⚠ until 2027-01-14, `gpt-4o-mini` ⚠ until 2027-01-14 |
+| Completions | Anthropic | `claude` | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5` (default), `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
+| Completions | Google | `google-gemini` | `gemini-4-carbon`, `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-3.8-flash` (default), `gemini-3.7-flash` ⚠, `gemini-3.6-flash`, `gemini-3.5-flash` ⚠, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` ⚠ until 2027-05-07, `gemini-3.1-pro-preview`, `gemini-2.5-pro` ⚠ until 2026-12-01, `gemini-2.5-flash` ⚠ until 2026-12-01, `gemini-2.5-flash-lite` |
 | Completions | Amazon Bedrock: Amazon Nova | `bedrock`, `nova` | `us.amazon.nova-2-lite-v1:0`, `amazon.nova-micro-v1:0`, `amazon.nova-lite-v1:0` (default), `amazon.nova-pro-v1:0`, `amazon.nova-premier-v1:0` |
-| Completions | Amazon Bedrock: Anthropic Claude | `bedrock`, `anthropic` | `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`, `us.anthropic.claude-opus-5`, `us.anthropic.claude-sonnet-5`, `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
+| Completions | Amazon Bedrock: Anthropic Claude | `bedrock`, `anthropic` | `us.anthropic.claude-fable-5-2`, `us.anthropic.claude-fable-5-1`, `us.anthropic.claude-opus-5-5`, `us.anthropic.claude-sonnet-5-5`, `us.anthropic.claude-haiku-5-5`, `us.anthropic.claude-opus-5`, `us.anthropic.claude-sonnet-5`, `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
 | Completions | Amazon Bedrock: DeepSeek | `bedrock` | `deepseek.v3.2`, `us.deepseek.r1-v1:0` |
 | Completions | Amazon Bedrock: Qwen (Alibaba) | `bedrock` | `qwen.qwen3-next-80b-a3b`, `qwen.qwen3-235b-a22b-2507-v1:0`, `qwen.qwen3-coder-next`, `qwen.qwen3-32b-v1:0` |
 | Completions | Amazon Bedrock: GLM (Z.ai) | `bedrock` | `zai.glm-5`, `zai.glm-4.7`, `zai.glm-4.7-flash` |
@@ -57,8 +57,8 @@ models is a configuration change: set the capability's engine and model in
 | Embeddings | Google | `google-gemini` | `gemini-embedding-001` (default), `gemini-embedding-2` (multimodal) |
 | Embeddings | Voyage AI | `voyage` | `voyage-4-large`, `voyage-4`, `voyage-4-lite`, `voyage-code-4`, `voyage-3.5`, `voyage-3.5-lite`, `voyage-3-lite`, `voyage-3` (default), `voyage-3-large`, `voyage-code-3`, `voyage-finance-2`, `voyage-law-2` |
 | Embeddings | Amazon Bedrock: Titan | `titan` | `amazon.titan-embed-text-v2:0` (default), `amazon.titan-embed-text-v1` |
-| Images | OpenAI | `openai` | `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `gpt-image-2` (default), `gpt-image-1.5` ⚠ until 2026-12-01, `gpt-image-1-mini` ⚠ until 2026-12-01, `gpt-image-1` ⚠ until 2026-10-23 |
-| Images | Google | `google-gemini` | `gemini-3.1-flash-image` (default), `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image` ⚠ until 2026-10-02 |
+| Images | OpenAI | `openai` | `gpt-image-2.6-sunburst`, `gpt-image-2.6-flare`, `gpt-image-2.5-sunburst` (default), `gpt-image-2.5-flare`, `gpt-image-2` ⚠ until 2027-02-10, `gpt-image-1.5` ⚠ until 2026-12-01, `gpt-image-1-mini` ⚠ until 2026-12-01 |
+| Images | Google | `google-gemini` | `gemini-nano-banana-2.1` (default), `gemini-3.1-flash-image` ⚠, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image` ⚠ until 2026-10-02 |
 | Images | Amazon Bedrock: Nova Canvas | `nova-canvas`, `bedrock`, `nova` | `amazon.nova-canvas-v1:0` (default) |
 | Video | Google | `google-gemini` | `veo-3.1-generate-preview`, `veo-3.1-fast-generate-preview`, `veo-3.1-lite-generate-preview` (default) |
 | Video | Amazon Bedrock: Nova Reel | `nova-reel`, `bedrock`, `nova` | `amazon.nova-reel-v1:1` (default) |
@@ -120,9 +120,9 @@ The public entry points are the stable base interfaces and factories:
 Default model guidance in the checked-in OSS env files:
 
 - Anthropic completions: `claude-opus-5`
-- Google completions: `gemini-3.7-flash`
+- Google completions: `gemini-3.8-flash`
 - Google embeddings: `gemini-embedding-001` (text-only) or `gemini-embedding-2` (multimodal)
-- Google images: `gemini-3.1-flash-image`
+- Google images: `gemini-nano-banana-2.1`
 - Google videos: `veo-3.1-lite-generate-preview`
 - Google voice: `gemini-2.5-pro-tts`
 
@@ -223,9 +223,9 @@ GOOGLE_GEMINI_API_KEY=...
 
 ```json
 {
-  "completions": {"engine": "google-gemini", "model": "gemini-3.7-flash", "thinking": "medium"},
+  "completions": {"engine": "google-gemini", "model": "gemini-3.8-flash", "thinking": "medium"},
   "embeddings":  {"engine": "google-gemini", "model": "gemini-embedding-001"},
-  "images":      {"engine": "google-gemini", "model": "gemini-3.1-flash-image"},
+  "images":      {"engine": "google-gemini", "model": "gemini-nano-banana-2.1"},
   "videos":      {"engine": "google-gemini", "model": "veo-3.1-lite-generate-preview"},
   "voice":       {"engine": "google", "tts_model": "gemini-2.5-pro-tts"}
 }
@@ -298,7 +298,7 @@ cannot. The chain below runs Claude first, then OpenAI, then Gemini:
 "completions": {
   "engine": "claude",
   "model": "claude-opus-5",
-  "fallbacks": ["openai:gpt-5.6-luna", "google-gemini:gemini-3.7-flash"]
+  "fallbacks": ["openai:gpt-5.6-luna", "google-gemini:gemini-3.8-flash"]
 }
 ```
 
@@ -455,16 +455,19 @@ ANTHROPIC_API_KEY=...
 ```
 
 Models cataloged for the `claude` engine (alias model IDs):
-`claude-fable-5-1`, `claude-opus-5-5`, `claude-fable-5`, `claude-opus-5`
+`claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`,
+`claude-haiku-5-5`, `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5`
 (default), `claude-sonnet-5`, `claude-opus-4-8`, `claude-opus-4-7`,
 `claude-opus-4-6`, `claude-sonnet-4-6`, and `claude-haiku-4-5`. Capabilities per model include the context window (1M
 tokens except `claude-haiku-4-5` at 200K), streaming, provider-side token
 counting, image inputs, and registry pricing. Structured output uses the Messages API JSON-schema response format,
 so `strict_schema_prompt` works on every cataloged model. On
-`claude-fable-5`, `claude-fable-5-1`, and `claude-opus-5-5`, whose thinking
+`claude-fable-5`, `claude-fable-5-1`, `claude-fable-5-2`, and
+`claude-opus-5-5`, whose thinking
 is always on and counts against `max_tokens`, pass a `max_response_tokens`
 well above the 2048 default so the budget covers thinking plus the JSON body.
-`claude-fable-5-1` and `claude-opus-5-5` reject a forced tool choice, so
+`claude-fable-5-1`, `claude-fable-5-2`, `claude-opus-5-5`, and
+`claude-sonnet-5-5` reject a forced tool choice, so
 `send_conversation(..., tool_choice=...)` raises `ValueError` on those models
 before any request is sent; leave `tool_choice` unset and name the tool in
 the prompt. Image attachments are capped at Anthropic's 5MB
@@ -1156,10 +1159,16 @@ enrichment can still price usage recorded before the withdrawal date. As of
 2.22.0, `claude-opus-4-1` is retired (withdrawn 2026-08-05); use
 `claude-opus-5`. As of 2.28.0, OpenAI `sora-2` / `sora-2-pro` (the Videos
 API shut down 2026-09-24 with no replacement), `dall-e-2` / `dall-e-3`,
-Google Imagen 4, and Veo 2.0 / 3.0 are retired. `o4-mini`, `gpt-4.1-nano`,
-and `gpt-image-1` are deprecated (shutdown 2026-10-23), as are
-`gpt-image-1-mini` and `gpt-image-1.5` (2026-12-01) and
-`gemini-2.5-flash-image` (2026-10-02).
+Google Imagen 4, and Veo 2.0 / 3.0 are retired. As of 3.31.0, `o4-mini`,
+`gpt-4.1-nano`, and `gpt-image-1` (shut down 2026-10-23) and
+`gpt-5.1-codex-max` (2026-07-23) are retired. Deprecated, with the
+provider's shutdown date: `claude-sonnet-4-5` (2026-11-30), `gemini-2.5-pro`
+and `gemini-2.5-flash` (2026-12-01), `gpt-image-1-mini` and `gpt-image-1.5`
+(2026-12-01), `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`
+(2027-01-14), `gpt-image-2` (2027-02-10), `gpt-5.4-nano` (2027-04-01),
+`gemini-3.1-flash-lite` (2027-05-07), and `gemini-2.5-flash-image`
+(2026-10-02). `gemini-3.7-flash`, `gemini-3.5-flash`, and
+`gemini-3.1-flash-image` are deprecated with no shutdown date.
 
 ### Embeddings
 
@@ -1549,7 +1558,7 @@ From `models.json`, which is the usual way:
 "completions": {
   "engine": "claude",
   "model": "claude-opus-5",
-  "fallbacks": ["openai:gpt-5.6-luna", "google-gemini:gemini-3.7-flash"],
+  "fallbacks": ["openai:gpt-5.6-luna", "google-gemini:gemini-3.8-flash"],
   "fallback_on": "unavailable,rate_limited,quota_exhausted,auth_rejected"
 }
 ```
@@ -1568,7 +1577,7 @@ client = AIFactory.get_ai_completions_client(
     model_name="claude-opus-5",
     fallbacks=[
         ("openai", "gpt-5.6-luna"),
-        AIFallbackCandidate(engine="google-gemini", model="gemini-3.7-flash"),
+        AIFallbackCandidate(engine="google-gemini", model="gemini-3.8-flash"),
     ],
     fallback_on={AiFallbackReason.UNAVAILABLE, AiFallbackReason.QUOTA_EXHAUSTED},
 )
@@ -2382,7 +2391,7 @@ the value may also be inline JSON).
                   "default_tier": "easy"},
   "model_check": {"mode": "prune", "timeout_seconds": 10},
   "embeddings":  {"engine": "google-gemini", "model": "gemini-embedding-001"},
-  "images":      {"engine": "google-gemini", "model": "gemini-3.1-flash-image"},
+  "images":      {"engine": "google-gemini", "model": "gemini-nano-banana-2.1"},
   "videos":      {"engine": "google-gemini", "model": "veo-3.1-lite-generate-preview"},
   "voice":       {"engine": "google", "tts_model": "gemini-2.5-pro-tts", "language": "en-US"}
 }

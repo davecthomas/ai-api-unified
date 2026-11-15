@@ -42,6 +42,8 @@ _EFFECTIVE: date = date(2026, 7, 7)
 _EFFECTIVE_AUG: date = date(2026, 8, 3)
 # Compilation date for models added in the 2026-09-25 sweep.
 _EFFECTIVE_SEP: date = date(2026, 9, 25)
+# Rates from the 2026-11-15 provider sweep.
+_EFFECTIVE_NOV: date = date(2026, 11, 15)
 _SRC_OPENAI: str = "https://developers.openai.com/api/docs/pricing"
 _SRC_GOOGLE: str = "https://ai.google.dev/gemini-api/docs/pricing"
 _SRC_GOOGLE_DEP: str = "https://ai.google.dev/gemini-api/docs/deprecations"
@@ -128,6 +130,60 @@ def _info(
 DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
     [
         # ── OpenAI completions ──────────────────────────────────────────────
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-6.1-sol",
+            _tok(
+                "2.00",
+                "10.00",
+                "0.10",
+                _SRC_OPENAI,
+                effective=_EFFECTIVE_NOV,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                tiers=[
+                    AIPricingTier(
+                        label="context>272k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("4.00"),
+                            output_per_1m=Decimal("15.00"),
+                            cached_input_per_1m=Decimal("0.20"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=272K input tokens; above that the "
+                "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-6.1-terra",
+            _tok(
+                "1.00",
+                "5.00",
+                "0.05",
+                _SRC_OPENAI,
+                effective=_EFFECTIVE_NOV,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                tiers=[
+                    AIPricingTier(
+                        label="context>272k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("2.00"),
+                            output_per_1m=Decimal("7.50"),
+                            cached_input_per_1m=Decimal("0.10"),
+                            cache_write_5m_per_1m=Decimal(_FREE_WRITES),
+                            cache_write_1h_per_1m=Decimal(_FREE_WRITES),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to <=272K input tokens; above that the "
+                "whole request bills at 2x input/cached and 1.5x output.",
+            ),
+        ),
         _info(
             PROVIDER_OPENAI,
             "gpt-6-astra",
@@ -353,6 +409,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2027, 4, 1),
+            replacement="gpt-6-luna",
         ),
         _info(
             PROVIDER_OPENAI,
@@ -377,6 +436,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.RETIRED,
+            sunset=date(2026, 7, 23),
+            replacement="gpt-5.6-sol",
         ),
         _info(
             PROVIDER_OPENAI,
@@ -425,6 +487,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2027, 1, 14),
+            replacement="gpt-6-luna",
         ),
         _info(
             PROVIDER_OPENAI,
@@ -437,6 +502,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2027, 1, 14),
+            replacement="gpt-6-luna",
         ),
         _info(
             PROVIDER_OPENAI,
@@ -449,7 +517,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 10, 23),
             replacement="gpt-5.6-luna",
         ),
@@ -464,9 +532,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 10, 23),
-            replacement="gpt-5.6-luna",
+            replacement="gpt-5.6-terra",
         ),
         _info(
             PROVIDER_OPENAI,
@@ -479,6 +547,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2027, 1, 14),
+            replacement="gpt-6-luna",
         ),
         _info(
             PROVIDER_OPENAI,
@@ -491,40 +562,50 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2027, 1, 14),
+            replacement="gpt-6-luna",
         ),
         # ── OpenAI images (lifecycle only) ──────────────────────────────────
         _info(
             PROVIDER_OPENAI,
             "gpt-image-1",
-            status=ModelLifecycleStatus.DEPRECATED,
+            status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 10, 23),
-            replacement="gpt-image-2",
+            replacement="gpt-image-2.6-sunburst",
         ),
         _info(
             PROVIDER_OPENAI,
             "gpt-image-1-mini",
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 12, 1),
-            replacement="gpt-image-2",
+            replacement="gpt-image-2.6-sunburst",
         ),
         _info(
             PROVIDER_OPENAI,
             "gpt-image-1.5",
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 12, 1),
-            replacement="gpt-image-2",
+            replacement="gpt-image-2.6-sunburst",
         ),
         _info(
             PROVIDER_OPENAI,
             "dall-e-2",
             status=ModelLifecycleStatus.RETIRED,
-            replacement="gpt-image-2",
+            replacement="gpt-image-2.6-sunburst",
         ),
         _info(
             PROVIDER_OPENAI,
             "dall-e-3",
             status=ModelLifecycleStatus.RETIRED,
-            replacement="gpt-image-2",
+            replacement="gpt-image-2.6-sunburst",
+        ),
+        _info(
+            PROVIDER_OPENAI,
+            "gpt-image-2",
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2027, 2, 10),
+            replacement="gpt-image-2.6-sunburst",
         ),
         # ── OpenAI video (retired: the Videos API shut down with Sora 2 and
         # has no replacement; /v1/videos returns 404, probed 2026-09-25) ─────
@@ -648,6 +729,52 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         # ── Google completions (active) ─────────────────────────────────────
         _info(
             PROVIDER_GOOGLE,
+            "gemini-4-carbon",
+            _tok(
+                "4.00",
+                "20.00",
+                "0.20",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_NOV,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                notes="List rates from 2026-12-01; launch pricing ($2.00 in / "
+                "$10.00 out / $0.10 cached) runs through 2026-11-30. Implicit "
+                "caching only.",
+            ),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-4-argon",
+            _tok(
+                "4.00",
+                "20.00",
+                "0.20",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_NOV,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                notes="List rates from 2026-12-01; launch pricing ($2.00 in / "
+                "$10.00 out / $0.10 cached) runs through 2026-11-30. Implicit "
+                "caching only.",
+            ),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-4-hydrogen",
+            _tok(
+                "1.50",
+                "7.50",
+                "0.075",
+                _SRC_GOOGLE,
+                effective=_EFFECTIVE_NOV,
+                write_5m_r=_FREE_WRITES,
+                write_1h_r=_FREE_WRITES,
+                notes="Cache reads bill at 0.05x base input. Implicit caching only.",
+            ),
+        ),
+        _info(
+            PROVIDER_GOOGLE,
             "gemini-3.8-flash",
             _tok(
                 "1.50",
@@ -675,6 +802,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 notes="List rates; promotional pricing ($0.75 in / $3.75 out / "
                 "$0.075 cached) runs through 2026-12-31.",
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            replacement="gemini-3.8-flash",
         ),
         _info(
             PROVIDER_GOOGLE,
@@ -703,6 +832,8 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r=_FREE_WRITES,
                 write_1h_r=_FREE_WRITES,
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            replacement="gemini-3.6-flash",
         ),
         _info(
             PROVIDER_GOOGLE,
@@ -730,6 +861,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 effective=_EFFECTIVE_AUG,
                 notes="Audio input priced higher ($0.50/1M).",
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2027, 5, 7),
+            replacement="gemini-3.5-flash-lite",
         ),
         _info(
             PROVIDER_GOOGLE,
@@ -782,6 +916,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 ],
                 notes="Base rates apply to <=200K input tokens.",
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 12, 1),
+            replacement="gemini-3.8-flash",
         ),
         _info(
             PROVIDER_GOOGLE,
@@ -795,6 +932,9 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_1h_r=_FREE_WRITES,
                 notes="Audio input priced higher ($1.00/1M).",
             ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 12, 1),
+            replacement="gemini-3.5-flash-lite",
         ),
         _info(
             PROVIDER_GOOGLE,
@@ -924,7 +1064,7 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             ),
             status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 8, 17),
-            replacement="gemini-3.1-flash-image",
+            replacement="gemini-nano-banana-2.1",
         ),
         _info(
             PROVIDER_GOOGLE,
@@ -952,14 +1092,20 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
             "gemini-3.1-flash-image-preview",
             status=ModelLifecycleStatus.RETIRED,
             sunset=date(2026, 6, 25),
-            replacement="gemini-3.1-flash-image",
+            replacement="gemini-nano-banana-2.1",
         ),
         _info(
             PROVIDER_GOOGLE,
             "gemini-2.5-flash-image",
             status=ModelLifecycleStatus.DEPRECATED,
             sunset=date(2026, 10, 2),
-            replacement="gemini-3.1-flash-image",
+            replacement="gemini-nano-banana-2.1",
+        ),
+        _info(
+            PROVIDER_GOOGLE,
+            "gemini-3.1-flash-image",
+            status=ModelLifecycleStatus.DEPRECATED,
+            replacement="gemini-nano-banana-2.1",
         ),
         # ── Google video (Veo 2.0 and 3.0 retired 2026-06-30 and hard 404,
         # probed 2026-09-25) ─────────────────────────────────────────────────
@@ -1049,9 +1195,66 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
         ),
         # ── Anthropic completions (native API; cached rate is the documented
         # 0.1x prompt-cache read multiplier except where an entry's note says
-        # otherwise (Fable 5.1 and Opus 5.5 read cheaper). Cache writes bill above base input
+        # otherwise (Fable 5.x and the 5.5 models read cheaper). Cache writes bill above base input
         # and are priced per cache lifetime: 1.25x for the 5-minute TTL and 2x
         # for the 1-hour TTL) ────────────────────────────────────────────────
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-fable-5-2",
+            _tok(
+                "8.00",
+                "40.00",
+                "0.20",
+                _SRC_ANTHROPIC_PRICING,
+                effective=_EFFECTIVE_NOV,
+                write_5m_r="10.00",
+                write_1h_r="16.00",
+                notes="Cache reads bill at 0.025x base input, not the usual 0.1x.",
+            ),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-sonnet-5-5",
+            _tok(
+                "2.00",
+                "10.00",
+                "0.10",
+                _SRC_ANTHROPIC_PRICING,
+                effective=_EFFECTIVE_NOV,
+                write_5m_r="2.50",
+                write_1h_r="4.00",
+                notes="Cache reads bill at 0.05x base input, not the usual 0.1x "
+                "(halved from 0.20 on 2026-10-07).",
+            ),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-haiku-5-5",
+            _tok(
+                "0.10",
+                "0.50",
+                "0.01",
+                _SRC_ANTHROPIC_PRICING,
+                effective=_EFFECTIVE_NOV,
+                write_5m_r="0.125",
+                write_1h_r="0.20",
+                tiers=[
+                    AIPricingTier(
+                        label="context>100k",
+                        token_rates=AITokenRates(
+                            input_per_1m=Decimal("0.50"),
+                            output_per_1m=Decimal("2.50"),
+                            cached_input_per_1m=Decimal("0.05"),
+                            cache_write_5m_per_1m=Decimal("0.625"),
+                            cache_write_1h_per_1m=Decimal("1.00"),
+                        ),
+                    )
+                ],
+                notes="Base rates apply to prompts of <=100K input tokens "
+                "(cache reads and writes included); above that the whole "
+                "request bills at 5x.",
+            ),
+        ),
         _info(
             PROVIDER_ANTHROPIC,
             "claude-fable-5-1",
@@ -1179,6 +1382,21 @@ DICT_MODEL_INFO: dict[tuple[str, str], AIModelInfo] = dict(
                 write_5m_r="1.25",
                 write_1h_r="2.00",
             ),
+        ),
+        _info(
+            PROVIDER_ANTHROPIC,
+            "claude-sonnet-4-5",
+            _tok(
+                "3.00",
+                "15.00",
+                "0.30",
+                _SRC_ANTHROPIC,
+                write_5m_r="3.75",
+                write_1h_r="6.00",
+            ),
+            status=ModelLifecycleStatus.DEPRECATED,
+            sunset=date(2026, 11, 30),
+            replacement="claude-sonnet-5-5",
         ),
         # ── Anthropic completions (retired: hard 404) ───────────────────────
         # Rates are retained on entries that were priced while active so

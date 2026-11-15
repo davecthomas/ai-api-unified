@@ -58,16 +58,17 @@ class AIOpenAIImageProperties(AIBaseImageProperties):
 
 
 class AIOpenAIImages(AIOpenAIBase, AIBaseImages):
-    DEFAULT_IMAGE_MODEL: ClassVar[str] = "gpt-image-2"
-    # Verified against the live models.list catalog on 2026-09-25; the
-    # dall-e models are no longer served.
+    DEFAULT_IMAGE_MODEL: ClassVar[str] = "gpt-image-2.5-sunburst"
+    # Verified against the live models.list catalog on 2026-11-15; the
+    # dall-e models and gpt-image-1 are no longer served.
     SUPPORTED_IMAGE_MODELS: ClassVar[list[str]] = [
-        "gpt-image-2.5-flare",
+        "gpt-image-2.6-sunburst",
+        "gpt-image-2.6-flare",
         "gpt-image-2.5-sunburst",
-        "gpt-image-2",
+        "gpt-image-2.5-flare",
+        "gpt-image-2",  # shuts down 2027-02-10
         "gpt-image-1.5",  # shuts down 2026-12-01
         "gpt-image-1-mini",  # shuts down 2026-12-01
-        "gpt-image-1",  # shuts down 2026-10-23
     ]
 
     def __init__(self, model: str | None = None, **kwargs: Any):

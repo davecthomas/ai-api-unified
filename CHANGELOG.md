@@ -4,6 +4,49 @@ Notable changes per release, so consumers can gate on the package version.
 Versions follow [semantic versioning](https://semver.org/); the authoritative
 version lives in `pyproject.toml` (see the README release section).
 
+## 3.31.0
+
+### Added
+
+- Anthropic: `claude-sonnet-5-5`, `claude-haiku-5-5`, and `claude-fable-5-2`
+  on the `claude` engine, and their `us.anthropic.*` profiles on Bedrock,
+  with 1M context and registry pricing. Haiku 5.5 carries its >100K-token
+  price tier, and Sonnet 5.5 its 0.05x cache-read rate. Sonnet 5.5 and Fable
+  5.2 reject a forced `tool_choice`, so it raises `ValueError` before the
+  request. On Bedrock, Haiku 5.5 joins the no-prefill, no-sampling-parameter,
+  and 1-hour-cache groups.
+- OpenAI: `gpt-6.1-sol` and `gpt-6.1-terra`, with the >272K price tier.
+  `gpt-image-2.6-sunburst` and `gpt-image-2.6-flare` on the images engine.
+- Gemini: `gemini-4-carbon`, `gemini-4-argon`, and `gemini-4-hydrogen`, with
+  thinking levels, implicit caching, and registry pricing.
+  `gemini-nano-banana-2.1` on the images engine.
+
+### Changed
+
+- Defaults: Gemini completions move from `gemini-3.7-flash` (deprecated) to
+  `gemini-3.8-flash`. Gemini images move from `gemini-3.1-flash-image`
+  (deprecated) to `gemini-nano-banana-2.1`. OpenAI images move from
+  `gpt-image-2` (shutdown 2027-02-10) to `gpt-image-2.5-sunburst`.
+- Gemini 3.8 Flash and Gemini 4 offer thinking levels low, medium, and high.
+  These models return an error for `minimal`.
+- The `openai` (Chat Completions) engine raises `ValueError` when tools are
+  sent to `gpt-6-astra` or a `gpt-6.1-*` model. Those models accept tool
+  calls only on the Responses API, so use the `openai-responses` engine.
+
+### Deprecated
+
+- `claude-sonnet-4-5` (shutdown 2026-11-30), `gemini-2.5-pro` and
+  `gemini-2.5-flash` (2026-12-01), `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and
+  `gpt-4.1-mini` (2027-01-14), `gpt-image-2` (2027-02-10), `gpt-5.4-nano`
+  (2027-04-01), `gemini-3.1-flash-lite` (2027-05-07), and with no date
+  `gemini-3.7-flash`, `gemini-3.5-flash`, and `gemini-3.1-flash-image`.
+
+### Removed
+
+- Retired after their shutdown: `o4-mini`, `gpt-4.1-nano`, and `gpt-image-1`
+  (2026-10-23), and `gpt-5.1-codex-max` (2026-07-23). Building an engine
+  with one raises `AiProviderConfigurationError`.
+
 ## 3.30.0
 
 ### Added

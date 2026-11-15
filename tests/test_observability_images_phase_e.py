@@ -30,7 +30,7 @@ from ai_api_unified.middleware.observability_runtime import (
     set_observability_context,
 )
 
-TEST_IMAGE_MODEL: str = "gpt-image-1"
+TEST_IMAGE_MODEL: str = "gpt-image-2.5-sunburst"
 TEST_BEDROCK_IMAGE_MODEL: str = "amazon.nova-canvas-v1:0"
 TEST_IMAGE_PROMPT: str = "Draw a lighthouse at sunset."
 TEST_EXPLICIT_CALLER_ID: str = "image-caller-123"

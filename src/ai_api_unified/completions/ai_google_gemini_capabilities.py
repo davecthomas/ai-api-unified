@@ -43,7 +43,9 @@ class AICompletionsCapabilitiesGoogle(AICompletionsCapabilitiesBase):
         }
 
         # Model-specific capabilities
-        if model_name.startswith("gemini-3"):
+        # Gemini 4 shares the 3.x shape: 1M context, thinking_level, and
+        # implicit caching only (explicit cachedContents is not supported).
+        if model_name.startswith(("gemini-3", "gemini-4")):
             capabilities.update(
                 {
                     "context_window_length": 1048576,

@@ -371,7 +371,7 @@ class TestFactoryPolicy:
                     embedding_engine="openai", model_name="text-embedding-3-small"
                 )
             with pytest.raises(ValueError, match="image model openai:"):
-                AIFactory.get_ai_images_client(image_model="gpt-image-1")
+                AIFactory.get_ai_images_client(image_model="gpt-image-2.5-sunburst")
 
     def test_open_policy_changes_nothing(self) -> None:
         pytest.importorskip("anthropic")
